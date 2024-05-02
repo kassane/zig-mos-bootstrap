@@ -591,6 +591,7 @@ pub const hexagon = @import("Target/hexagon.zig");
 pub const loongarch = @import("Target/loongarch.zig");
 pub const m68k = @import("Target/m68k.zig");
 pub const mips = @import("Target/mips.zig");
+pub const mos = @import("Target/mos.zig");
 pub const msp430 = @import("Target/msp430.zig");
 pub const nvptx = @import("Target/nvptx.zig");
 pub const powerpc = @import("Target/powerpc.zig");
@@ -982,6 +983,7 @@ pub const Cpu = struct {
         mips64,
         mips64el,
         msp430,
+        mos,
         powerpc,
         powerpcle,
         powerpc64,
@@ -1192,6 +1194,7 @@ pub const Cpu = struct {
                 .spirv64 => .NONE,
                 .loongarch32 => .NONE,
                 .loongarch64 => .NONE,
+                .mos => .EM_MOS,
             };
         }
 
@@ -1257,6 +1260,7 @@ pub const Cpu = struct {
                 .spirv64 => .Unknown,
                 .loongarch32 => .Unknown,
                 .loongarch64 => .Unknown,
+                .mos => .Unknown,
             };
         }
 
@@ -1311,6 +1315,7 @@ pub const Cpu = struct {
                 .loongarch32,
                 .loongarch64,
                 .arc,
+                .mos,
                 => .little,
 
                 .armeb,
@@ -1364,6 +1369,7 @@ pub const Cpu = struct {
                 .nvptx, .nvptx64 => "nvptx",
                 .wasm32, .wasm64 => "wasm",
                 .spirv32, .spirv64 => "spirv",
+                .mos => "mos",
                 else => @tagName(arch),
             };
         }
@@ -1393,6 +1399,7 @@ pub const Cpu = struct {
                 .nvptx, .nvptx64 => &nvptx.all_features,
                 .ve => &ve.all_features,
                 .wasm32, .wasm64 => &wasm.all_features,
+                .mos => &mos.all_features,
 
                 else => &[0]Cpu.Feature{},
             };
@@ -1422,6 +1429,7 @@ pub const Cpu = struct {
                 .xtensa => comptime allCpusFromDecls(xtensa.cpu),
                 .nvptx, .nvptx64 => comptime allCpusFromDecls(nvptx.cpu),
                 .ve => comptime allCpusFromDecls(ve.cpu),
+                .mos => comptime allCpusFromDecls(mos.cpu),
                 .wasm32, .wasm64 => comptime allCpusFromDecls(wasm.cpu),
 
                 else => &[0]*const Model{},
@@ -1514,6 +1522,7 @@ pub const Cpu = struct {
                 .x86_64 => &x86.cpu.x86_64,
                 .nvptx, .nvptx64 => &nvptx.cpu.sm_20,
                 .ve => &ve.cpu.generic,
+                .mos => &mos.cpu.mos6502,
                 .wasm32, .wasm64 => &wasm.cpu.generic,
 
                 else => &S.generic_model,
@@ -1764,6 +1773,7 @@ pub const DynamicLinker = struct {
                 .nvptx64,
                 .spu_2,
                 .avr,
+                .mos,
                 .spirv,
                 .spirv32,
                 .spirv64,
@@ -1949,6 +1959,7 @@ pub fn maxIntAlignment(target: Target) u16 {
         .loongarch32,
         .loongarch64,
         .xtensa,
+        .mos,
         => 16,
     };
 }
@@ -1963,6 +1974,7 @@ pub fn ptrBitWidth_cpu_abi(cpu: Cpu, abi: Abi) u16 {
         .avr,
         .msp430,
         .spu_2,
+        .mos,
         => 16,
 
         .arc,
@@ -2250,7 +2262,7 @@ pub fn c_type_bit_size(target: Target, c_type: CType) u16 {
                 .long, .ulong, .float => return 32,
                 .longlong, .ulonglong, .double, .longdouble => return 64,
             },
-            .avr => switch (c_type) {
+            .mos, .avr => switch (c_type) {
                 .char => return 8,
                 .short, .ushort, .int, .uint => return 16,
                 .long, .ulong, .float, .double, .longdouble => return 32,
@@ -2503,6 +2515,7 @@ pub fn c_type_alignment(target: Target, c_type: CType) u16 {
 
             .msp430,
             .avr,
+            .mos,
             => 2,
 
             .arc,
@@ -2644,6 +2657,7 @@ pub fn c_type_preferred_alignment(target: Target, c_type: CType) u16 {
             .renderscript32,
             .ve,
             .spu_2,
+            .mos,
             .xtensa,
             => 4,
 

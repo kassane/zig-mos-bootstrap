@@ -617,6 +617,7 @@ pub fn toLLVMTriple(target: std.Target, buf: []u8) []const u8 {
         .loongarch64 => "loongarch64",
         .m68k => "m68k",
         .mips => "mips",
+        .mos => "mos",
         .mipsel => "mipsel",
         .mips64 => "mips64",
         .mips64el => "mips64el",

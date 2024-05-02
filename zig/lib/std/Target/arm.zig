@@ -186,7 +186,6 @@ pub const Feature = enum {
     v9_2a,
     v9_3a,
     v9_4a,
-    v9_5a,
     v9a,
     vfp2,
     vfp2sp,
@@ -1571,29 +1570,6 @@ pub const all_features = blk: {
             .ras,
             .trustzone,
             .virtualization,
-        }),
-    };
-    result[@intFromEnum(Feature.v9_5a)] = .{
-        .llvm_name = "armv9.5-a",
-        .description = "ARMv95a architecture",
-        .dependencies = featureSet(&[_]Feature{
-            .aclass,
-            .crc,
-            .db,
-            .dsp,
-            .fp_armv8,
-            .mp,
-            .ras,
-            .trustzone,
-            .v9_5a,
-            .virtualization,
-        }),
-    };
-    result[@intFromEnum(Feature.v9_5a)] = .{
-        .llvm_name = "v9.5a",
-        .description = "Support ARM v9.5a instructions",
-        .dependencies = featureSet(&[_]Feature{
-            .has_v9_4a,
         }),
     };
     result[@intFromEnum(Feature.v9a)] = .{

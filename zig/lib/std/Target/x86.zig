@@ -1446,7 +1446,7 @@ pub const cpu = struct {
     };
     pub const arrowlake_s = CpuModel{
         .name = "arrowlake_s",
-        .llvm_name = "arrowlake-s",
+        .llvm_name = "arrowlake_s",
         .features = featureSet(&[_]Feature{
             .@"64bit",
             .adx,

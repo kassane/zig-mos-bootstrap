@@ -35,7 +35,7 @@ if "%VSCMD_ARG_HOST_ARCH%"=="x86" set OUTDIR=out-win-x86
 
 set ROOTDIR=%~dp0
 set "ROOTDIR_CMAKE=%ROOTDIR:\=/%"
-set ZIG_VERSION=0.12.0
+set ZIG_VERSION=0.13.0-dev.mos.69+c8b808826
 
 set JOBS_ARG=
 
@@ -88,6 +88,7 @@ cmake "%ROOTDIR%/llvm" ^
   -DCLANG_TOOL_C_ARCMT_TEST_BUILD=OFF ^
   -DCLANG_TOOL_LIBCLANG_BUILD=OFF ^
   -DLLVM_USE_CRT_RELEASE=MT ^
+  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS" ^
   -DLLVM_BUILD_LLVM_C_DYLIB=NO
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cmake --build . %JOBS_ARG% --target install
@@ -251,6 +252,7 @@ cmake "%ROOTDIR%/llvm" ^
   -DCLANG_TOOL_C_INDEX_TEST_BUILD=OFF ^
   -DCLANG_TOOL_ARCMT_TEST_BUILD=OFF ^
   -DCLANG_TOOL_C_ARCMT_TEST_BUILD=OFF ^
+  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS" ^
   -DCLANG_TOOL_LIBCLANG_BUILD=OFF ^
   %ZLIB_LIBRARY% ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
@@ -267,6 +269,7 @@ cd "%ROOTDIR%\zig"
   -Dflat ^
   -Dstatic-llvm ^
   -Doptimize=ReleaseFast ^
+  -Dllvm-has-mos ^
   -Dstrip ^
   -Dtarget="%TARGET%" ^
   -Dcpu="%MCPU%" ^

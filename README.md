@@ -1,17 +1,28 @@
-# bootstrap-zig
+# Zig LLVM-MOS Bootstrap
 
-The purpose of this project is to start with minimum system dependencies and
-end with a fully operational Zig compiler for any target.
+This project is a fork of [zig-bootstrap](https://github.com/ziglang/zig-bootstrap), originally created by [Andrew Kelley](https://github.com/andrewrk), the creator of [Zig programming language](https://ziglang.org). The aim of this fork, **zig-mos-bootstrap**, is to switch the *LLVM upstream* dependency over to *LLVM-mos* in order to add support for a new target based on **mos6502 architecture**.
+
+## Project Objective
+
+The primary goal of this project is to minimize system dependencies while achieving a fully functional Zig compiler for various targets.
+
+## Acknowledgements
+
+This project owes its existence to the invaluable contributions of several individuals and communities:
+
+- **Zig Developers:** For creating and maintaining the Zig programming language.
+- **Andrew Kelley:** The original creator of zig-bootstrap, which serves as the foundation for this project.
+- **LLVM-MOS Developers:** For their work on llvm-mos, enabling support for the mos6502 architecture.
 
 ## Version Information
 
 This repository copies sources from upstream. Patches listed below. Use git
 to find and inspect the patch diffs.
 
- * LLVM, LLD, Clang release/18.x (commit 78b99c73ee4b96fe9ce0e294d4632326afb2db42)
+ * LLVM-mos (commit d9d6b939ed5e8a1d0976ca69984980e1032b9461)
  * zlib 1.3.1
  * zstd 1.5.2
- * zig 0.13.0-dev.69+c8b808826 (llvm18 branch)
+ * zig 0.13.0-dev.mos.69+c8b808826
 
 For other versions, check the git tags of this repository.
 

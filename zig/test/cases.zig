@@ -7,6 +7,7 @@ pub const BuildOptions = struct {
     llvm_has_csky: bool,
     llvm_has_arc: bool,
     llvm_has_xtensa: bool,
+    llvm_has_mos: bool,
 };
 
 pub fn addCases(cases: *Cases, build_options: BuildOptions, b: *std.Build) !void {

@@ -493,6 +493,7 @@ set(ZIG_STAGE2_SOURCES
     "${CMAKE_SOURCE_DIR}/lib/std/Target/sparc.zig"
     "${CMAKE_SOURCE_DIR}/lib/std/Target/s390x.zig"
     "${CMAKE_SOURCE_DIR}/lib/std/Target/wasm.zig"
+    "${CMAKE_SOURCE_DIR}/lib/std/Target/mos.zig"
     "${CMAKE_SOURCE_DIR}/lib/std/Target/x86.zig"
     "${CMAKE_SOURCE_DIR}/lib/std/Thread.zig"
     "${CMAKE_SOURCE_DIR}/lib/std/Thread/Futex.zig"

@@ -152,6 +152,7 @@ pub extern fn LLVMInitializeBPFTargetInfo() void;
 pub extern fn LLVMInitializeHexagonTargetInfo() void;
 pub extern fn LLVMInitializeLanaiTargetInfo() void;
 pub extern fn LLVMInitializeMipsTargetInfo() void;
+pub extern fn LLVMInitializeMOSTargetInfo() void;
 pub extern fn LLVMInitializeMSP430TargetInfo() void;
 pub extern fn LLVMInitializeNVPTXTargetInfo() void;
 pub extern fn LLVMInitializePowerPCTargetInfo() void;
@@ -175,6 +176,7 @@ pub extern fn LLVMInitializeBPFTarget() void;
 pub extern fn LLVMInitializeHexagonTarget() void;
 pub extern fn LLVMInitializeLanaiTarget() void;
 pub extern fn LLVMInitializeMipsTarget() void;
+pub extern fn LLVMInitializeMOSTarget() void;
 pub extern fn LLVMInitializeMSP430Target() void;
 pub extern fn LLVMInitializeNVPTXTarget() void;
 pub extern fn LLVMInitializePowerPCTarget() void;
@@ -198,6 +200,7 @@ pub extern fn LLVMInitializeBPFTargetMC() void;
 pub extern fn LLVMInitializeHexagonTargetMC() void;
 pub extern fn LLVMInitializeLanaiTargetMC() void;
 pub extern fn LLVMInitializeMipsTargetMC() void;
+pub extern fn LLVMInitializeMOSTargetMC() void;
 pub extern fn LLVMInitializeMSP430TargetMC() void;
 pub extern fn LLVMInitializeNVPTXTargetMC() void;
 pub extern fn LLVMInitializePowerPCTargetMC() void;
@@ -221,6 +224,7 @@ pub extern fn LLVMInitializeBPFAsmPrinter() void;
 pub extern fn LLVMInitializeHexagonAsmPrinter() void;
 pub extern fn LLVMInitializeLanaiAsmPrinter() void;
 pub extern fn LLVMInitializeMipsAsmPrinter() void;
+pub extern fn LLVMInitializeMOSAsmPrinter() void;
 pub extern fn LLVMInitializeMSP430AsmPrinter() void;
 pub extern fn LLVMInitializeNVPTXAsmPrinter() void;
 pub extern fn LLVMInitializePowerPCAsmPrinter() void;
@@ -242,6 +246,7 @@ pub extern fn LLVMInitializeBPFAsmParser() void;
 pub extern fn LLVMInitializeHexagonAsmParser() void;
 pub extern fn LLVMInitializeLanaiAsmParser() void;
 pub extern fn LLVMInitializeMipsAsmParser() void;
+pub extern fn LLVMInitializeMOSAsmParser() void;
 pub extern fn LLVMInitializeMSP430AsmParser() void;
 pub extern fn LLVMInitializePowerPCAsmParser() void;
 pub extern fn LLVMInitializeRISCVAsmParser() void;
@@ -388,6 +393,7 @@ pub const ArchType = enum(c_int) {
     renderscript32,
     renderscript64,
     ve,
+    mos,
 };
 
 pub const ParseCommandLineOptions = ZigLLVMParseCommandLineOptions;

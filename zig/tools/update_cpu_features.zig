@@ -880,6 +880,11 @@ const llvm_targets = [_]LlvmTarget{
         .td_name = "Mips.td",
     },
     .{
+        .zig_name = "mos",
+        .llvm_name = "MOS",
+        .td_name = "MOS.td",
+    },
+    .{
         .zig_name = "nvptx",
         .llvm_name = "NVPTX",
         .td_name = "NVPTX.td",

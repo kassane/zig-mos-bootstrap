@@ -20,6 +20,7 @@ pub const Feature = enum {
     experimental_zfbfmin,
     experimental_zicfilp,
     experimental_zicfiss,
+    experimental_zicond,
     experimental_zimop,
     experimental_ztso,
     experimental_zvfbfmin,
@@ -72,7 +73,6 @@ pub const Feature = enum {
     shifted_zextw_fusion,
     short_forward_branch_opt,
     smaia,
-    smepmp,
     ssaia,
     svinval,
     svnapot,
@@ -105,8 +105,6 @@ pub const Feature = enum {
     xtheadsync,
     xtheadvdot,
     xventanacondops,
-    za128rs,
-    za64rs,
     zawrs,
     zba,
     zbb,
@@ -131,16 +129,10 @@ pub const Feature = enum {
     zfinx,
     zhinx,
     zhinxmin,
-    zic64b,
     zicbom,
     zicbop,
     zicboz,
-    ziccamoa,
-    ziccif,
-    zicclsm,
-    ziccrse,
     zicntr,
-    zicond,
     zicsr,
     zifencei,
     zihintntl,
@@ -287,6 +279,11 @@ pub const all_features = blk: {
             .zicsr,
         }),
     };
+    result[@intFromEnum(Feature.experimental_zicond)] = .{
+        .llvm_name = "experimental-zicond",
+        .description = "'Zicond' (Integer Conditional Operations)",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
     result[@intFromEnum(Feature.experimental_zimop)] = .{
         .llvm_name = "experimental-zimop",
         .description = "'Zimop' (May-Be-Operations)",
@@ -341,12 +338,12 @@ pub const all_features = blk: {
     };
     result[@intFromEnum(Feature.ld_add_fusion)] = .{
         .llvm_name = "ld-add-fusion",
-        .description = "Enable LD+ADD macrofusion",
+        .description = "Enable LD+ADD macrofusion.",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.lui_addi_fusion)] = .{
         .llvm_name = "lui-addi-fusion",
-        .description = "Enable LUI+ADDI macro fusion",
+        .description = "Enable LUI+ADDI macrofusion",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.m)] = .{
@@ -541,7 +538,7 @@ pub const all_features = blk: {
     };
     result[@intFromEnum(Feature.shifted_zextw_fusion)] = .{
         .llvm_name = "shifted-zextw-fusion",
-        .description = "Enable SLLI+SRLI to be fused when computing (shifted) word zero extension",
+        .description = "Enable SLLI+SRLI to be fused when computing (shifted) zero extension of word",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.short_forward_branch_opt)] = .{
@@ -552,11 +549,6 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.smaia)] = .{
         .llvm_name = "smaia",
         .description = "'Smaia' (Advanced Interrupt Architecture Machine Level)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.smepmp)] = .{
-        .llvm_name = "smepmp",
-        .description = "'Smepmp' (Enhanced Physical Memory Protection)",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.ssaia)] = .{
@@ -736,16 +728,6 @@ pub const all_features = blk: {
         .description = "'XVentanaCondOps' (Ventana Conditional Ops)",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.za128rs)] = .{
-        .llvm_name = "za128rs",
-        .description = "'Za128rs' (Reservation Set Size of at Most 128 Bytes)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.za64rs)] = .{
-        .llvm_name = "za64rs",
-        .description = "'Za64rs' (Reservation Set Size of at Most 64 Bytes)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.zawrs)] = .{
         .llvm_name = "zawrs",
         .description = "'Zawrs' (Wait on Reservation Set)",
@@ -895,11 +877,6 @@ pub const all_features = blk: {
             .zfinx,
         }),
     };
-    result[@intFromEnum(Feature.zic64b)] = .{
-        .llvm_name = "zic64b",
-        .description = "'Zic64b' (Cache Block Size Is 64 Bytes)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.zicbom)] = .{
         .llvm_name = "zicbom",
         .description = "'Zicbom' (Cache-Block Management Instructions)",
@@ -915,37 +892,12 @@ pub const all_features = blk: {
         .description = "'Zicboz' (Cache-Block Zero Instructions)",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.ziccamoa)] = .{
-        .llvm_name = "ziccamoa",
-        .description = "'Ziccamoa' (Main Memory Supports All Atomics in A)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.ziccif)] = .{
-        .llvm_name = "ziccif",
-        .description = "'Ziccif' (Main Memory Supports Instruction Fetch with Atomicity Requirement)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.zicclsm)] = .{
-        .llvm_name = "zicclsm",
-        .description = "'Zicclsm' (Main Memory Supports Misaligned Loads/Stores)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.ziccrse)] = .{
-        .llvm_name = "ziccrse",
-        .description = "'Ziccrse' (Main Memory Supports Forward Progress on LR/SC Sequences)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.zicntr)] = .{
         .llvm_name = "zicntr",
         .description = "'Zicntr' (Base Counters and Timers)",
         .dependencies = featureSet(&[_]Feature{
             .zicsr,
         }),
-    };
-    result[@intFromEnum(Feature.zicond)] = .{
-        .llvm_name = "zicond",
-        .description = "'Zicond' (Integer Conditional Operations)",
-        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.zicsr)] = .{
         .llvm_name = "zicsr",
@@ -1449,69 +1401,21 @@ pub const cpu = struct {
         .features = featureSet(&[_]Feature{
             .@"64bit",
             .a,
-            .auipc_addi_fusion,
             .c,
             .conditional_cmv_fusion,
             .d,
-            .fast_unaligned_access,
-            .lui_addi_fusion,
             .m,
-            .no_default_unroll,
-            .za64rs,
             .zba,
             .zbb,
             .zbs,
             .zfhmin,
-            .zic64b,
             .zicbom,
             .zicbop,
             .zicboz,
-            .ziccamoa,
-            .ziccif,
-            .zicclsm,
-            .ziccrse,
             .zifencei,
             .zihintntl,
             .zihintpause,
             .zihpm,
-        }),
-    };
-    pub const sifive_p670 = CpuModel{
-        .name = "sifive_p670",
-        .llvm_name = "sifive-p670",
-        .features = featureSet(&[_]Feature{
-            .@"64bit",
-            .a,
-            .auipc_addi_fusion,
-            .c,
-            .conditional_cmv_fusion,
-            .fast_unaligned_access,
-            .lui_addi_fusion,
-            .m,
-            .no_default_unroll,
-            .v,
-            .za64rs,
-            .zba,
-            .zbb,
-            .zbs,
-            .zfhmin,
-            .zic64b,
-            .zicbom,
-            .zicbop,
-            .zicboz,
-            .ziccamoa,
-            .ziccif,
-            .zicclsm,
-            .ziccrse,
-            .zifencei,
-            .zihintntl,
-            .zihintpause,
-            .zihpm,
-            .zvbb,
-            .zvknc,
-            .zvkng,
-            .zvksc,
-            .zvksg,
         }),
     };
     pub const sifive_s21 = CpuModel{

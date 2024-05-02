@@ -1633,6 +1633,8 @@ pub const EM = enum(u16) {
     /// Fujitsu FR-V
     FRV = 0x5441,
 
+    EM_MOS = 6502,
+
     _,
 
     pub fn toTargetCpuArch(em: EM) ?std.Target.Cpu.Arch {
@@ -1659,6 +1661,7 @@ pub const EM = enum(u16) {
             .SPARCV9 => .sparc64,
             .S390 => .s390x,
             .SPU_2 => .spu_2,
+            .EM_MOS => .mos,
             // there's many cases we don't (yet) handle, or will never have a
             // zig target cpu arch equivalent (such as null).
             else => null,

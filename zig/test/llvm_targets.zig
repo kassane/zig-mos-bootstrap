@@ -125,6 +125,7 @@ const targets = [_]std.Target.Query{
     .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
     .{ .cpu_arch = .xtensa, .os_tag = .freestanding, .abi = .none },
     .{ .cpu_arch = .xtensa, .os_tag = .linux, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .freestanding, .abi = .none },
 };
 
 pub fn addCases(
@@ -139,6 +140,7 @@ pub fn addCases(
             .csky => if (!build_options.llvm_has_csky) continue,
             .arc => if (!build_options.llvm_has_arc) continue,
             .xtensa => if (!build_options.llvm_has_xtensa) continue,
+            .mos => if (!build_options.llvm_has_mos) continue,
             else => {},
         };
         var case = ctx.noEmitUsingLlvmBackend("llvm_targets", b.resolveTargetQuery(target_query));

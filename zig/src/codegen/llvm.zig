@@ -58,6 +58,7 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .loongarch64 => "loongarch64",
         .m68k => "m68k",
         .mips => "mips",
+        .mos => "mos",
         .mipsel => "mipsel",
         .mips64 => "mips64",
         .mips64el => "mips64el",
@@ -289,6 +290,7 @@ pub fn targetArch(arch_tag: std.Target.Cpu.Arch) llvm.ArchType {
         .loongarch64 => .loongarch64,
         .m68k => .m68k,
         .mips => .mips,
+        .mos => .mos,
         .mipsel => .mipsel,
         .mips64 => .mips64,
         .mips64el => .mips64el,
@@ -357,6 +359,8 @@ const DataLayoutBuilder = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
+        if (self.target.cpu.arch == .mos)
+            return try writer.writeAll("e-m:e-p:16:8-p1:8:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-Fi8-n8");
         try writer.writeByte(switch (self.target.cpu.arch.endian()) {
             .little => 'e',
             .big => 'E',
@@ -11986,6 +11990,15 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
                 llvm.LLVMInitializeARCTargetMC();
                 llvm.LLVMInitializeARCAsmPrinter();
                 // There is no LLVMInitializeARCAsmParser function.
+            }
+        },
+        .mos => {
+            if (build_options.llvm_has_mos) {
+                llvm.LLVMInitializeMOSTarget();
+                llvm.LLVMInitializeMOSTargetInfo();
+                llvm.LLVMInitializeMOSTargetMC();
+                llvm.LLVMInitializeMOSAsmPrinter();
+                llvm.LLVMInitializeMOSAsmParser();
             }
         },
 

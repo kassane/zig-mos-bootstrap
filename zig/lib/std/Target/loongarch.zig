@@ -7,10 +7,8 @@ const CpuModel = std.Target.Cpu.Model;
 pub const Feature = enum {
     @"32bit",
     @"64bit",
-    auto_vec,
     d,
     f,
-    frecipe,
     la_global_with_abs,
     la_global_with_pcrel,
     la_local_with_abs,
@@ -41,11 +39,6 @@ pub const all_features = blk: {
         .description = "LA64 Basic Integer and Privilege Instruction Set",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.auto_vec)] = .{
-        .llvm_name = "auto-vec",
-        .description = "Experimental auto vectorization",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.d)] = .{
         .llvm_name = "d",
         .description = "'D' (Double-Precision Floating-Point)",
@@ -56,11 +49,6 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.f)] = .{
         .llvm_name = "f",
         .description = "'F' (Single-Precision Floating-Point)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.frecipe)] = .{
-        .llvm_name = "frecipe",
-        .description = "Support frecipe.{s/d} and frsqrte.{s/d} instructions.",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.la_global_with_abs)] = .{

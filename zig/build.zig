@@ -113,6 +113,11 @@ pub fn build(b: *std.Build) !void {
         "llvm-has-xtensa",
         "Whether LLVM has the experimental target xtensa enabled",
     ) orelse false;
+    const llvm_has_mos = b.option(
+        bool,
+        "llvm-has-mos",
+        "Whether LLVM has the experimental target mos enabled",
+    ) orelse false;
     const enable_ios_sdk = b.option(bool, "enable-ios-sdk", "Run tests requiring presence of iOS SDK and frameworks") orelse false;
     const enable_macos_sdk = b.option(bool, "enable-macos-sdk", "Run tests requiring presence of macOS SDK and frameworks") orelse enable_ios_sdk;
     const enable_symlinks_windows = b.option(bool, "enable-symlinks-windows", "Run tests requiring presence of symlinks on Windows") orelse false;
@@ -226,6 +231,7 @@ pub fn build(b: *std.Build) !void {
     exe_options.addOption(bool, "llvm_has_csky", llvm_has_csky);
     exe_options.addOption(bool, "llvm_has_arc", llvm_has_arc);
     exe_options.addOption(bool, "llvm_has_xtensa", llvm_has_xtensa);
+    exe_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     exe_options.addOption(bool, "force_gpa", force_gpa);
     exe_options.addOption(bool, "only_c", only_c);
     exe_options.addOption(bool, "only_core_functionality", only_c);
@@ -390,6 +396,7 @@ pub fn build(b: *std.Build) !void {
     test_cases_options.addOption(bool, "llvm_has_csky", llvm_has_csky);
     test_cases_options.addOption(bool, "llvm_has_arc", llvm_has_arc);
     test_cases_options.addOption(bool, "llvm_has_xtensa", llvm_has_xtensa);
+    test_cases_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     test_cases_options.addOption(bool, "force_gpa", force_gpa);
     test_cases_options.addOption(bool, "only_c", only_c);
     test_cases_options.addOption(bool, "only_core_functionality", true);
@@ -448,6 +455,7 @@ pub fn build(b: *std.Build) !void {
         .llvm_has_csky = llvm_has_csky,
         .llvm_has_arc = llvm_has_arc,
         .llvm_has_xtensa = llvm_has_xtensa,
+        .llvm_has_mos = llvm_has_mos,
     });
     test_step.dependOn(test_cases_step);
 
@@ -1247,6 +1255,12 @@ const llvm_libs = [_][]const u8{
     "LLVMTargetParser",
     "LLVMSupport",
     "LLVMDemangle",
+    // experimental target libs
+    "LLVMMOSCodeGen",
+    "LLVMMOSDesc",
+    "LLVMMOSDisassembler",
+    "LLVMMOSAsmParser",
+    "LLVMMOSInfo",
 };
 
 fn generateLangRef(b: *std.Build) std.Build.LazyPath {
