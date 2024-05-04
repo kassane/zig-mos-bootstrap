@@ -149,6 +149,10 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .xros => "xros",
         .serenity => "serenity",
         .vulkan => "vulkan",
+        .c64 => "c64",
+        .atari8 => "atari8",
+        .atari2600 => "atari2600",
+        .nes => "nes",
 
         .opencl,
         .glsl450,
@@ -230,6 +234,10 @@ pub fn targetOs(os_tag: std.Target.Os.Tag) llvm.OSType {
         .cloudabi,
         .minix,
         .contiki,
+        .nes,
+        .c64,
+        .atari8,
+        .atari2600,
         => .UnknownOS,
 
         .windows, .uefi => .Win32,

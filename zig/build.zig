@@ -1261,6 +1261,11 @@ const llvm_libs = [_][]const u8{
     "LLVMMOSDisassembler",
     "LLVMMOSAsmParser",
     "LLVMMOSInfo",
+    "LLVMM68kCodeGen",
+    "LLVMM68kDesc",
+    "LLVMM68kDisassembler",
+    "LLVMM68kAsmParser",
+    "LLVMM68kInfo",
 };
 
 fn generateLangRef(b: *std.Build) std.Build.LazyPath {

@@ -63,6 +63,10 @@ pub const Os = struct {
         vulkan,
         plan9,
         illumos,
+        c64,
+        nes,
+        atari8,
+        atari2600,
         other,
 
         pub inline fn isDarwin(tag: Tag) bool {
@@ -79,6 +83,18 @@ pub const Os = struct {
             };
         }
 
+        pub inline fn isCommodore64(tag: Tag) bool {
+            return tag == .c64;
+        }
+
+        pub inline fn isNES(tag: Tag) bool {
+            return tag == .nes;
+        }
+
+        pub inline fn isAtari(tag: Tag) bool {
+            return tag == .atari8 or tag == .atari2600;
+        }
+
         pub inline fn isSolarish(tag: Tag) bool {
             return tag == .solaris or tag == .illumos;
         }
@@ -88,6 +104,9 @@ pub const Os = struct {
                 .windows => ".exe",
                 .uefi => ".efi",
                 .plan9 => arch.plan9Ext(),
+                .nes => ".nes",
+                .c64 => ".prg",
+                .atari2600 => ".a26",
                 else => switch (arch) {
                     .wasm32, .wasm64 => ".wasm",
                     else => "",
@@ -170,6 +189,10 @@ pub const Os = struct {
                 .plan9,
                 .illumos,
                 .serenity,
+                .c64,
+                .nes,
+                .atari8,
+                .atari2600,
                 .other,
                 => .none,
 
@@ -392,6 +415,10 @@ pub const Os = struct {
                 .plan9,
                 .illumos,
                 .serenity,
+                .c64,
+                .nes,
+                .atari8,
+                .atari2600,
                 .other,
                 => .{ .none = {} },
 
@@ -573,6 +600,10 @@ pub const Os = struct {
             .opencl,
             .glsl450,
             .vulkan,
+            .c64,
+            .nes,
+            .atari8,
+            .atari2600,
             .plan9,
             .other,
             => false,
@@ -699,6 +730,10 @@ pub const Abi = enum {
             .solaris,
             .illumos,
             .serenity,
+            .c64,
+            .nes,
+            .atari8,
+            .atari2600,
             => .none,
         };
     }
@@ -751,6 +786,12 @@ pub const ObjectFormat = enum {
     plan9,
     /// Nvidia PTX format
     nvptx,
+    /// NES object format
+    nes,
+    /// Commodore 64 format
+    prg,
+    /// Atari 2600 ROM image
+    a26,
 
     pub fn fileExt(of: ObjectFormat, arch: Cpu.Arch) [:0]const u8 {
         return switch (of) {
@@ -763,6 +804,9 @@ pub const ObjectFormat = enum {
             .plan9 => arch.plan9Ext(),
             .nvptx => ".ptx",
             .dxcontainer => ".dxil",
+            .nes => ".nes",
+            .prg => ".prg",
+            .a26 => ".a26",
         };
     }
 
@@ -771,6 +815,9 @@ pub const ObjectFormat = enum {
             .windows, .uefi => .coff,
             .ios, .macos, .watchos, .tvos => .macho,
             .plan9 => .plan9,
+            .nes => .nes,
+            .c64 => .prg,
+            .atari2600 => .a26,
             else => switch (arch) {
                 .wasm32, .wasm64 => .wasm,
                 .spirv32, .spirv64 => .spirv,
@@ -1118,6 +1165,13 @@ pub const Cpu = struct {
         pub inline fn isNvptx(arch: Arch) bool {
             return switch (arch) {
                 .nvptx, .nvptx64 => true,
+                else => false,
+            };
+        }
+
+        pub inline fn isMOS(arch: Arch) bool {
+            return switch (arch) {
+                .mos => true,
                 else => false,
             };
         }
@@ -1622,6 +1676,10 @@ pub inline fn isSpirV(target: Target) bool {
     return target.cpu.arch.isSpirV();
 }
 
+pub inline fn isMos(target: Target) bool {
+    return target.cpu.arch.isMOS();
+}
+
 pub const FloatAbi = enum {
     hard,
     soft,
@@ -1648,6 +1706,10 @@ pub inline fn hasDynamicLinker(target: Target) bool {
         .glsl450,
         .vulkan,
         .plan9,
+        .c64,
+        .nes,
+        .atari8,
+        .atari2600,
         .other,
         => return false,
         else => return true,
@@ -1832,6 +1894,10 @@ pub const DynamicLinker = struct {
             .other,
             .plan9,
             .serenity,
+            .c64,
+            .nes,
+            .atari8,
+            .atari2600,
             => none,
 
             // TODO revisit when multi-arch for Haiku is available
@@ -1875,7 +1941,7 @@ pub fn standardDynamicLinkerPath(target: Target) DynamicLinker {
 pub fn maxIntAlignment(target: Target) u16 {
     return switch (target.cpu.arch) {
         .avr => 1,
-        .msp430 => 2,
+        .msp430, .mos => 2,
         .xcore => 4,
 
         .arm,
@@ -1959,7 +2025,6 @@ pub fn maxIntAlignment(target: Target) u16 {
         .loongarch32,
         .loongarch64,
         .xtensa,
-        .mos,
         => 16,
     };
 }
@@ -2470,6 +2535,10 @@ pub fn c_type_bit_size(target: Target, c_type: CType) u16 {
         .shadermodel,
         .liteos,
         .serenity,
+        .c64,
+        .nes,
+        .atari8,
+        .atari2600,
         => @panic("TODO specify the C integer and float type sizes for this OS"),
     }
 }
@@ -2792,6 +2861,20 @@ pub fn is_libc_lib_name(target: std.Target, name: []const u8) bool {
     if (target.abi.isMusl()) {
         if (eqlIgnoreCase(ignore_case, name, "crypt"))
             return true;
+    }
+
+    if (target.cpu.arch.isMOS()) {
+        if (eqlIgnoreCase(ignore_case, name, "crt0"))
+            return true;
+        if (eqlIgnoreCase(ignore_case, name, "crt"))
+            return true;
+        if (eqlIgnoreCase(ignore_case, name, "c"))
+            return true;
+        if (target.os.tag.isNES()) {
+            if (eqlIgnoreCase(ignore_case, name, "neslib"))
+                return true;
+        }
+        return false;
     }
 
     if (target.os.tag.isDarwin()) {

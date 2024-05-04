@@ -10009,7 +10009,7 @@ fn finishFunc(
     if (@as(?[]const u8, switch (cc_resolved) {
         .Unspecified, .C, .Naked, .Async, .Inline => null,
         .Interrupt => switch (arch) {
-            .x86, .x86_64, .avr, .msp430 => null,
+            .x86, .x86_64, .avr, .msp430, .mos => null,
             else => "x86, x86_64, AVR, and MSP430",
         },
         .Signal => switch (arch) {

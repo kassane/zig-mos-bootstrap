@@ -220,7 +220,7 @@ pub const File = struct {
         const comp = base.comp;
         const gpa = comp.gpa;
         switch (base.tag) {
-            .coff, .elf, .macho, .plan9, .wasm => {
+            .coff, .elf, .macho, .plan9, .wasm, .nes, .prg, .a26 => {
                 if (build_options.only_c) unreachable;
                 if (base.file != null) return;
                 const emit = base.emit;
@@ -280,7 +280,7 @@ pub const File = struct {
             .Exe => {},
         }
         switch (base.tag) {
-            .elf => if (base.file) |f| {
+            .elf, .nes, .prg, .a26 => if (base.file) |f| {
                 if (build_options.only_c) unreachable;
                 if (base.zcu_object_sub_path != null and use_lld) {
                     // The file we have open is not the final file that we want to
@@ -838,11 +838,14 @@ pub const File = struct {
         spirv,
         plan9,
         nvptx,
+        nes,
+        prg,
+        a26,
 
         pub fn Type(comptime tag: Tag) type {
             return switch (tag) {
                 .coff => Coff,
-                .elf => Elf,
+                .elf, .nes, .prg, .a26 => Elf,
                 .macho => MachO,
                 .c => C,
                 .wasm => Wasm,
@@ -862,6 +865,9 @@ pub const File = struct {
                 .c => .c,
                 .spirv => .spirv,
                 .nvptx => .nvptx,
+                .nes => .nes,
+                .prg => .prg,
+                .a26 => .a26,
                 .hex => @panic("TODO implement hex object format"),
                 .raw => @panic("TODO implement raw object format"),
                 .dxcontainer => @panic("TODO implement dxcontainer object format"),
