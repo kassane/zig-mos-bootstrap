@@ -26,12 +26,9 @@ pub fn libcNeedsLibUnwind(target: std.Target) bool {
         .ios,
         .watchos,
         .tvos,
+        .visionos,
         .freestanding,
         .wasi, // Wasm/WASI currently doesn't offer support for libunwind, so don't link it.
-        .nes,
-        .c64,
-        .atari8,
-        .atari2600,
         => false,
 
         .windows => target.abi != .msvc,
@@ -109,9 +106,6 @@ pub fn hasLlvmSupport(target: std.Target, ofmt: std.Target.ObjectFormat) bool {
         .raw,
         .nvptx,
         .dxcontainer,
-        .nes,
-        .prg,
-        .a26,
         => {},
     }
 
@@ -135,8 +129,8 @@ pub fn hasLlvmSupport(target: std.Target, ofmt: std.Target.ObjectFormat) bool {
         .mipsel,
         .mips64,
         .mips64el,
-        .msp430,
         .mos,
+        .msp430,
         .powerpc,
         .powerpcle,
         .powerpc64,
@@ -187,7 +181,7 @@ pub fn hasLlvmSupport(target: std.Target, ofmt: std.Target.ObjectFormat) bool {
 /// The set of targets that Zig supports using LLD to link for.
 pub fn hasLldSupport(ofmt: std.Target.ObjectFormat) bool {
     return switch (ofmt) {
-        .elf, .coff, .wasm, .nes, .prg, .a26 => true,
+        .elf, .coff, .wasm => true,
         else => false,
     };
 }
@@ -316,21 +310,6 @@ pub fn libcFullLinkFlags(target: std.Target) []const []const u8 {
             "-lpthread",
             "-lc",
             "-lnetwork",
-        },
-        .c64 => &[_][]const u8{
-            "-lm",
-            "-lprintf_flt",
-            "-lc",
-            "-lcrt0",
-        },
-        .atari2600, .atari8 => &[_][]const u8{
-            "-lc",
-            "-lcrt0",
-        },
-        .nes => &[_][]const u8{
-            "-lneslib",
-            "-lc",
-            "-lcrt0",
         },
         else => switch (target.abi) {
             .android => &[_][]const u8{

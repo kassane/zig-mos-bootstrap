@@ -562,6 +562,7 @@ const cpu_targets = struct {
     pub const loongarch = std.Target.loongarch;
     pub const m68k = std.Target.m68k;
     pub const mips = std.Target.mips;
+    pub const mos = std.Target.mos;
     pub const msp430 = std.Target.msp430;
     pub const nvptx = std.Target.nvptx;
     pub const powerpc = std.Target.powerpc;

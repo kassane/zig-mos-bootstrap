@@ -62,6 +62,7 @@ pub fn intPtrType(target: std.Target) Type {
         .spirv32,
         .arc,
         .avr,
+        .mos,
         => return .{ .specifier = .int },
 
         .sparc, .sparcel => switch (target.os.tag) {
@@ -154,7 +155,7 @@ pub fn isTlsSupported(target: std.Target) bool {
         return supported;
     }
     return switch (target.cpu.arch) {
-        .tce, .tcele, .bpfel, .bpfeb, .msp430, .nvptx, .nvptx64, .x86, .arm, .armeb, .thumb, .thumbeb => false,
+        .tce, .tcele, .bpfel, .bpfeb, .msp430, .mos, .nvptx, .nvptx64, .x86, .arm, .armeb, .thumb, .thumbeb => false,
         else => true,
     };
 }
@@ -459,6 +460,7 @@ pub fn get32BitArchVariant(target: std.Target) ?std.Target {
         .bpfel,
         .bpfeb,
         .s390x,
+        .mos,
         => return null,
 
         .arc,
@@ -531,6 +533,7 @@ pub fn get64BitArchVariant(target: std.Target) ?std.Target {
         .kalimba,
         .lanai,
         .m68k,
+        .mos,
         .msp430,
         .r600,
         .shave,
@@ -620,6 +623,7 @@ pub fn toLLVMTriple(target: std.Target, buf: []u8) []const u8 {
         .mipsel => "mipsel",
         .mips64 => "mips64",
         .mips64el => "mips64el",
+        .mos => "mos",
         .msp430 => "msp430",
         .powerpc => "powerpc",
         .powerpcle => "powerpcle",
@@ -706,6 +710,7 @@ pub fn toLLVMTriple(target: std.Target, buf: []u8) []const u8 {
         .ios => "ios",
         .tvos => "tvos",
         .watchos => "watchos",
+        .visionos => "xros",
         .driverkit => "driverkit",
         .shadermodel => "shadermodel",
         .liteos => "liteos",

@@ -43,6 +43,9 @@ pub const Context = opaque {
 
     pub const getBrokenDebugInfo = ZigLLVMGetBrokenDebugInfo;
     extern fn ZigLLVMGetBrokenDebugInfo(C: *Context) bool;
+
+    pub const intType = LLVMIntTypeInContext;
+    extern fn LLVMIntTypeInContext(C: *Context, NumBits: c_uint) *Type;
 };
 
 pub const Module = opaque {
@@ -96,12 +99,20 @@ pub const TargetMachine = opaque {
         llvm_ir_filename: ?[*:0]const u8,
         bitcode_filename: ?[*:0]const u8,
     ) bool;
+
+    pub const createTargetDataLayout = LLVMCreateTargetDataLayout;
+    extern fn LLVMCreateTargetDataLayout(*TargetMachine) *TargetData;
 };
 
 pub const TargetData = opaque {
     pub const dispose = LLVMDisposeTargetData;
     extern fn LLVMDisposeTargetData(*TargetData) void;
+
+    pub const abiAlignmentOfType = LLVMABIAlignmentOfType;
+    extern fn LLVMABIAlignmentOfType(TD: *TargetData, Ty: *Type) c_uint;
 };
+
+pub const Type = opaque {};
 
 pub const CodeModel = enum(c_int) {
     Default,
@@ -152,7 +163,6 @@ pub extern fn LLVMInitializeBPFTargetInfo() void;
 pub extern fn LLVMInitializeHexagonTargetInfo() void;
 pub extern fn LLVMInitializeLanaiTargetInfo() void;
 pub extern fn LLVMInitializeMipsTargetInfo() void;
-pub extern fn LLVMInitializeMOSTargetInfo() void;
 pub extern fn LLVMInitializeMSP430TargetInfo() void;
 pub extern fn LLVMInitializeNVPTXTargetInfo() void;
 pub extern fn LLVMInitializePowerPCTargetInfo() void;
@@ -164,6 +174,7 @@ pub extern fn LLVMInitializeX86TargetInfo() void;
 pub extern fn LLVMInitializeXCoreTargetInfo() void;
 pub extern fn LLVMInitializeXtensaTargetInfo() void;
 pub extern fn LLVMInitializeM68kTargetInfo() void;
+pub extern fn LLVMInitializeMOSTargetInfo() void;
 pub extern fn LLVMInitializeCSKYTargetInfo() void;
 pub extern fn LLVMInitializeVETargetInfo() void;
 pub extern fn LLVMInitializeARCTargetInfo() void;
@@ -176,7 +187,6 @@ pub extern fn LLVMInitializeBPFTarget() void;
 pub extern fn LLVMInitializeHexagonTarget() void;
 pub extern fn LLVMInitializeLanaiTarget() void;
 pub extern fn LLVMInitializeMipsTarget() void;
-pub extern fn LLVMInitializeMOSTarget() void;
 pub extern fn LLVMInitializeMSP430Target() void;
 pub extern fn LLVMInitializeNVPTXTarget() void;
 pub extern fn LLVMInitializePowerPCTarget() void;
@@ -188,6 +198,7 @@ pub extern fn LLVMInitializeX86Target() void;
 pub extern fn LLVMInitializeXCoreTarget() void;
 pub extern fn LLVMInitializeXtensaTarget() void;
 pub extern fn LLVMInitializeM68kTarget() void;
+pub extern fn LLVMInitializeMOSTarget() void;
 pub extern fn LLVMInitializeVETarget() void;
 pub extern fn LLVMInitializeCSKYTarget() void;
 pub extern fn LLVMInitializeARCTarget() void;
@@ -200,7 +211,6 @@ pub extern fn LLVMInitializeBPFTargetMC() void;
 pub extern fn LLVMInitializeHexagonTargetMC() void;
 pub extern fn LLVMInitializeLanaiTargetMC() void;
 pub extern fn LLVMInitializeMipsTargetMC() void;
-pub extern fn LLVMInitializeMOSTargetMC() void;
 pub extern fn LLVMInitializeMSP430TargetMC() void;
 pub extern fn LLVMInitializeNVPTXTargetMC() void;
 pub extern fn LLVMInitializePowerPCTargetMC() void;
@@ -212,6 +222,7 @@ pub extern fn LLVMInitializeX86TargetMC() void;
 pub extern fn LLVMInitializeXCoreTargetMC() void;
 pub extern fn LLVMInitializeXtensaTargetMC() void;
 pub extern fn LLVMInitializeM68kTargetMC() void;
+pub extern fn LLVMInitializeMOSTargetMC() void;
 pub extern fn LLVMInitializeCSKYTargetMC() void;
 pub extern fn LLVMInitializeVETargetMC() void;
 pub extern fn LLVMInitializeARCTargetMC() void;
@@ -224,7 +235,6 @@ pub extern fn LLVMInitializeBPFAsmPrinter() void;
 pub extern fn LLVMInitializeHexagonAsmPrinter() void;
 pub extern fn LLVMInitializeLanaiAsmPrinter() void;
 pub extern fn LLVMInitializeMipsAsmPrinter() void;
-pub extern fn LLVMInitializeMOSAsmPrinter() void;
 pub extern fn LLVMInitializeMSP430AsmPrinter() void;
 pub extern fn LLVMInitializeNVPTXAsmPrinter() void;
 pub extern fn LLVMInitializePowerPCAsmPrinter() void;
@@ -235,6 +245,7 @@ pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
 pub extern fn LLVMInitializeX86AsmPrinter() void;
 pub extern fn LLVMInitializeXCoreAsmPrinter() void;
 pub extern fn LLVMInitializeM68kAsmPrinter() void;
+pub extern fn LLVMInitializeMOSAsmPrinter() void;
 pub extern fn LLVMInitializeVEAsmPrinter() void;
 pub extern fn LLVMInitializeARCAsmPrinter() void;
 
@@ -246,7 +257,6 @@ pub extern fn LLVMInitializeBPFAsmParser() void;
 pub extern fn LLVMInitializeHexagonAsmParser() void;
 pub extern fn LLVMInitializeLanaiAsmParser() void;
 pub extern fn LLVMInitializeMipsAsmParser() void;
-pub extern fn LLVMInitializeMOSAsmParser() void;
 pub extern fn LLVMInitializeMSP430AsmParser() void;
 pub extern fn LLVMInitializePowerPCAsmParser() void;
 pub extern fn LLVMInitializeRISCVAsmParser() void;
@@ -256,6 +266,7 @@ pub extern fn LLVMInitializeWebAssemblyAsmParser() void;
 pub extern fn LLVMInitializeX86AsmParser() void;
 pub extern fn LLVMInitializeXtensaAsmParser() void;
 pub extern fn LLVMInitializeM68kAsmParser() void;
+pub extern fn LLVMInitializeMOSAsmParser() void;
 pub extern fn LLVMInitializeCSKYAsmParser() void;
 pub extern fn LLVMInitializeVEAsmParser() void;
 
@@ -351,6 +362,7 @@ pub const ArchType = enum(c_int) {
     mipsel,
     mips64,
     mips64el,
+    mos,
     msp430,
     ppc,
     ppcle,
@@ -393,7 +405,6 @@ pub const ArchType = enum(c_int) {
     renderscript32,
     renderscript64,
     ve,
-    mos,
 };
 
 pub const ParseCommandLineOptions = ZigLLVMParseCommandLineOptions;

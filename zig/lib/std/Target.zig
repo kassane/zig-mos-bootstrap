@@ -47,7 +47,7 @@ pub const Os = struct {
         tvos,
         watchos,
         driverkit,
-        xros,
+        visionos,
         mesa3d,
         contiki,
         amdpal,
@@ -63,15 +63,11 @@ pub const Os = struct {
         vulkan,
         plan9,
         illumos,
-        c64,
-        nes,
-        atari8,
-        atari2600,
         other,
 
         pub inline fn isDarwin(tag: Tag) bool {
             return switch (tag) {
-                .ios, .macos, .watchos, .tvos => true,
+                .ios, .macos, .watchos, .tvos, .visionos => true,
                 else => false,
             };
         }
@@ -83,18 +79,6 @@ pub const Os = struct {
             };
         }
 
-        pub inline fn isCommodore64(tag: Tag) bool {
-            return tag == .c64;
-        }
-
-        pub inline fn isNES(tag: Tag) bool {
-            return tag == .nes;
-        }
-
-        pub inline fn isAtari(tag: Tag) bool {
-            return tag == .atari8 or tag == .atari2600;
-        }
-
         pub inline fn isSolarish(tag: Tag) bool {
             return tag == .solaris or tag == .illumos;
         }
@@ -104,9 +88,6 @@ pub const Os = struct {
                 .windows => ".exe",
                 .uefi => ".efi",
                 .plan9 => arch.plan9Ext(),
-                .nes => ".nes",
-                .c64 => ".prg",
-                .atari2600 => ".a26",
                 else => switch (arch) {
                     .wasm32, .wasm64 => ".wasm",
                     else => "",
@@ -127,7 +108,7 @@ pub const Os = struct {
         pub fn dynamicLibSuffix(tag: Tag) [:0]const u8 {
             return switch (tag) {
                 .windows, .uefi => ".dll",
-                .ios, .macos, .watchos, .tvos => ".dylib",
+                .ios, .macos, .watchos, .tvos, .visionos => ".dylib",
                 else => ".so",
             };
         }
@@ -189,10 +170,6 @@ pub const Os = struct {
                 .plan9,
                 .illumos,
                 .serenity,
-                .c64,
-                .nes,
-                .atari8,
-                .atari2600,
                 .other,
                 => .none,
 
@@ -201,7 +178,7 @@ pub const Os = struct {
                 .ios,
                 .tvos,
                 .watchos,
-                .xros,
+                .visionos,
                 .netbsd,
                 .openbsd,
                 .dragonfly,
@@ -415,10 +392,6 @@ pub const Os = struct {
                 .plan9,
                 .illumos,
                 .serenity,
-                .c64,
-                .nes,
-                .atari8,
-                .atari2600,
                 .other,
                 => .{ .none = {} },
 
@@ -461,7 +434,12 @@ pub const Os = struct {
                         .max = .{ .major = 17, .minor = 1, .patch = 0 },
                     },
                 },
-                .xros => @panic("TODO what version is xros on right now?"),
+                .visionos => .{
+                    .semver = .{
+                        .min = .{ .major = 1, .minor = 0, .patch = 0 },
+                        .max = .{ .major = 1, .minor = 0, .patch = 0 },
+                    },
+                },
                 .netbsd => .{
                     .semver = .{
                         .min = .{ .major = 8, .minor = 0, .patch = 0 },
@@ -558,7 +536,7 @@ pub const Os = struct {
             .ios,
             .tvos,
             .watchos,
-            .xros,
+            .visionos,
             .dragonfly,
             .openbsd,
             .haiku,
@@ -600,10 +578,6 @@ pub const Os = struct {
             .opencl,
             .glsl450,
             .vulkan,
-            .c64,
-            .nes,
-            .atari8,
-            .atari2600,
             .plan9,
             .other,
             => false,
@@ -723,17 +697,13 @@ pub const Abi = enum {
             .ios,
             .tvos,
             .watchos,
-            .xros,
+            .visionos,
             .driverkit,
             .shadermodel,
             .liteos, // TODO: audit this
             .solaris,
             .illumos,
             .serenity,
-            .c64,
-            .nes,
-            .atari8,
-            .atari2600,
             => .none,
         };
     }
@@ -786,12 +756,6 @@ pub const ObjectFormat = enum {
     plan9,
     /// Nvidia PTX format
     nvptx,
-    /// NES object format
-    nes,
-    /// Commodore 64 format
-    prg,
-    /// Atari 2600 ROM image
-    a26,
 
     pub fn fileExt(of: ObjectFormat, arch: Cpu.Arch) [:0]const u8 {
         return switch (of) {
@@ -804,20 +768,14 @@ pub const ObjectFormat = enum {
             .plan9 => arch.plan9Ext(),
             .nvptx => ".ptx",
             .dxcontainer => ".dxil",
-            .nes => ".nes",
-            .prg => ".prg",
-            .a26 => ".a26",
         };
     }
 
     pub fn default(os_tag: Os.Tag, arch: Cpu.Arch) ObjectFormat {
         return switch (os_tag) {
             .windows, .uefi => .coff,
-            .ios, .macos, .watchos, .tvos => .macho,
+            .ios, .macos, .watchos, .tvos, .visionos => .macho,
             .plan9 => .plan9,
-            .nes => .nes,
-            .c64 => .prg,
-            .atari2600 => .a26,
             else => switch (arch) {
                 .wasm32, .wasm64 => .wasm,
                 .spirv32, .spirv64 => .spirv,
@@ -1029,8 +987,8 @@ pub const Cpu = struct {
         mipsel,
         mips64,
         mips64el,
-        msp430,
         mos,
+        msp430,
         powerpc,
         powerpcle,
         powerpc64,
@@ -1127,6 +1085,10 @@ pub const Cpu = struct {
             };
         }
 
+        pub inline fn isMOS6502(arch: Arch) bool {
+            return arch == .mos;
+        }
+
         pub inline fn isPPC(arch: Arch) bool {
             return switch (arch) {
                 .powerpc, .powerpcle => true,
@@ -1165,13 +1127,6 @@ pub const Cpu = struct {
         pub inline fn isNvptx(arch: Arch) bool {
             return switch (arch) {
                 .nvptx, .nvptx64 => true,
-                else => false,
-            };
-        }
-
-        pub inline fn isMOS(arch: Arch) bool {
-            return switch (arch) {
-                .mos => true,
                 else => false,
             };
         }
@@ -1224,6 +1179,7 @@ pub const Cpu = struct {
                 .aarch64_be => .AARCH64,
                 .mips64 => .MIPS,
                 .mips64el => .MIPS_RS3_LE,
+                .mos => .EM_MOS,
                 .powerpc64 => .PPC64,
                 .powerpc64le => .PPC64,
                 .riscv64 => .RISCV,
@@ -1248,7 +1204,6 @@ pub const Cpu = struct {
                 .spirv64 => .NONE,
                 .loongarch32 => .NONE,
                 .loongarch64 => .NONE,
-                .mos => .EM_MOS,
             };
         }
 
@@ -1309,12 +1264,13 @@ pub const Cpu = struct {
                 .sparc64 => .Unknown,
                 .s390x => .Unknown,
                 .ve => .Unknown,
+                .mos => .Unknown,
                 .spu_2 => .Unknown,
+                .spirv => .Unknown,
                 .spirv32 => .Unknown,
                 .spirv64 => .Unknown,
                 .loongarch32 => .Unknown,
                 .loongarch64 => .Unknown,
-                .mos => .Unknown,
             };
         }
 
@@ -1414,6 +1370,7 @@ pub const Cpu = struct {
                 .bpfel, .bpfeb => "bpf",
                 .loongarch32, .loongarch64 => "loongarch",
                 .mips, .mipsel, .mips64, .mips64el => "mips",
+                .mos => "mos",
                 .powerpc, .powerpcle, .powerpc64, .powerpc64le => "powerpc",
                 .amdgcn => "amdgpu",
                 .riscv32, .riscv64 => "riscv",
@@ -1423,7 +1380,6 @@ pub const Cpu = struct {
                 .nvptx, .nvptx64 => "nvptx",
                 .wasm32, .wasm64 => "wasm",
                 .spirv32, .spirv64 => "spirv",
-                .mos => "mos",
                 else => @tagName(arch),
             };
         }
@@ -1452,8 +1408,8 @@ pub const Cpu = struct {
                 .xtensa => &xtensa.all_features,
                 .nvptx, .nvptx64 => &nvptx.all_features,
                 .ve => &ve.all_features,
-                .wasm32, .wasm64 => &wasm.all_features,
                 .mos => &mos.all_features,
+                .wasm32, .wasm64 => &wasm.all_features,
 
                 else => &[0]Cpu.Feature{},
             };
@@ -1676,10 +1632,6 @@ pub inline fn isSpirV(target: Target) bool {
     return target.cpu.arch.isSpirV();
 }
 
-pub inline fn isMos(target: Target) bool {
-    return target.cpu.arch.isMOS();
-}
-
 pub const FloatAbi = enum {
     hard,
     soft,
@@ -1699,6 +1651,7 @@ pub inline fn hasDynamicLinker(target: Target) bool {
         .tvos,
         .watchos,
         .macos,
+        .visionos,
         .uefi,
         .windows,
         .emscripten,
@@ -1706,10 +1659,6 @@ pub inline fn hasDynamicLinker(target: Target) bool {
         .glsl450,
         .vulkan,
         .plan9,
-        .c64,
-        .nes,
-        .atari8,
-        .atari2600,
         .other,
         => return false,
         else => return true,
@@ -1835,10 +1784,10 @@ pub const DynamicLinker = struct {
                 .nvptx64,
                 .spu_2,
                 .avr,
-                .mos,
                 .spirv,
                 .spirv32,
                 .spirv64,
+                .mos,
                 => none,
 
                 // TODO go over each item in this list and either move it to the above list, or
@@ -1878,7 +1827,7 @@ pub const DynamicLinker = struct {
             .tvos,
             .watchos,
             .macos,
-            .xros,
+            .visionos,
             => init("/usr/lib/dyld"),
 
             // Operating systems in this list have been verified as not having a standard
@@ -1894,10 +1843,6 @@ pub const DynamicLinker = struct {
             .other,
             .plan9,
             .serenity,
-            .c64,
-            .nes,
-            .atari8,
-            .atari2600,
             => none,
 
             // TODO revisit when multi-arch for Haiku is available
@@ -1936,97 +1881,6 @@ pub const DynamicLinker = struct {
 
 pub fn standardDynamicLinkerPath(target: Target) DynamicLinker {
     return DynamicLinker.standard(target.cpu, target.os.tag, target.abi);
-}
-
-pub fn maxIntAlignment(target: Target) u16 {
-    return switch (target.cpu.arch) {
-        .avr => 1,
-        .msp430, .mos => 2,
-        .xcore => 4,
-
-        .arm,
-        .armeb,
-        .thumb,
-        .thumbeb,
-        .hexagon,
-        .mips,
-        .mipsel,
-        .powerpc,
-        .powerpcle,
-        .r600,
-        .amdgcn,
-        .riscv32,
-        .sparc,
-        .sparcel,
-        .s390x,
-        .lanai,
-        .wasm32,
-        .wasm64,
-        => 8,
-
-        .x86 => if (target.ofmt == .c) 16 else return switch (target.os.tag) {
-            .windows, .uefi => 8,
-            else => 4,
-        },
-
-        // For these, LLVMABIAlignmentOfType(i128) reports 8. Note that 16
-        // is a relevant number in three cases:
-        // 1. Different machine code instruction when loading into SIMD register.
-        // 2. The C ABI wants 16 for extern structs.
-        // 3. 16-byte cmpxchg needs 16-byte alignment.
-        // Same logic for powerpc64, mips64, sparc64.
-        .powerpc64,
-        .powerpc64le,
-        .mips64,
-        .mips64el,
-        .sparc64,
-        => return switch (target.ofmt) {
-            .c => 16,
-            else => 8,
-        },
-
-        // Even LLVMABIAlignmentOfType(i128) agrees on these targets.
-        .x86_64,
-        .aarch64,
-        .aarch64_be,
-        .aarch64_32,
-        .riscv64,
-        .bpfel,
-        .bpfeb,
-        .nvptx,
-        .nvptx64,
-        => 16,
-
-        // Below this comment are unverified but based on the fact that C requires
-        // int128_t to be 16 bytes aligned, it's a safe default.
-        .spu_2,
-        .csky,
-        .arc,
-        .m68k,
-        .tce,
-        .tcele,
-        .le32,
-        .amdil,
-        .hsail,
-        .spir,
-        .kalimba,
-        .renderscript32,
-        .spirv,
-        .spirv32,
-        .shave,
-        .le64,
-        .amdil64,
-        .hsail64,
-        .spir64,
-        .renderscript64,
-        .ve,
-        .spirv64,
-        .dxil,
-        .loongarch32,
-        .loongarch64,
-        .xtensa,
-        => 16,
-    };
 }
 
 pub fn ptrBitWidth_cpu_abi(cpu: Cpu, abi: Abi) u16 {
@@ -2327,7 +2181,7 @@ pub fn c_type_bit_size(target: Target, c_type: CType) u16 {
                 .long, .ulong, .float => return 32,
                 .longlong, .ulonglong, .double, .longdouble => return 64,
             },
-            .mos, .avr => switch (c_type) {
+            .avr => switch (c_type) {
                 .char => return 8,
                 .short, .ushort, .int, .uint => return 16,
                 .long, .ulong, .float, .double, .longdouble => return 32,
@@ -2454,7 +2308,7 @@ pub fn c_type_bit_size(target: Target, c_type: CType) u16 {
             },
         },
 
-        .macos, .ios, .tvos, .watchos, .xros => switch (c_type) {
+        .macos, .ios, .tvos, .watchos, .visionos => switch (c_type) {
             .char => return 8,
             .short, .ushort => return 16,
             .int, .uint, .float => return 32,
@@ -2535,10 +2389,6 @@ pub fn c_type_bit_size(target: Target, c_type: CType) u16 {
         .shadermodel,
         .liteos,
         .serenity,
-        .c64,
-        .nes,
-        .atari8,
-        .atari2600,
         => @panic("TODO specify the C integer and float type sizes for this OS"),
     }
 }
@@ -2578,7 +2428,7 @@ pub fn c_type_alignment(target: Target, c_type: CType) u16 {
 
                     else => 4,
                 },
-                .ios, .tvos, .watchos => 4,
+                .ios, .tvos, .watchos, .visionos => 4,
                 else => 8,
             },
 
@@ -2672,7 +2522,7 @@ pub fn c_type_preferred_alignment(target: Target, c_type: CType) u16 {
                     else => {},
                 },
             },
-            .ios, .tvos, .watchos => switch (c_type) {
+            .ios, .tvos, .watchos, .visionos => switch (c_type) {
                 .longdouble => return 4,
                 else => {},
             },
@@ -2708,7 +2558,7 @@ pub fn c_type_preferred_alignment(target: Target, c_type: CType) u16 {
     return @min(
         std.math.ceilPowerOfTwoAssert(u16, (c_type_bit_size(target, c_type) + 7) / 8),
         @as(u16, switch (target.cpu.arch) {
-            .msp430 => 2,
+            .mos, .msp430 => 2,
 
             .csky,
             .xcore,
@@ -2726,7 +2576,6 @@ pub fn c_type_preferred_alignment(target: Target, c_type: CType) u16 {
             .renderscript32,
             .ve,
             .spu_2,
-            .mos,
             .xtensa,
             => 4,
 
@@ -2861,20 +2710,6 @@ pub fn is_libc_lib_name(target: std.Target, name: []const u8) bool {
     if (target.abi.isMusl()) {
         if (eqlIgnoreCase(ignore_case, name, "crypt"))
             return true;
-    }
-
-    if (target.cpu.arch.isMOS()) {
-        if (eqlIgnoreCase(ignore_case, name, "crt0"))
-            return true;
-        if (eqlIgnoreCase(ignore_case, name, "crt"))
-            return true;
-        if (eqlIgnoreCase(ignore_case, name, "c"))
-            return true;
-        if (target.os.tag.isNES()) {
-            if (eqlIgnoreCase(ignore_case, name, "neslib"))
-                return true;
-        }
-        return false;
     }
 
     if (target.os.tag.isDarwin()) {

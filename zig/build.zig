@@ -98,6 +98,11 @@ pub fn build(b: *std.Build) !void {
         "llvm-has-m68k",
         "Whether LLVM has the experimental target m68k enabled",
     ) orelse false;
+    const llvm_has_mos = b.option(
+        bool,
+        "llvm-has-mos",
+        "Whether LLVM has the experimental target mos enabled",
+    ) orelse false;
     const llvm_has_csky = b.option(
         bool,
         "llvm-has-csky",
@@ -112,11 +117,6 @@ pub fn build(b: *std.Build) !void {
         bool,
         "llvm-has-xtensa",
         "Whether LLVM has the experimental target xtensa enabled",
-    ) orelse false;
-    const llvm_has_mos = b.option(
-        bool,
-        "llvm-has-mos",
-        "Whether LLVM has the experimental target mos enabled",
     ) orelse false;
     const enable_ios_sdk = b.option(bool, "enable-ios-sdk", "Run tests requiring presence of iOS SDK and frameworks") orelse false;
     const enable_macos_sdk = b.option(bool, "enable-macos-sdk", "Run tests requiring presence of macOS SDK and frameworks") orelse enable_ios_sdk;
@@ -228,10 +228,10 @@ pub fn build(b: *std.Build) !void {
     exe_options.addOption(bool, "skip_non_native", skip_non_native);
     exe_options.addOption(bool, "have_llvm", enable_llvm);
     exe_options.addOption(bool, "llvm_has_m68k", llvm_has_m68k);
+    exe_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     exe_options.addOption(bool, "llvm_has_csky", llvm_has_csky);
     exe_options.addOption(bool, "llvm_has_arc", llvm_has_arc);
     exe_options.addOption(bool, "llvm_has_xtensa", llvm_has_xtensa);
-    exe_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     exe_options.addOption(bool, "force_gpa", force_gpa);
     exe_options.addOption(bool, "only_c", only_c);
     exe_options.addOption(bool, "only_core_functionality", only_c);
@@ -340,6 +340,9 @@ pub fn build(b: *std.Build) !void {
         }
         if (target.result.os.tag == .windows) {
             inline for (.{ exe, check_case_exe }) |artifact| {
+                // LLVM depends on networking as of version 18.
+                artifact.linkSystemLibrary("ws2_32");
+
                 artifact.linkSystemLibrary("version");
                 artifact.linkSystemLibrary("uuid");
                 artifact.linkSystemLibrary("ole32");
@@ -393,10 +396,10 @@ pub fn build(b: *std.Build) !void {
     test_cases_options.addOption(bool, "skip_non_native", skip_non_native);
     test_cases_options.addOption(bool, "have_llvm", enable_llvm);
     test_cases_options.addOption(bool, "llvm_has_m68k", llvm_has_m68k);
+    test_cases_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     test_cases_options.addOption(bool, "llvm_has_csky", llvm_has_csky);
     test_cases_options.addOption(bool, "llvm_has_arc", llvm_has_arc);
     test_cases_options.addOption(bool, "llvm_has_xtensa", llvm_has_xtensa);
-    test_cases_options.addOption(bool, "llvm_has_mos", llvm_has_mos);
     test_cases_options.addOption(bool, "force_gpa", force_gpa);
     test_cases_options.addOption(bool, "only_c", only_c);
     test_cases_options.addOption(bool, "only_core_functionality", true);
@@ -452,10 +455,10 @@ pub fn build(b: *std.Build) !void {
     }, .{
         .enable_llvm = enable_llvm,
         .llvm_has_m68k = llvm_has_m68k,
+        .llvm_has_mos = llvm_has_mos,
         .llvm_has_csky = llvm_has_csky,
         .llvm_has_arc = llvm_has_arc,
         .llvm_has_xtensa = llvm_has_xtensa,
-        .llvm_has_mos = llvm_has_mos,
     });
     test_step.dependOn(test_cases_step);
 
@@ -710,7 +713,7 @@ fn addCmakeCfgOptionsToExe(
                 };
                 exe.linkSystemLibrary("unwind");
             },
-            .ios, .macos, .watchos, .tvos => {
+            .ios, .macos, .watchos, .tvos, .visionos => {
                 exe.linkLibCpp();
             },
             .windows => {

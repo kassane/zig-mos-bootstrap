@@ -1633,6 +1633,7 @@ pub const EM = enum(u16) {
     /// Fujitsu FR-V
     FRV = 0x5441,
 
+    /// MOS 6502
     EM_MOS = 6502,
 
     _,
@@ -1647,6 +1648,7 @@ pub const EM = enum(u16) {
             .@"68K" => .m68k,
             .MIPS => .mips,
             .MIPS_RS3_LE => .mipsel,
+            .EM_MOS => .mos,
             .PPC => .powerpc,
             .SPARC => .sparc,
             .@"386" => .x86,
@@ -1661,7 +1663,6 @@ pub const EM = enum(u16) {
             .SPARCV9 => .sparc64,
             .S390 => .s390x,
             .SPU_2 => .spu_2,
-            .EM_MOS => .mos,
             // there's many cases we don't (yet) handle, or will never have a
             // zig target cpu arch equivalent (such as null).
             else => null,

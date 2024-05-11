@@ -43,9 +43,6 @@ comptime {
             } else if (builtin.os.tag == .opencl) {
                 if (@hasDecl(root, "main"))
                     @export(spirvMain2, .{ .name = "main" });
-            } else if (builtin.os.tag == .nes or builtin.os.tag == .c64 or builtin.os.tag == .atari2600 or builtin.os.tag == .atari8) {
-                if (@hasDecl(root, "main"))
-                    @export(main2, .{ .name = "main" });
             } else {
                 if (!@hasDecl(root, "_start")) {
                     @export(_start2, .{ .name = "_start" });
@@ -579,6 +576,7 @@ fn maybeIgnoreSigpipe() void {
         .ios,
         .watchos,
         .tvos,
+        .visionos,
         .dragonfly,
         .freebsd,
         => true,

@@ -58,10 +58,10 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .loongarch64 => "loongarch64",
         .m68k => "m68k",
         .mips => "mips",
-        .mos => "mos",
         .mipsel => "mipsel",
         .mips64 => "mips64",
         .mips64el => "mips64el",
+        .mos => "mos",
         .msp430 => "msp430",
         .powerpc => "powerpc",
         .powerpcle => "powerpcle",
@@ -146,13 +146,9 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .driverkit => "driverkit",
         .shadermodel => "shadermodel",
         .liteos => "liteos",
-        .xros => "xros",
+        .visionos => "xros",
         .serenity => "serenity",
         .vulkan => "vulkan",
-        .c64 => "c64",
-        .atari8 => "atari8",
-        .atari2600 => "atari2600",
-        .nes => "nes",
 
         .opencl,
         .glsl450,
@@ -234,10 +230,6 @@ pub fn targetOs(os_tag: std.Target.Os.Tag) llvm.OSType {
         .cloudabi,
         .minix,
         .contiki,
-        .nes,
-        .c64,
-        .atari8,
-        .atari2600,
         => .UnknownOS,
 
         .windows, .uefi => .Win32,
@@ -265,7 +257,7 @@ pub fn targetOs(os_tag: std.Target.Os.Tag) llvm.OSType {
         .elfiamcu => .ELFIAMCU,
         .tvos => .TvOS,
         .watchos => .WatchOS,
-        .xros => .XROS,
+        .visionos => .XROS,
         .mesa3d => .Mesa3D,
         .amdpal => .AMDPAL,
         .hermit => .HermitCore,
@@ -298,10 +290,10 @@ pub fn targetArch(arch_tag: std.Target.Cpu.Arch) llvm.ArchType {
         .loongarch64 => .loongarch64,
         .m68k => .m68k,
         .mips => .mips,
-        .mos => .mos,
         .mipsel => .mipsel,
         .mips64 => .mips64,
         .mips64el => .mips64el,
+        .mos => .mos,
         .msp430 => .msp430,
         .powerpc => .ppc,
         .powerpcle => .ppcle,
@@ -621,7 +613,7 @@ const DataLayoutBuilder = struct {
         switch (kind) {
             .integer => {
                 if (self.target.ptrBitWidth() <= 16 and size >= 128) return;
-                abi = @min(abi, self.target.maxIntAlignment() * 8);
+                abi = @min(abi, Type.maxIntAlignment(self.target, true) * 8);
                 switch (self.target.cpu.arch) {
                     .aarch64,
                     .aarch64_be,
@@ -630,7 +622,7 @@ const DataLayoutBuilder = struct {
                         abi = size;
                         pref = size;
                     } else switch (self.target.os.tag) {
-                        .macos, .ios => {},
+                        .macos, .ios, .watchos, .tvos, .visionos => {},
                         .uefi, .windows => {
                             pref = size;
                             force_abi = size >= 32;
@@ -682,6 +674,20 @@ const DataLayoutBuilder = struct {
                         pref = @max(size, 32);
                         abi = size;
                         force_abi = size == 64;
+                    },
+                    .x86 => switch (size) {
+                        128 => {
+                            abi = size;
+                            pref = size;
+                        },
+                        else => {},
+                    },
+                    .x86_64 => switch (size) {
+                        64, 128 => {
+                            abi = size;
+                            pref = size;
+                        },
+                        else => {},
                     },
                     else => {},
                 }
@@ -3263,7 +3269,6 @@ pub const Object = struct {
             .bool_false,
             .empty_struct,
             .generic_poison,
-            .var_args_param_type,
             .none,
             => unreachable,
             else => switch (ip.indexToKey(t.toIntern())) {
@@ -4557,6 +4562,10 @@ pub const Object = struct {
             if (!param_ty.isPtrLikeOptional(mod) and !ptr_info.flags.is_allowzero) {
                 try attributes.addParamAttr(llvm_arg_i, .nonnull, &o.builder);
             }
+            if (fn_info.cc == .Interrupt) {
+                const child_type = try lowerType(o, Type.fromInterned(ptr_info.child));
+                try attributes.addParamAttr(llvm_arg_i, .{ .byval = child_type }, &o.builder);
+            }
             if (ptr_info.flags.is_const) {
                 try attributes.addParamAttr(llvm_arg_i, .readonly, &o.builder);
             }
@@ -4769,8 +4778,8 @@ pub const DeclGen = struct {
                 debug_global_var,
                 debug_expression,
             );
-            if (!is_internal_linkage or decl.isExtern(zcu))
-                variable_index.setGlobalVariableExpression(debug_global_var_expression, &o.builder);
+
+            variable_index.setGlobalVariableExpression(debug_global_var_expression, &o.builder);
             try o.debug_globals.append(o.gpa, debug_global_var_expression);
         }
     }
@@ -10115,20 +10124,21 @@ pub const FuncGen = struct {
             return self.wip.conv(.unsigned, small_int_val, int_llvm_ty, "");
         }
 
-        const tag_int = blk: {
+        const tag_int_val = blk: {
             const tag_ty = union_ty.unionTagTypeHypothetical(mod);
             const union_field_name = union_obj.loadTagType(ip).names.get(ip)[extra.field_index];
             const enum_field_index = tag_ty.enumFieldIndex(union_field_name, mod).?;
             const tag_val = try mod.enumValueFieldIndex(tag_ty, enum_field_index);
-            const tag_int_val = try tag_val.intFromEnum(tag_ty, mod);
-            break :blk tag_int_val.toUnsignedInt(mod);
+            break :blk try tag_val.intFromEnum(tag_ty, mod);
         };
         if (layout.payload_size == 0) {
             if (layout.tag_size == 0) {
                 return .none;
             }
             assert(!isByRef(union_ty, mod));
-            return o.builder.intValue(union_llvm_ty, tag_int);
+            var big_int_space: Value.BigIntSpace = undefined;
+            const tag_big_int = tag_int_val.toBigInt(&big_int_space, mod);
+            return try o.builder.bigIntValue(union_llvm_ty, tag_big_int);
         }
         assert(isByRef(union_ty, mod));
         // The llvm type of the alloca will be the named LLVM union type, and will not
@@ -10202,7 +10212,9 @@ pub const FuncGen = struct {
             const indices: [2]Builder.Value = .{ usize_zero, try o.builder.intValue(.i32, tag_index) };
             const field_ptr = try self.wip.gep(.inbounds, llvm_union_ty, result_ptr, &indices, "");
             const tag_ty = try o.lowerType(Type.fromInterned(union_obj.enum_tag_ty));
-            const llvm_tag = try o.builder.intValue(tag_ty, tag_int);
+            var big_int_space: Value.BigIntSpace = undefined;
+            const tag_big_int = tag_int_val.toBigInt(&big_int_space, mod);
+            const llvm_tag = try o.builder.bigIntValue(tag_ty, tag_big_int);
             const tag_alignment = Type.fromInterned(union_obj.enum_tag_ty).abiAlignment(mod).toLlvm();
             _ = try self.wip.store(.normal, llvm_tag, field_ptr, tag_alignment);
         }
@@ -11173,9 +11185,17 @@ fn lowerSystemVFnRetTy(o: *Object, fn_info: InternPool.Key.FuncType) Allocator.E
                 types_buffer[types_index] = .i64;
                 types_index += 1;
             },
-            .sse, .sseup => {
+            .sse => {
                 types_buffer[types_index] = .double;
                 types_index += 1;
+            },
+            .sseup => {
+                if (types_buffer[types_index - 1] == .double) {
+                    types_buffer[types_index - 1] = .fp128;
+                } else {
+                    types_buffer[types_index] = .double;
+                    types_index += 1;
+                }
             },
             .float => {
                 types_buffer[types_index] = .float;
@@ -11460,9 +11480,17 @@ const ParamTypeIterator = struct {
                     types_buffer[types_index] = .i64;
                     types_index += 1;
                 },
-                .sse, .sseup => {
+                .sse => {
                     types_buffer[types_index] = .double;
                     types_index += 1;
+                },
+                .sseup => {
+                    if (types_buffer[types_index - 1] == .double) {
+                        types_buffer[types_index - 1] = .fp128;
+                    } else {
+                        types_buffer[types_index] = .double;
+                        types_index += 1;
+                    }
                 },
                 .float => {
                     types_buffer[types_index] = .float;
@@ -11553,28 +11581,37 @@ fn ccAbiPromoteInt(
         .Int, .Enum, .ErrorSet => ty.intInfo(mod),
         else => return null,
     };
-    if (int_info.bits <= 16) return int_info.signedness;
-    switch (target.cpu.arch) {
-        .riscv64 => {
-            if (int_info.bits == 32) {
-                // LLVM always signextends 32 bit ints, unsure if bug.
-                return .signed;
-            }
-            if (int_info.bits < 64) {
-                return int_info.signedness;
-            }
+    return switch (target.os.tag) {
+        .macos, .ios, .watchos, .tvos, .visionos => switch (int_info.bits) {
+            0...16 => int_info.signedness,
+            else => null,
         },
-        .sparc64,
-        .powerpc64,
-        .powerpc64le,
-        => {
-            if (int_info.bits < 64) {
-                return int_info.signedness;
-            }
+        else => switch (target.cpu.arch) {
+            .riscv64 => switch (int_info.bits) {
+                0...16 => int_info.signedness,
+                32 => .signed, // LLVM always signextends 32 bit ints, unsure if bug.
+                17...31, 33...63 => int_info.signedness,
+                else => null,
+            },
+
+            .sparc64,
+            .powerpc64,
+            .powerpc64le,
+            => switch (int_info.bits) {
+                0...63 => int_info.signedness,
+                else => null,
+            },
+
+            .aarch64,
+            .aarch64_be,
+            => null,
+
+            else => switch (int_info.bits) {
+                0...16 => int_info.signedness,
+                else => null,
+            },
         },
-        else => {},
-    }
-    return null;
+    };
 }
 
 /// This is the one source of truth for whether a type is passed around as an LLVM pointer,
@@ -11894,6 +11931,15 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
             llvm.LLVMInitializeMipsAsmPrinter();
             llvm.LLVMInitializeMipsAsmParser();
         },
+        .mos => {
+            if (build_options.llvm_has_mos) {
+                llvm.LLVMInitializeMOSTarget();
+                llvm.LLVMInitializeMOSTargetInfo();
+                llvm.LLVMInitializeMOSTargetMC();
+                llvm.LLVMInitializeMOSAsmPrinter();
+                llvm.LLVMInitializeMOSAsmParser();
+            }
+        },
         .msp430 => {
             llvm.LLVMInitializeMSP430Target();
             llvm.LLVMInitializeMSP430TargetInfo();
@@ -11998,15 +12044,6 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
                 llvm.LLVMInitializeARCTargetMC();
                 llvm.LLVMInitializeARCAsmPrinter();
                 // There is no LLVMInitializeARCAsmParser function.
-            }
-        },
-        .mos => {
-            if (build_options.llvm_has_mos) {
-                llvm.LLVMInitializeMOSTarget();
-                llvm.LLVMInitializeMOSTargetInfo();
-                llvm.LLVMInitializeMOSTargetMC();
-                llvm.LLVMInitializeMOSAsmPrinter();
-                llvm.LLVMInitializeMOSAsmParser();
             }
         },
 

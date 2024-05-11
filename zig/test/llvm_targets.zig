@@ -7,6 +7,12 @@ const targets = [_]std.Target.Query{
     .{ .cpu_arch = .aarch64, .os_tag = .ios, .abi = .simulator },
     .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .none },
     .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none },
+    .{ .cpu_arch = .aarch64, .os_tag = .watchos, .abi = .none },
+    .{ .cpu_arch = .aarch64, .os_tag = .watchos, .abi = .simulator },
+    .{ .cpu_arch = .aarch64, .os_tag = .tvos, .abi = .none },
+    .{ .cpu_arch = .aarch64, .os_tag = .tvos, .abi = .simulator },
+    .{ .cpu_arch = .aarch64, .os_tag = .visionos, .abi = .none },
+    .{ .cpu_arch = .aarch64, .os_tag = .visionos, .abi = .simulator },
     .{ .cpu_arch = .aarch64, .os_tag = .uefi, .abi = .none },
     .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu },
     .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc },
@@ -118,6 +124,9 @@ const targets = [_]std.Target.Query{
         .cpu_features_sub = std.Target.x86.featureSet(&.{ .mmx, .sse, .sse2, .avx, .avx2 }),
     },
     .{ .cpu_arch = .x86_64, .os_tag = .ios, .abi = .simulator },
+    .{ .cpu_arch = .x86_64, .os_tag = .watchos, .abi = .simulator },
+    .{ .cpu_arch = .x86_64, .os_tag = .tvos, .abi = .simulator },
+    .{ .cpu_arch = .x86_64, .os_tag = .visionos, .abi = .simulator },
     .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .none },
     .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none },
     .{ .cpu_arch = .x86_64, .os_tag = .uefi, .abi = .none },
@@ -137,10 +146,10 @@ pub fn addCases(
     for (targets) |target_query| {
         if (target_query.cpu_arch) |arch| switch (arch) {
             .m68k => if (!build_options.llvm_has_m68k) continue,
+            .mos => if (!build_options.llvm_has_mos) continue,
             .csky => if (!build_options.llvm_has_csky) continue,
             .arc => if (!build_options.llvm_has_arc) continue,
             .xtensa => if (!build_options.llvm_has_xtensa) continue,
-            .mos => if (!build_options.llvm_has_mos) continue,
             else => {},
         };
         var case = ctx.noEmitUsingLlvmBackend("llvm_targets", b.resolveTargetQuery(target_query));

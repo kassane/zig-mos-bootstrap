@@ -128,10 +128,10 @@ int main(int argc, char **argv) {
         int written = fprintf(f,
             "pub const have_llvm = false;\n"
             "pub const llvm_has_m68k = false;\n"
+            "pub const llvm_has_mos = false;\n"
             "pub const llvm_has_csky = false;\n"
             "pub const llvm_has_arc = false;\n"
             "pub const llvm_has_xtensa = false;\n"
-            "pub const llvm_has_mos = false;\n"
             "pub const version: [:0]const u8 = \"%s\";\n"
             "pub const semver = @import(\"std\").SemanticVersion.parse(version) catch unreachable;\n"
             "pub const enable_debug_extensions = false;\n"

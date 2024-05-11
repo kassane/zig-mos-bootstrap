@@ -964,9 +964,6 @@ fn genUnnamedConst(
         .wasm => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for wasm", .{}),
         .spirv => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for spirv", .{}),
         .nvptx => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for nvptx", .{}),
-        .nes => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for nes", .{}),
-        .prg => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for prg", .{}),
-        .a26 => return GenResult.fail(gpa, src_loc, "TODO genUnnamedConst for a26", .{}),
     }
 }
 
