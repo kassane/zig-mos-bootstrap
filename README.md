@@ -10,8 +10,8 @@ The primary goal of this project is to minimize system dependencies while achiev
 
 This project owes its existence to the invaluable contributions of several individuals and communities:
 
-- **Zig Developers:** For creating and maintaining the Zig programming language.
 - **Andrew Kelley:** The original creator of zig-bootstrap, which serves as the foundation for this project.
+- **Zig Developers:** For helping to maintain the Zig.
 - **LLVM-MOS Developers:** For their work on llvm-mos, enabling support for the mos6502 architecture.
 
 ## Version Information
