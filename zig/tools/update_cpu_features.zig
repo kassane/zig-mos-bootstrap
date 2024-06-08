@@ -855,6 +855,11 @@ const llvm_targets = [_]LlvmTarget{
         .td_name = "Hexagon.td",
     },
     .{
+        .zig_name = "mos",
+        .llvm_name = "MOS",
+        .td_name = "MOS.td",
+    },
+    .{
         .zig_name = "lanai",
         .llvm_name = "Lanai",
         .td_name = "Lanai.td",
@@ -878,11 +883,6 @@ const llvm_targets = [_]LlvmTarget{
         .zig_name = "mips",
         .llvm_name = "Mips",
         .td_name = "Mips.td",
-    },
-    .{
-        .zig_name = "mos",
-        .llvm_name = "MOS",
-        .td_name = "MOS.td",
     },
     .{
         .zig_name = "nvptx",
@@ -1111,7 +1111,7 @@ fn processOneTarget(job: Job) anyerror!void {
         }),
     };
 
-    const child_result = try std.ChildProcess.run(.{
+    const child_result = try std.process.Child.run(.{
         .allocator = arena,
         .argv = &child_args,
         .max_output_bytes = 400 * 1024 * 1024,

@@ -650,6 +650,7 @@ pub const Abi = enum {
     callable,
     mesh,
     amplification,
+    ohos,
 
     pub fn default(arch: Cpu.Arch, os: Os) Abi {
         return if (arch.isWasm()) .musl else switch (os.tag) {
@@ -689,6 +690,7 @@ pub const Abi = enum {
             .wasi,
             .emscripten,
             => .musl,
+            .liteos => .ohos,
             .opencl, // TODO: SPIR-V ABIs with Linkage capability
             .glsl450,
             .vulkan,
@@ -700,7 +702,6 @@ pub const Abi = enum {
             .visionos,
             .driverkit,
             .shadermodel,
-            .liteos, // TODO: audit this
             .solaris,
             .illumos,
             .serenity,
@@ -717,7 +718,8 @@ pub const Abi = enum {
 
     pub inline fn isMusl(abi: Abi) bool {
         return switch (abi) {
-            .musl, .musleabi, .musleabihf => true,
+            .musl, .musleabi, .musleabihf, .muslx32 => true,
+            .ohos => true,
             else => false,
         };
     }
@@ -728,6 +730,7 @@ pub const Abi = enum {
             .eabihf,
             .musleabihf,
             => .hard,
+            .ohos => .soft,
             else => .soft,
         };
     }
@@ -1547,6 +1550,7 @@ pub const Cpu = struct {
                 .x86 => &x86.cpu.pentium4,
                 .nvptx, .nvptx64 => &nvptx.cpu.sm_20,
                 .sparc, .sparcel => &sparc.cpu.v8,
+                .loongarch64 => &loongarch.cpu.loongarch64,
 
                 else => generic(arch),
             };
@@ -1998,6 +2002,7 @@ pub fn stackAlignment(target: Target) u16 {
         .ve,
         .wasm32,
         .wasm64,
+        .loongarch64,
         => 16,
         .powerpc64,
         .powerpc64le,

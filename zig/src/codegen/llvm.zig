@@ -213,6 +213,7 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .callable => "callable",
         .mesh => "mesh",
         .amplification => "amplification",
+        .ohos => "ohos",
     };
     try llvm_triple.appendSlice(llvm_abi);
 
@@ -429,7 +430,9 @@ const DataLayoutBuilder = struct {
             };
             if (self.target.cpu.arch == .aarch64_32) continue;
             if (!info.force_in_data_layout and matches_default and
-                self.target.cpu.arch != .riscv64 and !(self.target.cpu.arch == .aarch64 and
+                self.target.cpu.arch != .riscv64 and
+                self.target.cpu.arch != .loongarch64 and
+                !(self.target.cpu.arch == .aarch64 and
                 (self.target.os.tag == .uefi or self.target.os.tag == .windows)) and
                 self.target.cpu.arch != .bpfeb and self.target.cpu.arch != .bpfel) continue;
             try writer.writeAll("-p");
@@ -538,6 +541,7 @@ const DataLayoutBuilder = struct {
             .nvptx64,
             => &.{ 16, 32, 64 },
             .x86_64 => &.{ 8, 16, 32, 64 },
+            .loongarch64 => &.{64},
             else => &.{},
         }), 0..) |natural, index| switch (index) {
             0 => try writer.print("-n{d}", .{natural}),
@@ -686,6 +690,14 @@ const DataLayoutBuilder = struct {
                         64, 128 => {
                             abi = size;
                             pref = size;
+                        },
+                        else => {},
+                    },
+                    .loongarch64 => switch (size) {
+                        128 => {
+                            abi = size;
+                            pref = size;
+                            force_abi = true;
                         },
                         else => {},
                     },
@@ -3118,6 +3130,7 @@ pub const Object = struct {
 
         try variable_index.setInitializer(try o.lowerValue(decl_val), &o.builder);
         variable_index.setLinkage(.internal, &o.builder);
+        variable_index.setMutability(.constant, &o.builder);
         variable_index.setUnnamedAddr(.unnamed_addr, &o.builder);
         variable_index.setAlignment(alignment.toLlvm(), &o.builder);
         return variable_index;
@@ -3778,6 +3791,7 @@ pub const Object = struct {
             .float,
             .enum_tag,
             => {},
+            .opt => {}, // pointer like optional expected
             else => unreachable,
         }
         const bits = ty.bitSize(mod);
@@ -4379,7 +4393,7 @@ pub const Object = struct {
             .int => try o.builder.castConst(
                 .inttoptr,
                 try o.builder.intConst(try o.lowerType(Type.usize), offset),
-                .ptr,
+                try o.lowerType(Type.fromInterned(ptr.ty)),
             ),
             .eu_payload => |eu_ptr| try o.lowerPtr(
                 eu_ptr,
@@ -7627,7 +7641,8 @@ pub const FuncGen = struct {
         const o = self.dg.object;
         const pl_op = self.air.instructions.items(.data)[@intFromEnum(inst)].pl_op;
         const index = pl_op.payload;
-        return self.wip.callIntrinsic(.normal, .none, .@"wasm.memory.size", &.{.i32}, &.{
+        const llvm_usize = try o.lowerType(Type.usize);
+        return self.wip.callIntrinsic(.normal, .none, .@"wasm.memory.size", &.{llvm_usize}, &.{
             try o.builder.intValue(.i32, index),
         }, "");
     }
@@ -7636,7 +7651,8 @@ pub const FuncGen = struct {
         const o = self.dg.object;
         const pl_op = self.air.instructions.items(.data)[@intFromEnum(inst)].pl_op;
         const index = pl_op.payload;
-        return self.wip.callIntrinsic(.normal, .none, .@"wasm.memory.grow", &.{.i32}, &.{
+        const llvm_isize = try o.lowerType(Type.isize);
+        return self.wip.callIntrinsic(.normal, .none, .@"wasm.memory.grow", &.{llvm_isize}, &.{
             try o.builder.intValue(.i32, index), try self.resolveInst(pl_op.operand),
         }, "");
     }
@@ -11136,6 +11152,7 @@ fn lowerFnRetTy(o: *Object, fn_info: InternPool.Key.FuncType) Allocator.Error!Bu
                             }
                             return o.builder.structType(.normal, types[0..types_len]);
                         },
+                        .none => unreachable,
                     }
                 },
                 // TODO investigate C ABI for other architectures
@@ -11393,6 +11410,7 @@ const ParamTypeIterator = struct {
                             it.llvm_index += it.types_len - 1;
                             return .multiple_llvm_types;
                         },
+                        .none => unreachable,
                     }
                 },
                 // TODO investigate C ABI for other architectures
@@ -12046,6 +12064,13 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
                 // There is no LLVMInitializeARCAsmParser function.
             }
         },
+        .loongarch32, .loongarch64 => {
+            llvm.LLVMInitializeLoongArchTarget();
+            llvm.LLVMInitializeLoongArchTargetInfo();
+            llvm.LLVMInitializeLoongArchTargetMC();
+            llvm.LLVMInitializeLoongArchAsmPrinter();
+            llvm.LLVMInitializeLoongArchAsmParser();
+        },
 
         // LLVM backends that have no initialization functions.
         .tce,
@@ -12067,8 +12092,6 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
         .renderscript32,
         .renderscript64,
         .dxil,
-        .loongarch32,
-        .loongarch64,
         => {},
 
         .spu_2 => unreachable, // LLVM does not support this backend

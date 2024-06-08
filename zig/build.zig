@@ -497,6 +497,7 @@ pub fn build(b: *std.Build) !void {
         .skip_single_threaded = true,
         .skip_non_native = skip_non_native,
         .skip_libc = true,
+        .no_builtin = true,
     }));
 
     test_step.dependOn(tests.addModuleTests(b, .{
@@ -509,6 +510,7 @@ pub fn build(b: *std.Build) !void {
         .skip_single_threaded = true,
         .skip_non_native = skip_non_native,
         .skip_libc = true,
+        .no_builtin = true,
     }));
 
     test_step.dependOn(tests.addCompareOutputTests(b, test_filters, optimization_modes));
@@ -658,9 +660,10 @@ const exe_cflags = [_][]const u8{
     "-D__STDC_FORMAT_MACROS",
     "-D__STDC_LIMIT_MACROS",
     "-D_GNU_SOURCE",
-    "-fvisibility-inlines-hidden",
     "-fno-exceptions",
     "-fno-rtti",
+    "-fno-stack-protector",
+    "-fvisibility-inlines-hidden",
     "-Wno-type-limits",
     "-Wno-missing-braces",
     "-Wno-comment",
@@ -1258,7 +1261,6 @@ const llvm_libs = [_][]const u8{
     "LLVMTargetParser",
     "LLVMSupport",
     "LLVMDemangle",
-    // experimental target libs
     "LLVMMOSCodeGen",
     "LLVMMOSDesc",
     "LLVMMOSDisassembler",
