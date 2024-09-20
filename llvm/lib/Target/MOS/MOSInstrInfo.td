@@ -72,7 +72,9 @@ def STX_Absolute :
 	Inst24<"stx", OpcodeC2<0b100, 0b011>, Absolute>;
 
 def LDX_Immediate :
-	Inst16<"ldx", OpcodeC2<0b101, 0b000>, Immediate>;
+	Inst16<"ldx", OpcodeC2<0b101, 0b000>, Immediate> {
+  let XHigh = 1;
+}
 def LDX_ZeroPage :
 	Inst16<"ldx", OpcodeC2<0b101, 0b001>, ZeroPage>;
 def LDX_Absolute :
@@ -104,7 +106,7 @@ defm LDY : CC0_Regular<0b101, "ldy">;
 defm CPY : CC0_Regular<0b110, "cpy">;
 defm CPX : CC0_Regular<0b111, "cpx">;
 
-/// CC0 irregular instructions, e.g. most of them
+/// CC0 irregular instructions, i.e. most of them
 
 /// "Next, the cc = 00 instructions. Again, the opcodes are different:
 /// aaa opcode
@@ -291,7 +293,7 @@ let Predicates = [Has65DTV02] in {
 let DecoderNamespace = "65dtv02" in {
 
 def BRA_Relative_DTV02 : Inst16<"bra", Opcode<0x12>, Relative>,
-  InstConditionalBranch;
+  InstUnconditionalBranch;
 def SAC_Immediate : Inst16<"sac", Opcode<0x32>, Immediate>;
 def SIR_Immediate : Inst16<"sir", Opcode<0x42>, Immediate>;
 
@@ -330,7 +332,9 @@ def JMP_IndexedIndirect : Inst24<"jmp", Opcode<0x7c>, IndexedIndirect16>,
 
 def BIT_ZeroPageX : Inst16<"bit", Opcode<0x34>, ZeroPageX>;
 def BIT_AbsoluteX : Inst24<"bit", Opcode<0x3c>, AbsoluteX>;
-def BIT_Immediate : Inst16<"bit", Opcode<0x89>, Immediate>;
+def BIT_Immediate : Inst16<"bit", Opcode<0x89>, Immediate> {
+  let MHigh = 1;
+}
 
 def TRB_ZeroPage : Inst16<"trb", Opcode<0x14>, ZeroPage>; /// Test and Reset Bits
 def TRB_Absolute : Inst24<"trb", Opcode<0x1c>, Absolute>; /// Test and Reset Bits
@@ -422,7 +426,7 @@ def BMI_Relative16 : Inst24<"bmi", Opcode<0x33>, Relative16>,
 def BVC_Relative16 : Inst24<"bvc", Opcode<0x53>, Relative16>,
 	InstConditionalBranch;
 def BSR_Relative16 : Inst24<"bsr", Opcode<0x63>, Relative16>,
-	InstConditionalBranch;
+	InstCall;
 def BVS_Relative16 : Inst24<"bvs", Opcode<0x73>, Relative16>,
 	InstConditionalBranch;
 def BRA_Relative16 : Inst24<"bra", Opcode<0x83>, Relative16>,
@@ -437,11 +441,11 @@ def BEQ_Relative16 : Inst24<"beq", Opcode<0xf3>, Relative16>,
 	InstConditionalBranch;
 
 def JSR_AbsoluteIndirect: Inst24<"jsr", Opcode<0x22>, Indirect16>,
-	InstConditionalBranch {
+	InstCall {
   let isIndirectBranch = true;
 }
 def JSR_AbsoluteIndirectX: Inst24<"jsr", Opcode<0x23>, IndexedIndirect16>,
-	InstConditionalBranch {
+	InstCall {
   let isIndirectBranch = true;
 }
 
@@ -676,12 +680,16 @@ let Predicates = [HasW65816Or65EL02] in {
 def SEP_Immediate : Inst16<"sep", OpcodeC2<0b111, 0b000>, Immediate>;
 def REP_Immediate : Inst16<"rep", OpcodeC2<0b110, 0b000>, Immediate>;
 
-/// 16-bit immediate load
-/// LDX
-/// A2
+/// 16-bit immediate opcode variants
+
+def BIT_Immediate16 : Inst24<"bit", Opcode<0x89>, Immediate16> {
+  let DecoderNamespace = "MOSMLow";
+  let MLow = 1;
+}
 
 def LDX_Immediate16 : Inst24<"ldx", OpcodeC2<0b101, 0b000>, Immediate16> {
   let DecoderNamespace = "MOSXLow";
+  let XLow = 1;
 }
 
 /// 16-bit indexed-indirect jumps

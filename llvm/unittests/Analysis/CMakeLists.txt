@@ -3,6 +3,7 @@ set(LLVM_LINK_COMPONENTS
   AsmParser
   CodeGen
   Core
+  Instrumentation
   Passes
   Support
   TargetParser
@@ -22,8 +23,11 @@ set(ANALYSIS_TEST_SOURCES
   CFGTest.cpp
   CGSCCPassManagerTest.cpp
   ConstraintSystemTest.cpp
+  CtxProfAnalysisTest.cpp
   DDGTest.cpp
   DomTreeUpdaterTest.cpp
+  DXILResourceTest.cpp
+  GraphWriterTest.cpp
   GlobalsModRefTest.cpp
   FunctionPropertiesAnalysisTest.cpp
   InlineCostTest.cpp
@@ -43,7 +47,6 @@ set(ANALYSIS_TEST_SOURCES
   ProfileSummaryInfoTest.cpp
   ReplaceWithVecLibTest.cpp
   ScalarEvolutionTest.cpp
-  VectorFunctionABITest.cpp
   SparsePropagation.cpp
   TargetLibraryInfoTest.cpp
   TensorSpecTest.cpp

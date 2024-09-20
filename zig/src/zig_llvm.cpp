@@ -54,6 +54,7 @@
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
+#include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/AddDiscriminators.h>
@@ -80,7 +81,7 @@ static const bool assertions_on = false;
 
 LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
-    LLVMCodeModel CodeModel, bool function_sections, bool data_sections, ZigLLVMABIType float_abi, 
+    LLVMCodeModel CodeModel, bool function_sections, bool data_sections, ZigLLVMABIType float_abi,
     const char *abi_name)
 {
     std::optional<Reloc::Model> RM;
@@ -128,6 +129,7 @@ LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Tri
 
     TargetOptions opt;
 
+    opt.UseInitArray = true;
     opt.FunctionSections = function_sections;
     opt.DataSections = data_sections;
     switch (float_abi) {
@@ -188,37 +190,56 @@ struct TimeTracerRAII {
 };
 } // end anonymous namespace
 
-bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
-        char **error_message, bool is_debug,
-        bool is_small, bool time_report, bool tsan, bool lto,
-        const char *asm_filename, const char *bin_filename,
-        const char *llvm_ir_filename, const char *bitcode_filename)
+static SanitizerCoverageOptions getSanCovOptions(ZigLLVMCoverageOptions z) {
+    SanitizerCoverageOptions o;
+    o.CoverageType = (SanitizerCoverageOptions::Type)z.CoverageType;
+    o.IndirectCalls = z.IndirectCalls;
+    o.TraceBB = z.TraceBB;
+    o.TraceCmp = z.TraceCmp;
+    o.TraceDiv = z.TraceDiv;
+    o.TraceGep = z.TraceGep;
+    o.Use8bitCounters = z.Use8bitCounters;
+    o.TracePC = z.TracePC;
+    o.TracePCGuard = z.TracePCGuard;
+    o.Inline8bitCounters = z.Inline8bitCounters;
+    o.InlineBoolFlag = z.InlineBoolFlag;
+    o.PCTable = z.PCTable;
+    o.NoPrune = z.NoPrune;
+    o.StackDepth = z.StackDepth;
+    o.TraceLoads = z.TraceLoads;
+    o.TraceStores = z.TraceStores;
+    o.CollectControlFlow = z.CollectControlFlow;
+    return o;
+}
+
+ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
+        char **error_message, const struct ZigLLVMEmitOptions *options)
 {
-    TimePassesIsEnabled = time_report;
+    TimePassesIsEnabled = options->time_report;
 
     raw_fd_ostream *dest_asm_ptr = nullptr;
     raw_fd_ostream *dest_bin_ptr = nullptr;
     raw_fd_ostream *dest_bitcode_ptr = nullptr;
 
-    if (asm_filename) {
+    if (options->asm_filename) {
         std::error_code EC;
-        dest_asm_ptr = new(std::nothrow) raw_fd_ostream(asm_filename, EC, sys::fs::OF_None);
+        dest_asm_ptr = new(std::nothrow) raw_fd_ostream(options->asm_filename, EC, sys::fs::OF_None);
         if (EC) {
             *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
             return true;
         }
     }
-    if (bin_filename) {
+    if (options->bin_filename) {
         std::error_code EC;
-        dest_bin_ptr = new(std::nothrow) raw_fd_ostream(bin_filename, EC, sys::fs::OF_None);
+        dest_bin_ptr = new(std::nothrow) raw_fd_ostream(options->bin_filename, EC, sys::fs::OF_None);
         if (EC) {
             *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
             return true;
         }
     }
-    if (bitcode_filename) {
+    if (options->bitcode_filename) {
         std::error_code EC;
-        dest_bitcode_ptr = new(std::nothrow) raw_fd_ostream(bitcode_filename, EC, sys::fs::OF_None);
+        dest_bitcode_ptr = new(std::nothrow) raw_fd_ostream(options->bitcode_filename, EC, sys::fs::OF_None);
         if (EC) {
             *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
             return true;
@@ -234,20 +255,19 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     std::string ProcName = "zig-";
     ProcName += std::to_string(PID);
     TimeTracerRAII TimeTracer(ProcName,
-                              bin_filename? bin_filename : asm_filename);
+                              options->bin_filename? options->bin_filename : options->asm_filename);
 
     TargetMachine &target_machine = *reinterpret_cast<TargetMachine*>(targ_machine_ref);
-    target_machine.setO0WantsFastISel(true);
 
     Module &llvm_module = *unwrap(module_ref);
 
     // Pipeline configurations
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = !is_debug;
-    pipeline_opts.SLPVectorization = !is_debug;
-    pipeline_opts.LoopVectorization = !is_debug;
-    pipeline_opts.LoopInterleaving = !is_debug;
-    pipeline_opts.MergeFunctions = !is_debug;
+    pipeline_opts.LoopUnrolling = !options->is_debug;
+    pipeline_opts.SLPVectorization = !options->is_debug;
+    pipeline_opts.LoopVectorization = !options->is_debug;
+    pipeline_opts.LoopInterleaving = !options->is_debug;
+    pipeline_opts.MergeFunctions = !options->is_debug;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;
@@ -277,54 +297,54 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     pass_builder.registerCGSCCAnalyses(cgscc_am);
     pass_builder.registerFunctionAnalyses(function_am);
     pass_builder.registerLoopAnalyses(loop_am);
-    pass_builder.crossRegisterProxies(loop_am, function_am,
-                                      cgscc_am, module_am);
+    pass_builder.crossRegisterProxies(loop_am, function_am, cgscc_am, module_am);
 
-    // IR verification
-    if (assertions_on) {
-      // Verify the input
-      pass_builder.registerPipelineStartEPCallback(
-        [](ModulePassManager &module_pm, OptimizationLevel OL) {
-          module_pm.addPass(VerifierPass());
-        });
-      // Verify the output
-      pass_builder.registerOptimizerLastEPCallback(
-        [](ModulePassManager &module_pm, OptimizationLevel OL) {
-          module_pm.addPass(VerifierPass());
-        });
-    }
+    pass_builder.registerPipelineStartEPCallback([&](ModulePassManager &module_pm, OptimizationLevel OL) {
+        // Verify the input
+        if (assertions_on) {
+            module_pm.addPass(VerifierPass());
+        }
 
-    // Passes specific for release build
-    if (!is_debug) {
-      pass_builder.registerPipelineStartEPCallback(
-        [](ModulePassManager &module_pm, OptimizationLevel OL) {
-          module_pm.addPass(
-            createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
-        });
-    }
+        if (!options->is_debug) {
+            module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
+        }
+    });
 
-    // Thread sanitizer
-    if (tsan) {
-        pass_builder.registerOptimizerLastEPCallback([](ModulePassManager &module_pm, OptimizationLevel level) {
+    //pass_builder.registerOptimizerEarlyEPCallback([&](ModulePassManager &module_pm, OptimizationLevel OL) {
+    //});
+
+    pass_builder.registerOptimizerLastEPCallback([&](ModulePassManager &module_pm, OptimizationLevel level) {
+        // Code coverage instrumentation.
+        if (options->sancov) {
+            module_pm.addPass(SanitizerCoveragePass(getSanCovOptions(options->coverage)));
+        }
+
+        // Thread sanitizer
+        if (options->tsan) {
             module_pm.addPass(ModuleThreadSanitizerPass());
             module_pm.addPass(createModuleToFunctionPassAdaptor(ThreadSanitizerPass()));
-        });
-    }
+        }
+
+        // Verify the output
+        if (assertions_on) {
+            module_pm.addPass(VerifierPass());
+        }
+    });
 
     ModulePassManager module_pm;
     OptimizationLevel opt_level;
     // Setting up the optimization level
-    if (is_debug)
+    if (options->is_debug)
       opt_level = OptimizationLevel::O0;
-    else if (is_small)
+    else if (options->is_small)
       opt_level = OptimizationLevel::Oz;
     else
       opt_level = OptimizationLevel::O3;
 
     // Initialize the PassManager
     if (opt_level == OptimizationLevel::O0) {
-      module_pm = pass_builder.buildO0DefaultPipeline(opt_level, lto);
-    } else if (lto) {
+      module_pm = pass_builder.buildO0DefaultPipeline(opt_level, options->lto);
+    } else if (options->lto) {
       module_pm = pass_builder.buildLTOPreLinkDefaultPipeline(opt_level);
     } else {
       module_pm = pass_builder.buildPerModuleDefaultPipeline(opt_level);
@@ -335,7 +355,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     codegen_pm.add(
       createTargetTransformInfoWrapperPass(target_machine.getTargetIRAnalysis()));
 
-    if (dest_bin && !lto) {
+    if (dest_bin && !options->lto) {
         if (target_machine.addPassesToEmitFile(codegen_pm, *dest_bin, nullptr, CodeGenFileType::ObjectFile)) {
             *error_message = strdup("TargetMachine can't emit an object file");
             return true;
@@ -348,26 +368,32 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
         }
     }
 
+    if (options->allow_fast_isel) {
+        target_machine.setO0WantsFastISel(true);
+    } else {
+        target_machine.setFastISel(false);
+    }
+
     // Optimization phase
     module_pm.run(llvm_module, module_am);
 
     // Code generation phase
     codegen_pm.run(llvm_module);
 
-    if (llvm_ir_filename) {
-        if (LLVMPrintModuleToFile(module_ref, llvm_ir_filename, error_message)) {
+    if (options->llvm_ir_filename) {
+        if (LLVMPrintModuleToFile(module_ref, options->llvm_ir_filename, error_message)) {
             return true;
         }
     }
 
-    if (dest_bin && lto) {
+    if (dest_bin && options->lto) {
         WriteBitcodeToFile(llvm_module, *dest_bin);
     }
     if (dest_bitcode) {
         WriteBitcodeToFile(llvm_module, *dest_bitcode);
     }
 
-    if (time_report) {
+    if (options->time_report) {
         TimerGroup::printAll(errs());
     }
 
@@ -407,20 +433,6 @@ bool ZigLLVMGetBrokenDebugInfo(LLVMContextRef context_ref) {
 
 void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv) {
     cl::ParseCommandLineOptions(argc, argv);
-}
-
-void ZigLLVMSetModulePICLevel(LLVMModuleRef module) {
-    unwrap(module)->setPICLevel(PICLevel::Level::BigPIC);
-}
-
-void ZigLLVMSetModulePIELevel(LLVMModuleRef module) {
-    unwrap(module)->setPIELevel(PIELevel::Level::Large);
-}
-
-void ZigLLVMSetModuleCodeModel(LLVMModuleRef module, LLVMCodeModel code_model) {
-    bool JIT;
-    unwrap(module)->setCodeModel(*unwrap(code_model, JIT));
-    assert(!JIT);
 }
 
 bool ZigLLVMWriteImportLibrary(const char *def_path, const ZigLLVM_ArchType arch,
@@ -466,7 +478,7 @@ bool ZigLLVMWriteImportLibrary(const char *def_path, const ZigLLVM_ArchType arch
         return true;
     }
 
-    // The exports-juggling code below is ripped from LLVM's DllToolDriver.cpp
+    // The exports-juggling code below is ripped from LLVM's DlltoolDriver.cpp
 
     // If ExtName is set (if the "ExtName = Name" syntax was used), overwrite
     // Name with ExtName and clear ExtName. When only creating an import
@@ -482,7 +494,7 @@ bool ZigLLVMWriteImportLibrary(const char *def_path, const ZigLLVM_ArchType arch
 
     if (machine == COFF::IMAGE_FILE_MACHINE_I386 && kill_at) {
         for (object::COFFShortExport& E : def->Exports) {
-            if (!E.AliasTarget.empty() || (!E.Name.empty() && E.Name[0] == '?'))
+            if (!E.ImportName.empty() || (!E.Name.empty() && E.Name[0] == '?'))
                 continue;
             E.SymbolName = E.Name;
             // Trim off the trailing decoration. Symbols will always have a
@@ -659,83 +671,86 @@ bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disab
 // static_assert((Triple::OSType)ZigLLVM_IOS == Triple::IOS, "");
 // Commented out to work around a Debian/Ubuntu bug.
 // See https://github.com/ziglang/zig/issues/2076
-//// static_assert((Triple::OSType)ZigLLVM_KFreeBSD == Triple::KFreeBSD, "");
-// static_assert((Triple::OSType)ZigLLVM_Linux == Triple::Linux, "");
-// static_assert((Triple::OSType)ZigLLVM_Lv2 == Triple::Lv2, "");
-// static_assert((Triple::OSType)ZigLLVM_MacOSX == Triple::MacOSX, "");
-// static_assert((Triple::OSType)ZigLLVM_NetBSD == Triple::NetBSD, "");
-// static_assert((Triple::OSType)ZigLLVM_OpenBSD == Triple::OpenBSD, "");
-// static_assert((Triple::OSType)ZigLLVM_Solaris == Triple::Solaris, "");
-// static_assert((Triple::OSType)ZigLLVM_UEFI == Triple::UEFI, "");
-// static_assert((Triple::OSType)ZigLLVM_Win32 == Triple::Win32, "");
-// static_assert((Triple::OSType)ZigLLVM_ZOS == Triple::ZOS, "");
-// static_assert((Triple::OSType)ZigLLVM_Haiku == Triple::Haiku, "");
-// static_assert((Triple::OSType)ZigLLVM_RTEMS == Triple::RTEMS, "");
-// static_assert((Triple::OSType)ZigLLVM_NaCl == Triple::NaCl, "");
-// static_assert((Triple::OSType)ZigLLVM_AIX == Triple::AIX, "");
-// static_assert((Triple::OSType)ZigLLVM_CUDA == Triple::CUDA, "");
-// static_assert((Triple::OSType)ZigLLVM_NVCL == Triple::NVCL, "");
-// static_assert((Triple::OSType)ZigLLVM_AMDHSA == Triple::AMDHSA, "");
-// static_assert((Triple::OSType)ZigLLVM_PS4 == Triple::PS4, "");
-// static_assert((Triple::OSType)ZigLLVM_ELFIAMCU == Triple::ELFIAMCU, "");
-// static_assert((Triple::OSType)ZigLLVM_TvOS == Triple::TvOS, "");
-// static_assert((Triple::OSType)ZigLLVM_WatchOS == Triple::WatchOS, "");
-// static_assert((Triple::OSType)ZigLLVM_DriverKit == Triple::DriverKit, "");
-// static_assert((Triple::OSType)ZigLLVM_XROS == Triple::XROS, "");
-// static_assert((Triple::OSType)ZigLLVM_Mesa3D == Triple::Mesa3D, "");
-// static_assert((Triple::OSType)ZigLLVM_AMDPAL == Triple::AMDPAL, "");
-// static_assert((Triple::OSType)ZigLLVM_HermitCore == Triple::HermitCore, "");
-// static_assert((Triple::OSType)ZigLLVM_Hurd == Triple::Hurd, "");
-// static_assert((Triple::OSType)ZigLLVM_WASI == Triple::WASI, "");
-// static_assert((Triple::OSType)ZigLLVM_Emscripten == Triple::Emscripten, "");
-// static_assert((Triple::OSType)ZigLLVM_ShaderModel == Triple::ShaderModel, "");
-// static_assert((Triple::OSType)ZigLLVM_LiteOS == Triple::LiteOS, "");
-// static_assert((Triple::OSType)ZigLLVM_Serenity == Triple::Serenity, "");
-// static_assert((Triple::OSType)ZigLLVM_Vulkan == Triple::Vulkan, "");
-// static_assert((Triple::OSType)ZigLLVM_LastOSType == Triple::LastOSType, "");
+//static_assert((Triple::OSType)ZigLLVM_KFreeBSD == Triple::KFreeBSD, "");
+static_assert((Triple::OSType)ZigLLVM_Linux == Triple::Linux, "");
+static_assert((Triple::OSType)ZigLLVM_Lv2 == Triple::Lv2, "");
+static_assert((Triple::OSType)ZigLLVM_MacOSX == Triple::MacOSX, "");
+static_assert((Triple::OSType)ZigLLVM_NetBSD == Triple::NetBSD, "");
+static_assert((Triple::OSType)ZigLLVM_OpenBSD == Triple::OpenBSD, "");
+static_assert((Triple::OSType)ZigLLVM_Solaris == Triple::Solaris, "");
+static_assert((Triple::OSType)ZigLLVM_UEFI == Triple::UEFI, "");
+static_assert((Triple::OSType)ZigLLVM_Win32 == Triple::Win32, "");
+static_assert((Triple::OSType)ZigLLVM_ZOS == Triple::ZOS, "");
+static_assert((Triple::OSType)ZigLLVM_Haiku == Triple::Haiku, "");
+static_assert((Triple::OSType)ZigLLVM_RTEMS == Triple::RTEMS, "");
+static_assert((Triple::OSType)ZigLLVM_NaCl == Triple::NaCl, "");
+static_assert((Triple::OSType)ZigLLVM_AIX == Triple::AIX, "");
+static_assert((Triple::OSType)ZigLLVM_CUDA == Triple::CUDA, "");
+static_assert((Triple::OSType)ZigLLVM_NVCL == Triple::NVCL, "");
+static_assert((Triple::OSType)ZigLLVM_AMDHSA == Triple::AMDHSA, "");
+static_assert((Triple::OSType)ZigLLVM_PS4 == Triple::PS4, "");
+static_assert((Triple::OSType)ZigLLVM_ELFIAMCU == Triple::ELFIAMCU, "");
+static_assert((Triple::OSType)ZigLLVM_TvOS == Triple::TvOS, "");
+static_assert((Triple::OSType)ZigLLVM_WatchOS == Triple::WatchOS, "");
+static_assert((Triple::OSType)ZigLLVM_BridgeOS == Triple::BridgeOS, "");
+static_assert((Triple::OSType)ZigLLVM_DriverKit == Triple::DriverKit, "");
+static_assert((Triple::OSType)ZigLLVM_XROS == Triple::XROS, "");
+static_assert((Triple::OSType)ZigLLVM_Mesa3D == Triple::Mesa3D, "");
+static_assert((Triple::OSType)ZigLLVM_AMDPAL == Triple::AMDPAL, "");
+static_assert((Triple::OSType)ZigLLVM_HermitCore == Triple::HermitCore, "");
+static_assert((Triple::OSType)ZigLLVM_Hurd == Triple::Hurd, "");
+static_assert((Triple::OSType)ZigLLVM_WASI == Triple::WASI, "");
+static_assert((Triple::OSType)ZigLLVM_Emscripten == Triple::Emscripten, "");
+static_assert((Triple::OSType)ZigLLVM_ShaderModel == Triple::ShaderModel, "");
+static_assert((Triple::OSType)ZigLLVM_LiteOS == Triple::LiteOS, "");
+static_assert((Triple::OSType)ZigLLVM_Serenity == Triple::Serenity, "");
+static_assert((Triple::OSType)ZigLLVM_Vulkan == Triple::Vulkan, "");
+static_assert((Triple::OSType)ZigLLVM_LastOSType == Triple::LastOSType, "");
 
-// static_assert((Triple::EnvironmentType)ZigLLVM_UnknownEnvironment == Triple::UnknownEnvironment, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNU == Triple::GNU, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUABIN32 == Triple::GNUABIN32, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUABI64 == Triple::GNUABI64, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUEABI == Triple::GNUEABI, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUEABIHF == Triple::GNUEABIHF, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUF32 == Triple::GNUF32, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUF64 == Triple::GNUF64, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUSF == Triple::GNUSF, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUX32 == Triple::GNUX32, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_GNUILP32 == Triple::GNUILP32, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_CODE16 == Triple::CODE16, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_EABI == Triple::EABI, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_EABIHF == Triple::EABIHF, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Android == Triple::Android, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Musl == Triple::Musl, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABI == Triple::MuslEABI, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABIHF == Triple::MuslEABIHF, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_MuslX32 == Triple::MuslX32, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_MSVC == Triple::MSVC, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Itanium == Triple::Itanium, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Cygnus == Triple::Cygnus, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_CoreCLR == Triple::CoreCLR, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Simulator == Triple::Simulator, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_MacABI == Triple::MacABI, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Pixel == Triple::Pixel, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Vertex == Triple::Vertex, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Geometry == Triple::Geometry, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Hull == Triple::Hull, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Domain == Triple::Domain, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Compute == Triple::Compute, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Library == Triple::Library, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_RayGeneration == Triple::RayGeneration, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Intersection == Triple::Intersection, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_AnyHit == Triple::AnyHit, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_ClosestHit == Triple::ClosestHit, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Miss == Triple::Miss, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Callable == Triple::Callable, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Mesh == Triple::Mesh, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_Amplification == Triple::Amplification, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_OpenHOS == Triple::OpenHOS, "");
-// static_assert((Triple::EnvironmentType)ZigLLVM_LastEnvironmentType == Triple::LastEnvironmentType, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_UnknownEnvironment == Triple::UnknownEnvironment, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNU == Triple::GNU, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUABIN32 == Triple::GNUABIN32, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUABI64 == Triple::GNUABI64, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUEABI == Triple::GNUEABI, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUEABIHF == Triple::GNUEABIHF, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUF32 == Triple::GNUF32, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUF64 == Triple::GNUF64, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUSF == Triple::GNUSF, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUX32 == Triple::GNUX32, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_GNUILP32 == Triple::GNUILP32, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_CODE16 == Triple::CODE16, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_EABI == Triple::EABI, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_EABIHF == Triple::EABIHF, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Android == Triple::Android, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Musl == Triple::Musl, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABI == Triple::MuslEABI, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABIHF == Triple::MuslEABIHF, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MuslX32 == Triple::MuslX32, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MSVC == Triple::MSVC, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Itanium == Triple::Itanium, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Cygnus == Triple::Cygnus, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_CoreCLR == Triple::CoreCLR, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Simulator == Triple::Simulator, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MacABI == Triple::MacABI, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Pixel == Triple::Pixel, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Vertex == Triple::Vertex, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Geometry == Triple::Geometry, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Hull == Triple::Hull, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Domain == Triple::Domain, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Compute == Triple::Compute, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Library == Triple::Library, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_RayGeneration == Triple::RayGeneration, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Intersection == Triple::Intersection, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_AnyHit == Triple::AnyHit, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_ClosestHit == Triple::ClosestHit, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Miss == Triple::Miss, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Callable == Triple::Callable, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Mesh == Triple::Mesh, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_Amplification == Triple::Amplification, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_OpenCL == Triple::OpenCL, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_OpenHOS == Triple::OpenHOS, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_PAuthTest == Triple::PAuthTest, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_LastEnvironmentType == Triple::LastEnvironmentType, "");
 
 // static_assert((Triple::ObjectFormatType)ZigLLVM_UnknownObjectFormat == Triple::UnknownObjectFormat, "");
 // static_assert((Triple::ObjectFormatType)ZigLLVM_COFF == Triple::COFF, "");

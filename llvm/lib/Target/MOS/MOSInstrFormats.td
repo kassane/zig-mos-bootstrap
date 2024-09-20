@@ -82,7 +82,7 @@ def Has45GS02 : Predicate<"Subtarget->has45GS02()">,
   let PredicateName = "Feature45GS02";
 }
 
-def HasSPC700 : Predicate<"Subtarget->HasSPC700()">,
+def HasSPC700 : Predicate<"Subtarget->hasSPC700()">,
                AssemblerPredicate<(all_of FeatureSPC700), "SPC700"> {
   let PredicateName = "FeatureSPC700";
 }
@@ -119,6 +119,15 @@ class Inst<string asmstr> : Instruction {
 
   field bits<56> SoftFail = 0;
   let DecoderNamespace = "MOS";
+
+  bit MLow = 0;
+  bit MHigh = 0;
+  bit XLow = 0;
+  bit XHigh = 0;
+  let TSFlags{0} = MLow;
+  let TSFlags{1} = MHigh;
+  let TSFlags{2} = XLow;
+  let TSFlags{3} = XHigh;
 }
 
 class InstConditionalBranch {
@@ -216,7 +225,7 @@ class pcrel8at<int offset> : Operand<i32> {
 def pcrel8 : pcrel8at<1>;
 def pcrel8at2 : pcrel8at<2>;
 
-/// An 16-bit pc-relative reference, for 65816 BRL instruction.
+/// A 16-bit pc-relative reference, for 65816 BRL instruction.
 class pcrel16at<int offset> : Operand<i32> {
   let ParserMatchClass = PCRelativeOperand<"PCRel16">;
   let EncoderMethod = "encodeImm<MOS::PCRel16, " # offset # ">";
@@ -259,26 +268,6 @@ class addr24at<int offset> : Operand<i32> {
   let OperandNamespace = "MOSOp";
 }
 def addr24 : addr24at<1>;
-
-/// This operand will only match a value from 256 to 65535 inclusive.
-class imm8To16at<int offset> : Operand<i32> {
-  let ParserMatchClass = ImmediateAsmOperand<"Imm8To16">;
-  let EncoderMethod = "encodeImm<MOS::Addr16, " # offset # ">";
-  let DecoderMethod = "decodeUImmOperand<16>";
-  let OperandType = "OPERAND_IMM16";
-  let OperandNamespace = "MOSOp";
-}
-def imm8To16 : imm8To16at<1>;
-
-/// This operand will only match a value from 65536 to 16777215 inclusive.
-class imm16To24at<int offset> : Operand<i32> {
-  let ParserMatchClass = ImmediateAsmOperand<"Imm16To24">;
-  let EncoderMethod = "encodeImm<MOS::Addr24, " # offset # ">";
-  let DecoderMethod = "decodeUImmOperand<24>";
-  let OperandType = "OPERAND_IMM24";
-  let OperandNamespace = "MOSOp";
-}
-def imm16To24 : imm16To24at<1>;
 
 /// All non-virtual MOS opcodes are 8 bits long.
 class Opcode<bits<8> opcode = 0> {
@@ -436,22 +425,22 @@ def IndirectZeroPageZ : AddressingMode {
 }
 
 def StackRelative : AddressingMode {
-  let OperandsStr = "$param , sp";
+  let OperandsStr = "$param , s";
   let InOperandList = (ins addr8:$param);
 }
 
 def IndirectStackRelativeY : AddressingMode {
-  let OperandsStr = "( $param , sp ) , y";
+  let OperandsStr = "( $param , s ) , y";
   let InOperandList = (ins addr8:$param);
 }
 
 def RStackRelative : AddressingMode {
-  let OperandsStr = "$param , rp";
+  let OperandsStr = "$param , r";
   let InOperandList = (ins addr8:$param);
 }
 
 def IndirectRStackRelativeY : AddressingMode {
-  let OperandsStr = "( $param , rp ) , y";
+  let OperandsStr = "( $param , r ) , y";
   let InOperandList = (ins addr8:$param);
 }
 
@@ -861,12 +850,14 @@ multiclass CC1_All<bits<3> aaa, string OpcodeStr = "nop", list<Predicate> preds 
   // CC1 pattern
   def _Immediate : Inst16<OpcodeStr, OpcodeC1< aaa, 0b010 >, Immediate> {
     let Predicates = preds;
+    let MHigh = 1;
   }
 
   // 16-bit immediate operand on 65816 when M flag is low.
   def _Immediate16 : Inst24<OpcodeStr, OpcodeC1< aaa, 0b010 >, Immediate16> {
     let Predicates = preds # [HasW65816Or65EL02];
     let DecoderNamespace = "MOSMLow";
+    let MLow = 1;
   }
 }
 
@@ -898,7 +889,7 @@ multiclass CC1_All<bits<3> aaa, string OpcodeStr = "nop", list<Predicate> preds 
 /// These fit together like this:"
 ///
 ///             ASL ROL LSR ROR STX LDX DEC INC
-///                                 A2
+/// #                               A2
 /// zp          06  26  46  66  86  A6  C6  E6
 /// A           0A  2A  4A  6A
 /// abs         0E  2E  4E  6E  8E  AE  CE  EE
@@ -959,12 +950,15 @@ multiclass CC2_NonShift<bits<3> aaa, string OpcodeStr = "nop"> {
 
 /// The 9 instructions in the top right corner
 multiclass CC0_Regular< bits<3> aaa, string OpcodeStr = "nop"> {
-  def _Immediate : Inst16<OpcodeStr, OpcodeC0<aaa, 0b000>, Immediate>;
+  def _Immediate : Inst16<OpcodeStr, OpcodeC0<aaa, 0b000>, Immediate> {
+    let XHigh = 1;
+  }
 
   // 16-bit immediate operand on 65816 when X flag is low.
   def _Immediate16 : Inst24<OpcodeStr, OpcodeC0<aaa, 0b000>, Immediate16> {
     let Predicates = [HasW65816Or65EL02];
     let DecoderNamespace = "MOSXLow";
+    let XLow = 1;
   }
 
   def _ZeroPage : Inst16<OpcodeStr, OpcodeC0<aaa, 0b001>, ZeroPage>;

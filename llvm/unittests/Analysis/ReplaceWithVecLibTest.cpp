@@ -72,9 +72,11 @@ protected:
     PB.registerFunctionAnalyses(FAM);
 
     // Enable debugging and capture std error
+    bool DebugFlagPrev = llvm::DebugFlag;
     llvm::DebugFlag = true;
     testing::internal::CaptureStderr();
     FPM.run(*M->getFunction("foo"), FAM);
+    llvm::DebugFlag = DebugFlagPrev;
     return getLastLine(testing::internal::GetCapturedStderr());
   }
 };
@@ -97,7 +99,7 @@ TEST_F(ReplaceWithVecLibTest, TestValidMapping) {
                        ElementCount::getScalable(4), /*Masked*/ true,
                        "_ZGVsMxvu"};
   EXPECT_EQ(run(CorrectVD, IR),
-            "Instructions replaced with vector libraries: 1");
+            "Intrinsic calls replaced with vector libraries: 1");
 }
 
 // The VFABI prefix in TLI describes signature which is not matching the powi

@@ -20,10 +20,13 @@ public:
   /// Specifies the type of an expression.
   enum VariantKind {
     VK_MOS_NONE,
+    VK_MOS_ADDR16,
     VK_MOS_IMM16,
     VK_MOS_ADDR8,
+    VK_MOS_IMM8,
     VK_MOS_ADDR16_HI,
     VK_MOS_ADDR16_LO,
+    VK_MOS_ADDR24,
     VK_MOS_ADDR24_BANK,
     VK_MOS_ADDR24_SEGMENT,
     VK_MOS_ADDR24_SEGMENT_LO,
@@ -51,7 +54,7 @@ public:
   void setNegated(bool NegatedIn = true) { Negated = NegatedIn; }
 
   void printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const override;
-  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAsmLayout *Layout,
+  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
                                  const MCFixup *Fixup) const override;
 
   void visitUsedExpr(MCStreamer &Streamer) const override;
@@ -66,7 +69,7 @@ public:
     return E->getKind() == MCExpr::Target;
   }
 
-  static VariantKind getKindByName(StringRef Name);
+  static VariantKind getKindByName(StringRef Name, bool IsImmediate);
 
 private:
   int64_t evaluateAsInt64(int64_t Value) const;

@@ -70,8 +70,8 @@ bool MOSInsertCopies::runOnMachineFunction(MachineFunction &MF) {
         break;
       case MOS::INC:
       case MOS::DEC:
-      case MOS::IncCMOS:
-      case MOS::DecCMOS:
+      case MOS::IncNMOS:
+      case MOS::DecNMOS:
       case MOS::IncMB:
       case MOS::DecMB:
       case MOS::DecDcpMB:

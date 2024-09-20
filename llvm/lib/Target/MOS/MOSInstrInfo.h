@@ -27,10 +27,10 @@ public:
 
   bool isReallyTriviallyReMaterializable(const MachineInstr &MI) const override;
 
-  unsigned isLoadFromStackSlot(const MachineInstr &MI,
+  Register isLoadFromStackSlot(const MachineInstr &MI,
                                int &FrameIndex) const override;
 
-  unsigned isStoreToStackSlot(const MachineInstr &MI,
+  Register isStoreToStackSlot(const MachineInstr &MI,
                               int &FrameIndex) const override;
 
   void reMaterialize(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
@@ -46,6 +46,8 @@ public:
 
   bool findCommutedOpIndices(const MachineInstr &MI, unsigned &SrcOpIdx1,
                              unsigned &SrcOpIdx2) const override;
+
+  bool hasCommutePreference(MachineInstr &MI, bool &Commute) const override;
 
   bool isBranchOffsetInRange(unsigned BranchOpc,
                              int64_t BrOffset) const override;
@@ -73,7 +75,8 @@ public:
 
   void copyPhysReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
                    const DebugLoc &DL, MCRegister DestReg, MCRegister SrcReg,
-                   bool KillSrc) const override;
+                   bool KillSrc, bool RenamableDest,
+                   bool RenamableSrc) const override;
 
   void storeRegToStackSlot(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI, Register SrcReg,
@@ -97,6 +100,11 @@ public:
                              bool IsKill, int FrameIndex,
                              const TargetRegisterClass *RC,
                              const TargetRegisterInfo *TRI, bool IsLoad) const;
+
+  const TargetRegisterClass *
+  getRegClass(const MCInstrDesc &MCID, unsigned OpNum,
+              const TargetRegisterInfo *TRI,
+              const MachineFunction &MF) const override;
 
   bool expandPostRAPseudo(MachineInstr &MI) const override;
 
@@ -133,25 +141,19 @@ private:
   void expandLDImm16(MachineIRBuilder &Builder) const;
   void expandLDImm16Remat(MachineIRBuilder &Builder) const;
   void expandLDZ(MachineIRBuilder &Builder) const;
-  void expandIncDec(MachineIRBuilder &Builder) const;
+  void expandIncDecNMOS(MachineIRBuilder &Builder) const;
   void expandIncDecPtr(MachineIRBuilder &Builder) const;
-
-  // CMP pseudos
-  void expandCMPTerm(MachineIRBuilder &Builder) const;
 
   // Control flow pseudos
   void expandGBR(MachineIRBuilder &Builder) const;
+  void expandCmpBr(MachineIRBuilder &Builder) const;
 
   bool shouldRematPhysRegCopy() const override { return false; }
 };
 
 namespace MOS {
 
-enum AddressSpace {
-  AS_Memory,
-  AS_ZeroPage,
-  NumAddrSpaces
-};
+enum AddressSpace { AS_Memory, AS_ZeroPage, NumAddrSpaces };
 
 enum TargetIndex {
   TI_STATIC_STACK,

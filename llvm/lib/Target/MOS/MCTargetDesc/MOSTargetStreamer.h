@@ -50,7 +50,7 @@ private:
   };
 
   void changeSection(const MCSection *CurSection, MCSection *Section,
-                     const MCExpr *SubSection, raw_ostream &OS) override;
+                     uint32_t SubSection, raw_ostream &OS) override;
 
   bool hasBSS() override { return HasBSS; }
   bool hasZPBSS() override { return HasZPBSS; }
@@ -79,6 +79,10 @@ public:
   MOSTargetELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI);
 
 private:
+  MCELFStreamer &getStreamer() {
+    return static_cast<MCELFStreamer &>(Streamer);
+  }
+
   bool emitDirectiveZeroPage(MCSymbol *Symbol) override;
   bool hasBSS() override;
   bool hasZPBSS() override;

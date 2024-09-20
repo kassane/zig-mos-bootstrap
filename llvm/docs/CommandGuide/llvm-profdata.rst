@@ -162,6 +162,12 @@ OPTIONS
  coverage for the optimized target. This option can only be used with
  sample-based profile in extbinary format.
 
+.. option:: --split-layout=[true|false]
+
+ Split the profile data section to two with one containing sample profiles with
+ inlined functions and the other not. This option can only be used with
+ sample-based profile in extbinary format.
+
 .. option:: --convert-sample-profile-layout=[nest|flat]
 
  Convert the merged profile into a profile with a new layout. Supported
@@ -216,6 +222,16 @@ OPTIONS
 
  The maximum number of functions in a single temporal profile trace. Longer
  traces will be truncated. The default value is 1000.
+
+.. option:: --function=<string>
+
+ Only keep functions matching the regex in the output, all others are erased
+ from the profile.
+
+.. option:: --no-function=<string>
+
+ Remove functions matching the regex from the profile. If both --function and
+ --no-function are specified and a function matches both, it is removed.
 
 EXAMPLES
 ^^^^^^^^

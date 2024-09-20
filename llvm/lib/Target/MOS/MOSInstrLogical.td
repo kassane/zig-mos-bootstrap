@@ -401,29 +401,16 @@ let mayLoad = true in {
 
 multiclass MOSIncDec {
   def NAME : MOSLogicalInstr {
-    dag OutOperandList = (outs XY:$dst);
-    dag InOperandList = (ins XY:$src);
-    let Constraints = "$src = $dst";
-  }
-
-  def _CMOS : MOSLogicalInstr {
-    dag OutOperandList = (outs GPR:$dst);
-    dag InOperandList = (ins GPR:$src);
-    let Constraints = "$src = $dst";
-    let Predicates = [HasGPRIncDec];
-  }
-
-  def CImag8 : MOSLogicalInstr, PseudoInstExpansion<(!cast<Instruction>(NAME # C_ZeroPage) addr8:$dst)> {
-    dag OutOperandList = (outs Imag8:$dst);
-    dag InOperandList = (ins Imag8:$src);
+    dag OutOperandList = (outs Anyi8:$dst);
+    dag InOperandList = (ins Anyi8:$src);
     let Constraints = "$src = $dst";
   }
 
   let mayLoad = true, mayStore = true in {
-    def CAbs : MOSLogicalInstr, PseudoInstExpansion<(!cast<Instruction>(NAME # C_ZeroPage) addr8:$addr)> {
+    def Abs : MOSLogicalInstr, PseudoInstExpansion<(!cast<Instruction>(NAME # _ZeroPage) addr8:$addr)> {
       dag InOperandList = (ins addr16:$addr);
     }
-    def CIdx : MOSLogicalInstr {
+    def Idx : MOSLogicalInstr {
       dag InOperandList = (ins addr16:$addr, Xc:$idx);
     }
   }
@@ -442,11 +429,11 @@ let mayLoad = true, mayStore = true in {
 }
 
 // DEX, DEY, DEC
-defm DE : MOSIncDec;
+defm DEC : MOSIncDec;
 
 // INX, INY, INC
 let isAdd = true in {
-  defm IN : MOSIncDec;
+  defm INC : MOSIncDec;
 }
 
 //===---------------------------------------------------------------------===//
@@ -496,34 +483,18 @@ def SWAP : MOSLogicalInstr {
 // Stack Instructions
 //===---------------------------------------------------------------------===//
 
-// PHA, PHP
+// PHA, PLX, PLY, PHP
 def PH : MOSLogicalInstr {
-  dag InOperandList = (ins AP:$src);
+  dag InOperandList = (ins AXYP:$src);
 
   let mayStore = true;
 }
 
-// PLA, PLP
+// PLA, PLX, PLY, PLP
 def PL : MOSLogicalInstr {
-  dag OutOperandList = (outs AP:$dst);
+  dag OutOperandList = (outs AXYP:$dst);
 
   let mayLoad = true;
-}
-
-let Predicates = [HasGPRStackRegs] in {
-  // PHA, PHP
-  def PH_CMOS : MOSLogicalInstr {
-    dag InOperandList = (ins AXYP:$src);
-
-    let mayStore = true;
-  }
-
-  // PLA, PLX, PLY, PLP
-  def PL_CMOS : MOSLogicalInstr {
-    dag OutOperandList = (outs AXYP:$dst);
-
-    let mayLoad = true;
-  }
 }
 
 //===---------------------------------------------------------------------===//
@@ -631,6 +602,14 @@ def : Pat<(add Ac:$l, (i8 imm:$imm)), (ADCImm Ac:$l, imm:$imm, (LDCImm 0))>;
 def : Pat<(add Ac:$l, Imag8:$r), (ADCImag8 Ac:$l, Imag8:$r, (LDCImm 0))>;
 def : Pat<(sub Ac:$l, (i8 imm:$imm)), (SBCImm Ac:$l, imm:$imm, (LDCImm -1))>;
 def : Pat<(sub Ac:$l, Imag8:$r), (SBCImag8 Ac:$l, Imag8:$r, (LDCImm -1))>;
+
+// These increment/decrement patterns apply only for the 65C02 and derivatives
+// which support incrementing A directly. The original 6502 uses IncNMOS and
+// DecNMOS pseudos.
+let Predicates = [Has65C02], AddedComplexity = 1 in {
+  def : Pat<(add Anyi8:$dst, 1), (INC Anyi8:$dst)>;
+  def : Pat<(add Anyi8:$dst, -1), (DEC Anyi8:$dst)>;
+}
 
 //===---------------------------------------------------------------------===//
 // Integer Extension/Truncation Patterns

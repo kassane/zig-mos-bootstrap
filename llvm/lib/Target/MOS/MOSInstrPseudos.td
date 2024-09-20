@@ -71,7 +71,7 @@ def LDImm1 : MOSPseudo {
 
 // Loads a 16-bit value into an imaginary pointer pair. This is generally more
 // constrained than loading two 8-bit values using a REG_SEQUENCE, but bundling
-// this functionality into a single pseudo-instruction allows thee register
+// this functionality into a single pseudo-instruction allows the register
 // allocator to rematerialize the load at point of use. This is particularly
 // important for immediate loads, since GlobalISel places these at the beginning
 // of basic blocks, which maximizes the chance that they'll be live across
@@ -81,6 +81,18 @@ def LDImm16 : MOSPseudo {
   dag OutOperandList = (outs Imag16:$dst, GPR:$scratch);
   dag InOperandList = (ins i16imm:$val);
   let Constraints = "@earlyclobber $scratch";
+
+  let isAsCheapAsAMove = true;
+  let isMoveImm = true;
+  let isReMaterializable = true;
+}
+
+// Version of LDImm16 that doesn't use a scratch register, which is possible
+// on the SPC700 architecture.
+def LDImm16SPC700 : MOSPseudo {
+  let Predicates = [HasSPC700];
+  dag OutOperandList = (outs Imag16:$dst);
+  dag InOperandList = (ins i16imm:$val);
 
   let isAsCheapAsAMove = true;
   let isMoveImm = true;
@@ -110,7 +122,15 @@ def LDZ : MOSPseudo {
   let isReMaterializable = true;
 }
 
-def INC : MOSPseudo {
+def CmpZero : MOSPseudo {
+  dag InOperandList = (ins Anyi8:$val);
+  let Defs = [C];
+  let isCompare = true;
+}
+
+// On 6502, INC/DEC cannot be directly performed on the A register;
+// to do so, one has to use ADC/SBC, which affects the C and V flags.
+def IncNMOS : MOSPseudo {
   dag OutOperandList = (outs Anyi8:$dst);
   dag InOperandList = (ins Anyi8:$src);
 
@@ -121,7 +141,7 @@ def INC : MOSPseudo {
   let isAdd = true;
 }
 
-def DEC : MOSPseudo {
+def DecNMOS : MOSPseudo {
   dag OutOperandList = (outs Anyi8:$dst);
   dag InOperandList = (ins Anyi8:$src);
 
@@ -131,30 +151,7 @@ def DEC : MOSPseudo {
   let Pattern = [(set Anyi8:$dst, (add Anyi8:$src, -1))];
 }
 
-let Predicates = [HasGPRIncDec] in {
-  // As the 65C02 allows incrementing any register with INC/DEC only,
-  // separate pseudos are defined which do not define C or V.
-
-  def IncCMOS : MOSPseudo {
-    dag OutOperandList = (outs Anyi8:$dst);
-    dag InOperandList = (ins Anyi8:$src);
-
-    let Constraints = "$dst = $src";
-    let Pattern = [(set Anyi8:$dst, (add Anyi8:$src, 1))];
-    let isAdd = true;
-    let AddedComplexity = 1;
-  }
-
-  def DecCMOS : MOSPseudo {
-    dag OutOperandList = (outs Anyi8:$dst);
-    dag InOperandList = (ins Anyi8:$src);
-
-    let Constraints = "$dst = $src";
-    let Pattern = [(set Anyi8:$dst, (add Anyi8:$src, -1))];
-    let AddedComplexity = 1;
-  }
-}
-
+// Pointer increment/decrement.
 class MOSIncDecPtr : MOSPseudo {
   dag InOperandList = (ins Imag16:$src);
   let Defs = [C, V];
@@ -247,54 +244,6 @@ def STStk : MOSPseudo {
 }
 
 //===---------------------------------------------------------------------===//
-// CMPTerm
-//===---------------------------------------------------------------------===//
-
-// Terminator versions of CMP. Each of these instructions is ensured to stay
-// adjacent to the branch that consumes its N or Z value.
-class MOSCMPTerm : MOSPseudo {
-  dag OutOperandList = (outs Cc:$carry);
-
-  let Defs = [NZ];
-
-  let isCompare = true;
-  let isTerminator = true;
-}
-
-def CMPTermImm : MOSCMPTerm {
-  dag InOperandList = (ins GPR:$l, i8imm:$r);
-}
-def CMPTermImag8 : MOSCMPTerm {
-  dag InOperandList = (ins GPR:$l, Imag8:$r);
-}
-def CMPTermZ : MOSCMPTerm {
-  dag InOperandList = (ins Anyi8:$val);
-}
-def CMPTermZMB : MOSCMPTerm {
-  dag InOperandList = (ins variable_ops);
-  let usesCustomInserter = true;
-}
-
-let mayLoad = true in {
-  def CMPTermZpIdx : MOSCMPTerm {
-    dag InOperandList = (ins Ac:$l, i8imm:$addr, Xc:$idx);
-  }
-  def CMPTermAbs : MOSCMPTerm {
-    dag InOperandList = (ins GPR:$l, i16imm:$addr);
-  }
-  def CMPTermAbsIdx : MOSCMPTerm {
-    dag InOperandList = (ins Ac:$l, i16imm:$addr, XY:$idx);
-  }
-  def CMPTermIndir : MOSCMPTerm {
-    let Predicates = [Has65C02];
-    dag InOperandList = (ins Ac:$l, Imag16:$addr);
-  }
-  def CMPTermIndirIdx : MOSCMPTerm {
-    dag InOperandList = (ins Ac:$l, Imag16:$addr, Yc:$idx);
-  }
-}
-
-//===---------------------------------------------------------------------===//
 // Control flow
 //===---------------------------------------------------------------------===//
 
@@ -345,4 +294,52 @@ def SelectImm : MOSPseudo {
   dag InOperandList = (ins Flag:$tst, i8imm:$true, i8imm:$false);
 
   let usesCustomInserter = true;
+}
+
+// Joined compare-and-branch instructions on N and Z. These flags are not
+// explicitly tracked, since they're very difficult to keep alive. Accordingly,
+// they are always bundled with their use, which is always a branch.
+class MOSCmpBr : MOSPseudo {
+  let Defs = [C];
+
+  let isCompare = true;
+  let isBranch = true;
+  let isTerminator = true;
+}
+
+def CmpBrImm : MOSCmpBr {
+  dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, GPR:$l, i8imm:$r);
+}
+def CmpBrImag8 : MOSCmpBr {
+  dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, GPR:$l, Imag8:$r);
+}
+def CmpBrZero : MOSCmpBr {
+  dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, Anyi8:$val);
+}
+
+// (ins label:$tgt, i1imm:$flag_val, Anyi8:$val...)
+// Note that the flag is always Z; N only requires the first byte, so it is
+// legalized to a single CMP.
+def CmpBrZeroMultiByte : MOSCmpBr {
+  dag InOperandList = (ins variable_ops);
+  let usesCustomInserter = true;
+}
+
+let mayLoad = true in {
+  def CmpBrZpIdx : MOSCmpBr {
+    dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, Ac:$l, i8imm:$addr, Xc:$idx);
+  }
+  def CmpBrAbs : MOSCmpBr {
+    dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, GPR:$l, i16imm:$addr);
+  }
+  def CmpBrAbsIdx : MOSCmpBr {
+    dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, Ac:$l, i16imm:$addr, XY:$idx);
+  }
+  def CmpBrIndir : MOSCmpBr {
+    let Predicates = [Has65C02];
+    dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, Ac:$l, Imag16:$addr);
+  }
+  def CmpBrIndirIdx : MOSCmpBr {
+    dag InOperandList = (ins label:$tgt, Flag:$flag, i1imm:$flag_val, Ac:$l, Imag16:$addr, Yc:$idx);
+  }
 }

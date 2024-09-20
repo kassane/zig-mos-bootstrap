@@ -1832,7 +1832,8 @@ static bool getSymbolNamesFromObject(SymbolicFile &Obj,
       auto *ELFObj = dyn_cast<ELFObjectFileBase>(&Obj);
       bool HasMappingSymbol =
           ELFObj && llvm::is_contained({ELF::EM_ARM, ELF::EM_AARCH64,
-                                        ELF::EM_CSKY, ELF::EM_RISCV},
+                                        ELF::EM_CSKY, ELF::EM_MOS,
+                                        ELF::EM_RISCV},
                                        ELFObj->getEMachine());
       if (!HasMappingSymbol && !DebugSyms &&
           (*SymFlagsOrErr & SymbolRef::SF_FormatSpecific))
@@ -1854,11 +1855,8 @@ static bool getSymbolNamesFromObject(SymbolicFile &Obj,
               dyn_cast<const XCOFFObjectFile>(&Obj))
         S.Size = XCOFFObj->getSymbolSize(Sym.getRawDataRefImpl());
 
-      if (const WasmObjectFile *WasmObj = dyn_cast<WasmObjectFile>(&Obj)) {
-        const WasmSymbol &WasmSym = WasmObj->getWasmSymbol(Sym);
-        if (WasmSym.isTypeData() && !WasmSym.isUndefined())
-          S.Size = WasmSym.Info.DataRef.Size;
-      }
+      if (const WasmObjectFile *WasmObj = dyn_cast<WasmObjectFile>(&Obj))
+        S.Size = WasmObj->getSymbolSize(Sym);
 
       if (PrintAddress && isa<ObjectFile>(Obj)) {
         SymbolRef SymRef(Sym);
@@ -2398,8 +2396,7 @@ exportSymbolNamesFromFiles(const std::vector<std::string> &InputFilenames) {
   llvm::erase_if(SymbolList,
                  [](const NMSymbol &s) { return !s.shouldPrint(); });
   sortSymbolList(SymbolList);
-  SymbolList.erase(std::unique(SymbolList.begin(), SymbolList.end()),
-                   SymbolList.end());
+  SymbolList.erase(llvm::unique(SymbolList), SymbolList.end());
   printExportSymbolList(SymbolList);
 }
 

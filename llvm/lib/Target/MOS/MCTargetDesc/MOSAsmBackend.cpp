@@ -22,7 +22,6 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/MC/MCAsmBackend.h"
-#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDirectives.h"
@@ -56,6 +55,8 @@ struct InstructionRelaxationEntry {
 #define GET_ZeroPageInstructionRelaxation_IMPL
 #define GET_ZeroBankInstructionRelaxation_DECL
 #define GET_ZeroBankInstructionRelaxation_IMPL
+#define GET_BranchInstructionRelaxation_DECL
+#define GET_BranchInstructionRelaxation_IMPL
 
 struct MOSSPC700Entry {
   unsigned From;
@@ -136,9 +137,8 @@ void MOSAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
   }
 }
 
-bool MOSAsmBackend::fixupNeedsRelaxation(const MCFixup &Fixup, uint64_t Value,
-                                         const MCRelaxableFragment *DF,
-                                         const MCAsmLayout &Layout) const {
+bool MOSAsmBackend::fixupNeedsRelaxation(const MCFixup &Fixup,
+                                         uint64_t Value) const {
   return true;
 }
 
@@ -158,10 +158,12 @@ static bool fitsIntoFixup(const int64_t SignedValue, const bool IsPCRel16) {
          SignedValue <= (IsPCRel16 ? INT16_MAX : INT8_MAX);
 }
 
-bool MOSAsmBackend::evaluateTargetFixup(
-    const MCAssembler &Asm, const MCAsmLayout &Layout, const MCFixup &Fixup,
-    const MCFragment *DF, const MCValue &Target, const MCSubtargetInfo *STI,
-    uint64_t &Value, bool &WasForced) {
+bool MOSAsmBackend::evaluateTargetFixup(const MCAssembler &Asm,
+                                        const MCFixup &Fixup,
+                                        const MCFragment *DF,
+                                        const MCValue &Target,
+                                        const MCSubtargetInfo *STI,
+                                        uint64_t &Value, bool &WasForced) {
   // ForcePCRelReloc is a CLI option to force relocation emit, primarily for
   // testing R_MOS_PCREL_*.
   WasForced = ForcePCRelReloc;
@@ -181,9 +183,9 @@ bool MOSAsmBackend::evaluateTargetFixup(
     const MCSymbol &SA = A->getSymbol();
     if (A->getKind() != MCSymbolRefExpr::VK_None || SA.isUndefined()) {
       IsResolved = false;
-    } else if (auto *Writer = Asm.getWriterPtr()) {
-      IsResolved = Writer->isSymbolRefDifferenceFullyResolvedImpl(Asm, SA, *DF,
-                                                                  false, true);
+    } else {
+      IsResolved = Asm.getWriter().isSymbolRefDifferenceFullyResolvedImpl(
+          Asm, SA, *DF, false, true);
     }
   }
 
@@ -192,15 +194,15 @@ bool MOSAsmBackend::evaluateTargetFixup(
   if (const MCSymbolRefExpr *A = Target.getSymA()) {
     const MCSymbol &Sym = A->getSymbol();
     if (Sym.isDefined())
-      Value += Layout.getSymbolOffset(Sym);
+      Value += Asm.getSymbolOffset(Sym);
   }
   if (const MCSymbolRefExpr *B = Target.getSymB()) {
     const MCSymbol &Sym = B->getSymbol();
     if (Sym.isDefined())
-      Value -= Layout.getSymbolOffset(Sym);
+      Value -= Asm.getSymbolOffset(Sym);
   }
 
-  Value -= Layout.getFragmentOffset(DF) + Fixup.getOffset();
+  Value -= Asm.getFragmentOffset(*DF) + Fixup.getOffset();
   Value += getRelativeMOSPCCorrection(IsPCRel16);
 
   return IsResolved && !WasForced && fitsIntoFixup(Value, IsPCRel16);
@@ -232,10 +234,10 @@ bool isBasedOnZeroPageSymbol(const MCExpr *E) {
   llvm_unreachable("Invalid assembly expression kind!");
 }
 
-bool MOSAsmBackend::fixupNeedsRelaxationAdvanced(const MCFixup &Fixup,
+bool MOSAsmBackend::fixupNeedsRelaxationAdvanced(const MCAssembler &Asm,
+                                                 const MCFixup &Fixup,
                                                  bool Resolved, uint64_t Value,
                                                  const MCRelaxableFragment *DF,
-                                                 const MCAsmLayout &Layout,
                                                  const bool WasForced) const {
   // On 65816, it is possible to zero-bank relax from Addr16 to Addr24. The
   // assembler relaxes in a loop until instructions cannot be relaxed further,
@@ -255,6 +257,12 @@ bool MOSAsmBackend::fixupNeedsRelaxationAdvanced(const MCFixup &Fixup,
   // 8 (or 16) bits, then relaxation is needed.
   if (Info.TargetSize > (BankRelax ? 16 : 8))
     return true;
+
+  if (Info.Flags & MCFixupKindInfo::FKF_IsPCRel) {
+    // This fixup concerns a relative branch.
+    // If the fixup is unresolved, we can't know if relaxation is needed.
+    return !Resolved || !fitsIntoFixup(Value, false);
+  }
 
   // See if the expression is derived from a zero page symbol.
   if (isBasedOnZeroPageSymbol(Fixup.getValue()))
@@ -298,6 +306,23 @@ unsigned MOSAsmBackend::getNumFixupKinds() const {
 unsigned MOSAsmBackend::relaxInstructionTo(const MCInst &Inst,
                                            const MCSubtargetInfo &STI,
                                            bool &BankRelax) {
+  // Attempt branch relaxation.
+  const auto *BIRE = MOS::getBranchInstructionRelaxationEntry(Inst.getOpcode());
+  if (BIRE) {
+    if (STI.hasFeature(MOS::FeatureW65816)) {
+      if (BIRE->To == MOS::BRA_Relative16)
+        return MOS::BRL_Relative16;
+      return 0;
+    }
+
+    if (STI.hasFeature(MOS::Feature65CE02)) {
+      return BIRE->To;
+    }
+
+    return 0;
+  }
+
+  // Attempt zero page/bank relaxation.
   const auto *ZPIRE =
       MOS::getZeroPageInstructionRelaxationEntry(Inst.getOpcode());
   if (ZPIRE)

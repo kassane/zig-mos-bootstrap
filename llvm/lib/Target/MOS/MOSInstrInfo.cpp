@@ -14,6 +14,7 @@
 
 #include "MCTargetDesc/MOSMCTargetDesc.h"
 #include "MOSFrameLowering.h"
+#include "MOSInstrBuilder.h"
 #include "MOSRegisterInfo.h"
 
 #include "MOSSubtarget.h"
@@ -60,7 +61,7 @@ bool MOSInstrInfo::isReallyTriviallyReMaterializable(
   }
 }
 
-unsigned MOSInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
+Register MOSInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
                                            int &FrameIndex) const {
   switch (MI.getOpcode()) {
   default:
@@ -76,7 +77,7 @@ unsigned MOSInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
   }
 }
 
-unsigned MOSInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
+Register MOSInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
                                           int &FrameIndex) const {
   switch (MI.getOpcode()) {
   default:
@@ -266,6 +267,65 @@ bool MOSInstrInfo::findCommutedOpIndices(const MachineInstr &MI,
   return true;
 }
 
+bool MOSInstrInfo::hasCommutePreference(MachineInstr &MI, bool &Commute) const {
+  unsigned CommutableOpIdx1 = CommuteAnyOperandIndex;
+  unsigned CommutableOpIdx2 = CommuteAnyOperandIndex;
+  if (!findCommutedOpIndices(MI, CommutableOpIdx1, CommutableOpIdx2)) {
+    return false;
+  }
+
+  MachineFunction &MF = *MI.getMF();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  // Detect trivial copies of the form:
+  //
+  // %0:ac = COPY $a
+  // %1:imag8 = COPY $x
+  // ...
+  // %3:ac, %4:cc, %7:vc = ADCImag8 %0:ac(tied-def 0), %1:imag8, %6:cc
+  //
+  // Avoid or prefer commuting based on target register classes.
+  // This tries to ensure that relevant copies remain trivial.
+
+  auto Reg1 = MI.getOperand(CommutableOpIdx1).getReg();
+  auto Reg2 = MI.getOperand(CommutableOpIdx2).getReg();
+  if (!Reg1.isVirtual() || !Reg2.isVirtual())
+    return false;
+  if (!MRI.hasOneDef(Reg1) || !MRI.hasOneDef(Reg2))
+    return false;
+
+  MachineInstr *Instr1 = MRI.getOneDef(Reg1)->getParent();
+  MachineInstr *Instr2 = MRI.getOneDef(Reg2)->getParent();
+  if (!Instr1 || Instr1->getOpcode() != MOS::COPY ||
+      !Instr1->getOperand(1).isReg() ||
+      !Instr1->getOperand(1).getReg().isPhysical())
+    return false;
+  if (!Instr2 || Instr2->getOpcode() != MOS::COPY ||
+      !Instr2->getOperand(1).isReg() ||
+      !Instr2->getOperand(1).getReg().isPhysical())
+    return false;
+
+  auto SrcReg1 = Instr1->getOperand(1).getReg();
+  auto SrcReg2 = Instr2->getOperand(1).getReg();
+  auto *DstRC1 = MRI.getRegClassOrNull(Reg1);
+  auto *DstRC2 = MRI.getRegClassOrNull(Reg2);
+  if (!DstRC1 || !DstRC2)
+    return false;
+
+  if (DstRC1->contains(SrcReg1) && DstRC2->contains(SrcReg2))
+    Commute = false;
+  else if (DstRC2->contains(SrcReg1) && DstRC1->contains(SrcReg2))
+    Commute = true;
+  else if (DstRC1->contains(SrcReg1) || DstRC2->contains(SrcReg2))
+    Commute = false;
+  else if (DstRC2->contains(SrcReg1) || DstRC1->contains(SrcReg2))
+    Commute = true;
+  else
+    return false;
+
+  return true;
+}
+
 bool MOSInstrInfo::isBranchOffsetInRange(unsigned BranchOpc,
                                          int64_t BrOffset) const {
   switch (BranchOpc) {
@@ -291,6 +351,15 @@ MOSInstrInfo::getBranchDestBlock(const MachineInstr &MI) const {
   case MOS::BR:
   case MOS::BRA:
   case MOS::JMP:
+  case MOS::CmpBrImm:
+  case MOS::CmpBrImag8:
+  case MOS::CmpBrZero:
+  case MOS::CmpBrZeroMultiByte:
+  case MOS::CmpBrZpIdx:
+  case MOS::CmpBrAbs:
+  case MOS::CmpBrAbsIdx:
+  case MOS::CmpBrIndir:
+  case MOS::CmpBrIndirIdx:
     return MI.getOperand(0).getMBB();
   case MOS::JMPIndir:
   case MOS::JMPIdxIndir:
@@ -304,10 +373,6 @@ bool MOSInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                  SmallVectorImpl<MachineOperand> &Cond,
                                  bool AllowModify) const {
   auto I = MBB.getFirstTerminator();
-
-  // Advance past any comparison terminators.
-  while (I != MBB.end() && I->isCompare())
-    ++I;
 
   // If no terminators, falls through.
   if (I == MBB.end()) {
@@ -330,8 +395,21 @@ bool MOSInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   if (!TBB)
     return true;
   if (FirstBR->isConditionalBranch()) {
-    Cond.push_back(FirstBR->getOperand(1));
-    Cond.push_back(FirstBR->getOperand(2));
+    if (!FirstBR->memoperands_empty()) {
+      assert(FirstBR->hasOneMemOperand() &&
+             "CmpBr should have at most one mem operand");
+      // Don't futz with volatile compare and branches; the compare part has to
+      // happen, and we can't lose the MMO that says the compare is volatile.
+      if ((*FirstBR->memoperands_begin())->isVolatile())
+        return true;
+    }
+
+    Cond.clear();
+    Cond.push_back(MachineOperand::CreateImm(FirstBR->getOpcode()));
+    // Push all arguments except the branch destination; that's not part of the
+    // condition.
+    for (unsigned I = 1, E = FirstBR->getNumExplicitOperands(); I != E; ++I)
+      Cond.push_back(FirstBR->getOperand(I));
   }
 
   // If there's no second branch, done.
@@ -365,17 +443,9 @@ bool MOSInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
 unsigned MOSInstrInfo::removeBranch(MachineBasicBlock &MBB,
                                     int *BytesRemoved) const {
-  // Since analyzeBranch succeeded, we know that the only terminators are
-  // comparisons and branches.
-
   auto Begin = MBB.getFirstTerminator();
   auto End = MBB.end();
 
-  // Advance to first branch.
-  while (Begin != End && Begin->isCompare())
-    ++Begin;
-
-  // Erase all remaining terminators.
   unsigned NumRemoved = std::distance(Begin, End);
   if (BytesRemoved) {
     *BytesRemoved = 0;
@@ -391,10 +461,8 @@ unsigned MOSInstrInfo::insertBranch(MachineBasicBlock &MBB,
                                     MachineBasicBlock *FBB,
                                     ArrayRef<MachineOperand> Cond,
                                     const DebugLoc &DL, int *BytesAdded) const {
-  // Since analyzeBranch succeeded and any existing branches were removed, the
-  // only remaining terminators are comparisons.
-
-  const MOSSubtarget &STI = MBB.getParent()->getSubtarget<MOSSubtarget>();
+  MachineFunction &MF = *MBB.getParent();
+  const MOSSubtarget &STI = MF.getSubtarget<MOSSubtarget>();
 
   MachineIRBuilder Builder(MBB, MBB.end());
   unsigned NumAdded = 0;
@@ -407,20 +475,21 @@ unsigned MOSInstrInfo::insertBranch(MachineBasicBlock &MBB,
   // Conditional branch.
   if (!Cond.empty()) {
     assert(TBB);
-    // The condition stores the arguments for the BR instruction.
-    assert(Cond.size() == 2);
 
     // The unconditional branch will be to the false branch (if any).
     UBB = FBB;
 
     // Add conditional branch.
-    Register Reg = Cond[0].getReg();
-    unsigned Opcode = Reg.isVirtual() || !MOS::FlagRegClass.contains(Reg)
-                          ? MOS::GBR
-                          : MOS::BR;
-    auto BR = Builder.buildInstr(Opcode).addMBB(TBB);
-    for (const MachineOperand &Op : Cond)
+    auto BR = Builder.buildInstr(Cond.front().getImm()).addMBB(TBB);
+    for (const MachineOperand &Op : Cond.drop_front())
       BR.add(Op);
+
+    // Add a fictitious MMO if necessary.
+    if (BR->mayLoad())
+      BR->addMemOperand(MF, MF.getMachineMemOperand(MachinePointerInfo{},
+                                                    MachineMemOperand::MOLoad,
+                                                    LLT::scalar(8), Align{}));
+
     ++NumAdded;
     if (BytesAdded)
       *BytesAdded += getInstSizeInBytes(*BR);
@@ -460,7 +529,8 @@ void MOSInstrInfo::insertIndirectBranch(MachineBasicBlock &MBB,
 void MOSInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator MI,
                                const DebugLoc &DL, MCRegister DestReg,
-                               MCRegister SrcReg, bool KillSrc) const {
+                               MCRegister SrcReg, bool KillSrc,
+                               bool RenamableDest, bool RenamableSrc) const {
   MachineIRBuilder Builder(MBB, MI);
   Builder.setDebugLoc(DL);
   copyPhysRegImpl(Builder, DestReg, SrcReg, false, KillSrc);
@@ -474,7 +544,7 @@ static Register createVReg(MachineIRBuilder &Builder,
 }
 
 bool MOSInstrInfo::shouldOverlapInterval(const MachineInstr &MI) const {
-  return MI.getOpcode() != MOS::CMPTermZ;
+  return MI.getOpcode() != MOS::CmpBrZero;
 }
 
 static bool isTargetCopy(MachineInstr &MI) {
@@ -523,7 +593,7 @@ static bool isCopyRedundant(MachineIRBuilder &Builder, Register Dst,
 
 bool MOSInstrInfo::hasCustomTiedOperands(unsigned Opcode) const {
   return Opcode == MOS::IncMB || Opcode == MOS::DecMB ||
-             Opcode == MOS::DecDcpMB;
+         Opcode == MOS::DecDcpMB;
 }
 
 unsigned MOSInstrInfo::findCustomTiedOperandIdx(const MachineInstr &MI,
@@ -577,16 +647,16 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
       assert(MOS::XYRegClass.contains(DestReg));
       // The Dst (=> Src) value is not relevant to modeling a copy with a swap.
       Builder.buildInstr(MOS::SWAP)
-        .addDef(DestReg)
-        .addDef(SrcReg)
-        .addUse(SrcReg, RegState::Kill)
-        .addUse(DestReg, RegState::Kill | RegState::Undef);
+          .addDef(DestReg)
+          .addDef(SrcReg)
+          .addUse(SrcReg, RegState::Kill)
+          .addUse(DestReg, RegState::Kill | RegState::Undef);
     } else if (STI.hasGPRStackRegs()) {
       // The 65C02 can emit a PHX/PLY or PHY/PLX pair.
       assert(MOS::XYRegClass.contains(SrcReg));
       assert(MOS::XYRegClass.contains(DestReg));
-      Builder.buildInstr(MOS::PH_CMOS, {}, {SrcReg});
-      auto I = Builder.buildInstr(MOS::PL_CMOS, {DestReg}, {});
+      Builder.buildInstr(MOS::PH, {}, {SrcReg});
+      auto I = Builder.buildInstr(MOS::PL, {DestReg}, {});
       if (!STI.hasSPC700())
         I.addDef(MOS::NZ, RegState::Implicit);
     } else {
@@ -623,7 +693,7 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
         DestReg = DestReg8;
         // MOS defines LSB writes to write the whole 8-bit register, not just
         // part of it.
-        assert(!Builder.getInsertPt()->readsRegister(DestReg));
+        assert(!Builder.getInsertPt()->readsRegister(DestReg, /*TRI=*/nullptr));
 
         copyPhysRegImpl(Builder, DestReg, SrcReg);
       } else {
@@ -644,10 +714,8 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
           } else if (MOS::XYRegClass.contains(SrcReg)) {
             // A DEC/INC pair defines NZ without impacting other flags or
             // the register.
-            Builder.buildInstr(STI.hasGPRIncDec() ? MOS::DE_CMOS : MOS::DE,
-                               {SrcReg}, {SrcReg});
-            Builder.buildInstr(STI.hasGPRIncDec() ? MOS::IN_CMOS : MOS::IN,
-                               {SrcReg}, {SrcReg})
+            Builder.buildInstr(MOS::DEC, {SrcReg}, {SrcReg});
+            Builder.buildInstr(MOS::INC, {SrcReg}, {SrcReg})
                 .addDef(MOS::NZ, RegState::Implicit);
             Builder.buildInstr(MOS::SelectImm, {MOS::V},
                                {Register(MOS::Z), INT64_C(0), INT64_C(-1)});
@@ -916,6 +984,21 @@ void MOSInstrInfo::loadStoreRegStackSlot(
   });
 }
 
+const TargetRegisterClass *
+MOSInstrInfo::getRegClass(const MCInstrDesc &MCID, unsigned OpNum,
+                          const TargetRegisterInfo *TRI,
+                          const MachineFunction &MF) const {
+  auto *RC = TargetInstrInfo::getRegClass(MCID, OpNum, TRI, MF);
+  const MOSSubtarget &STI = MF.getSubtarget<MOSSubtarget>();
+
+  // On SPC700, LDImm can be used for imaginary registers.
+  if (STI.hasSPC700() && MCID.getOpcode() == MOS::LDImm && OpNum == 0) {
+    return &MOS::Anyi8RegClass;
+  }
+
+  return RC;
+}
+
 bool MOSInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   MachineIRBuilder Builder(MI);
 
@@ -925,11 +1008,9 @@ bool MOSInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     Changed = false;
     break;
   // Post RA
-  case MOS::INC:
-  case MOS::DEC:
-  case MOS::IncCMOS:
-  case MOS::DecCMOS:
-    expandIncDec(Builder);
+  case MOS::IncNMOS:
+  case MOS::DecNMOS:
+    expandIncDecNMOS(Builder);
     break;
   case MOS::IncPtr:
   case MOS::DecPtr:
@@ -946,6 +1027,7 @@ bool MOSInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
     expandLDImm1(Builder);
     break;
   case MOS::LDImm16:
+  case MOS::LDImm16SPC700:
     expandLDImm16(Builder);
     break;
   case MOS::LDImm16Remat:
@@ -954,14 +1036,15 @@ bool MOSInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case MOS::LDZ:
     expandLDZ(Builder);
     break;
-  case MOS::CMPTermImm:
-  case MOS::CMPTermImag8:
-  case MOS::CMPTermZpIdx:
-  case MOS::CMPTermAbs:
-  case MOS::CMPTermAbsIdx:
-  case MOS::CMPTermIndir:
-  case MOS::CMPTermIndirIdx:
-    expandCMPTerm(Builder);
+  case MOS::CmpBrImm:
+  case MOS::CmpBrImag8:
+  case MOS::CmpBrZero:
+  case MOS::CmpBrZpIdx:
+  case MOS::CmpBrAbs:
+  case MOS::CmpBrAbsIdx:
+  case MOS::CmpBrIndir:
+  case MOS::CmpBrIndirIdx:
+    expandCmpBr(Builder);
     break;
 
   // Control flow
@@ -1046,21 +1129,20 @@ void MOSInstrInfo::expandLDImm1(MachineIRBuilder &Builder) const {
         Register ACopy = createVReg(Builder, MOS::AcRegClass);
         Builder.buildInstr(MOS::PH, {}, {Register(MOS::P)});
         Builder.buildInstr(MOS::PL, {ACopy}, {});
-        Builder.buildInstr(MOS::ORAImm, {ACopy},
-                           {ACopy, INT64_C(0x40)});
+        Builder.buildInstr(MOS::ORAImm, {ACopy}, {ACopy, INT64_C(0x40)});
         Builder.buildInstr(MOS::PH).addUse(ACopy, RegState::Kill);
         Builder.buildInstr(MOS::PL, {MOS::P}, {});
         MI.eraseFromParent();
         return;
       }
-      
+
       auto Instr = STI.hasHUC6280()
-        ? Builder.buildInstr(MOS::BITImmHUC6280, {MOS::V}, {})
-                      .addUse(MOS::A, RegState::Undef)
-                      .addImm(0xFF)
-        : Builder.buildInstr(MOS::BITAbs, {MOS::V}, {})
-                      .addUse(MOS::A, RegState::Undef)
-                      .addExternalSymbol("__set_v");
+                       ? Builder.buildInstr(MOS::BITImmHUC6280, {MOS::V}, {})
+                             .addUse(MOS::A, RegState::Undef)
+                             .addImm(0xFF)
+                       : Builder.buildInstr(MOS::BITAbs, {MOS::V}, {})
+                             .addUse(MOS::A, RegState::Undef)
+                             .addExternalSymbol("__set_v");
       Instr->getOperand(1).setIsUndef();
       MI.eraseFromParent();
       return;
@@ -1078,32 +1160,41 @@ void MOSInstrInfo::expandLDImm16(MachineIRBuilder &Builder) const {
   auto &MI = *Builder.getInsertPt();
   const TargetRegisterInfo &TRI =
       *Builder.getMF().getSubtarget().getRegisterInfo();
+  bool UseScratch = MI.getOpcode() != MOS::LDImm16SPC700;
 
   Register Dst = MI.getOperand(0).getReg();
-  Register Tmp = MI.getOperand(1).getReg();
-  MachineOperand Src = MI.getOperand(2);
+  MachineOperand Src = MI.getOperand(UseScratch ? 2 : 1);
+  // This value is only valid if UseScratch is true.
+  Register Tmp = UseScratch ? MI.getOperand(1).getReg() : Register(0);
 
-  auto Lo = Builder.buildInstr(MOS::LDImm, {Tmp}, {});
+  Register LoReg = TRI.getSubReg(Dst, MOS::sublo);
+  auto Lo = Builder.buildInstr(MOS::LDImm);
+  Lo.addDef(UseScratch ? Tmp : LoReg);
   if (Src.isImm()) {
     Lo.addImm(Src.getImm() & 0xff);
   } else {
     Lo.add(Src);
     Lo->getOperand(1).setTargetFlags(MOS::MO_LO);
   }
-  copyPhysRegImpl(Builder, TRI.getSubReg(Dst, MOS::sublo), Tmp);
+  if (UseScratch)
+    copyPhysRegImpl(Builder, LoReg, Tmp);
 
-  auto Hi = Builder.buildInstr(MOS::LDImm, {Tmp}, {});
+  Register HiReg = TRI.getSubReg(Dst, MOS::subhi);
+  auto Hi = Builder.buildInstr(MOS::LDImm);
+  Hi.addDef(UseScratch ? Tmp : HiReg);
   if (Src.isImm()) {
     Hi.addImm(Src.getImm() >> 8);
   } else {
     Hi.add(Src);
     Hi->getOperand(1).setTargetFlags(MOS::MO_HI);
   }
-  // Appease the register scavenger by making this appear to be a
-  // redefinition.
-  if (Tmp.isVirtual())
-    Hi.addUse(Tmp, RegState::Implicit);
-  copyPhysRegImpl(Builder, TRI.getSubReg(Dst, MOS::subhi), Tmp);
+  if (UseScratch) {
+    // Appease the register scavenger by making this appear to be a
+    // redefinition.
+    if (Tmp.isVirtual())
+      Hi.addUse(Tmp, RegState::Implicit);
+    copyPhysRegImpl(Builder, HiReg, Tmp);
+  }
 
   MI.eraseFromParent();
 }
@@ -1137,32 +1228,15 @@ void MOSInstrInfo::expandLDZ(MachineIRBuilder &Builder) const {
   }
 }
 
-void MOSInstrInfo::expandIncDec(MachineIRBuilder &Builder) const {
+void MOSInstrInfo::expandIncDecNMOS(MachineIRBuilder &Builder) const {
   const auto &TII = Builder.getTII();
-  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
 
   auto &MI = *Builder.getInsertPt();
   Register R = MI.getOperand(0).getReg();
-  bool IsInc = MI.getOpcode() == MOS::INC || MI.getOpcode() == MOS::IncCMOS;
-  assert(IsInc || MI.getOpcode() == MOS::DEC || MI.getOpcode() == MOS::DecCMOS);
-  bool IsCMOS = MI.getOpcode() == MOS::IncCMOS || MI.getOpcode() == MOS::DecCMOS;
+  bool IsInc = MI.getOpcode() == MOS::IncNMOS;
+  assert(IsInc || MI.getOpcode() == MOS::DecNMOS);
 
-  // GPRs on CMOS 6502.
-  if (STI.hasGPRIncDec()) {
-    switch (R) {
-    case MOS::A:
-    case MOS::X:
-    case MOS::Y:
-      MI.setDesc(TII.get(IsInc ? MOS::IN_CMOS : MOS::DE_CMOS));
-      return;
-    }
-  } else if (IsCMOS) {
-    llvm_unreachable("Unexpected CMOS pseudoinstruction on non-CMOS subtarget.");
-  }
-
-  // GPRs on NMOS 6502.
-  switch (R) {
-  case MOS::A: {
+  if (R == MOS::A) {
     Builder.buildInstr(MOS::LDCImm).addDef(MOS::C).addImm(0);
     auto Instr = Builder.buildInstr(MOS::ADCImm)
                      .addDef(MOS::A)
@@ -1177,15 +1251,9 @@ void MOSInstrInfo::expandIncDec(MachineIRBuilder &Builder) const {
     MI.eraseFromParent();
     return;
   }
-  case MOS::X:
-  case MOS::Y:
-    MI.setDesc(TII.get(IsInc ? MOS::IN : MOS::DE));
-    return;
-  }
 
-  // Imaginary registers.
-  assert(MOS::Imag8RegClass.contains(R));
-  MI.setDesc(TII.get(IsInc ? MOS::INCImag8 : MOS::DECImag8));
+  assert(R == MOS::X || R == MOS::Y || MOS::Imag8RegClass.contains(R));
+  MI.setDesc(TII.get(IsInc ? MOS::INC : MOS::DEC));
 }
 
 void MOSInstrInfo::expandIncDecPtr(MachineIRBuilder &Builder) const {
@@ -1194,8 +1262,9 @@ void MOSInstrInfo::expandIncDecPtr(MachineIRBuilder &Builder) const {
   Register Reg = MI.getOperand(MI.getOpcode() == MOS::IncPtr ? 0 : 1).getReg();
   Register Lo = TRI.getSubReg(Reg, MOS::sublo);
   Register Hi = TRI.getSubReg(Reg, MOS::subhi);
-  auto Op = MI.getOpcode() == MOS::IncPtr ? MOS::IncMB :
-            (MI.getOpcode() == MOS::DecPtr ? MOS::DecMB : MOS::DecDcpMB);
+  auto Op = MI.getOpcode() == MOS::IncPtr
+                ? MOS::IncMB
+                : (MI.getOpcode() == MOS::DecPtr ? MOS::DecMB : MOS::DecDcpMB);
   auto Inst = Builder.buildInstr(Op);
   if (MI.getOpcode() != MOS::IncPtr)
     Inst.addDef(MI.getOperand(0).getReg());
@@ -1209,37 +1278,6 @@ void MOSInstrInfo::expandIncDecPtr(MachineIRBuilder &Builder) const {
     Inst->tieOperands(2, 4);
   }
   MI.eraseFromParent();
-}
-
-//===---------------------------------------------------------------------===//
-// CMP pseudos
-//===---------------------------------------------------------------------===//
-
-void MOSInstrInfo::expandCMPTerm(MachineIRBuilder &Builder) const {
-  MachineInstr &MI = *Builder.getInsertPt();
-  switch (MI.getOpcode()) {
-  case MOS::CMPTermImm:
-    MI.setDesc(Builder.getTII().get(MOS::CMPImm));
-    break;
-  case MOS::CMPTermImag8:
-    MI.setDesc(Builder.getTII().get(MOS::CMPImag8));
-    break;
-  case MOS::CMPTermZpIdx:
-    MI.setDesc(Builder.getTII().get(MOS::CMPZpIdx));
-    break;
-  case MOS::CMPTermAbs:
-    MI.setDesc(Builder.getTII().get(MOS::CMPAbs));
-    break;
-  case MOS::CMPTermAbsIdx:
-    MI.setDesc(Builder.getTII().get(MOS::CMPAbsIdx));
-    break;
-  case MOS::CMPTermIndir:
-    MI.setDesc(Builder.getTII().get(MOS::CMPIndir));
-    break;
-  case MOS::CMPTermIndirIdx:
-    MI.setDesc(Builder.getTII().get(MOS::CMPIndirIdx));
-    break;
-  }
 }
 
 //===---------------------------------------------------------------------===//
@@ -1260,21 +1298,71 @@ void MOSInstrInfo::expandGBR(MachineIRBuilder &Builder) const {
     Register TstReg =
         Builder.getMF().getSubtarget().getRegisterInfo()->getMatchingSuperReg(
             Tst, MOS::sublsb, &MOS::Anyi8RegClass);
-    Builder.buildInstr(MOS::CMPTermZ, {MOS::C}, {TstReg})
-        ->getOperand(0)
-        .setIsDead();
+    Builder.buildInstr(MOS::CmpZero, {}, {TstReg})
+        .addDef(MOS::Z, RegState::Implicit);
   }
   }
   // Branch on zero flag, which is now the inverse of the test.
   MI.getOperand(1).setReg(MOS::Z);
+  MI.getOperand(1).setIsKill();
   MI.getOperand(2).setImm(MI.getOperand(2).getImm() ? 0 : 1);
+}
+
+void MOSInstrInfo::expandCmpBr(MachineIRBuilder &Builder) const {
+  MachineInstr &MI = *Builder.getInsertPt();
+
+  const Register Flag = MI.getOperand(1).getReg();
+
+  unsigned CMPOpcode;
+  switch (MI.getOpcode()) {
+  case MOS::CmpBrImm:
+    CMPOpcode = MOS::CMPImm;
+    break;
+  case MOS::CmpBrImag8:
+    CMPOpcode = MOS::CMPImag8;
+    break;
+  case MOS::CmpBrZero:
+    CMPOpcode = MOS::CmpZero;
+    break;
+  case MOS::CmpBrZpIdx:
+    CMPOpcode = MOS::CMPZpIdx;
+    break;
+  case MOS::CmpBrAbs:
+    CMPOpcode = MOS::CMPAbs;
+    break;
+  case MOS::CmpBrAbsIdx:
+    CMPOpcode = MOS::CMPAbsIdx;
+    break;
+  case MOS::CmpBrIndir:
+    CMPOpcode = MOS::CMPIndir;
+    break;
+  case MOS::CmpBrIndirIdx:
+    CMPOpcode = MOS::CMPIndirIdx;
+    break;
+  }
+
+  auto CMP = Builder.buildInstr(CMPOpcode);
+  if (CMPOpcode != MOS::CmpZero)
+    CMP.addDef(MOS::C, RegState::Dead);
+  for (unsigned I = 3, E = MI.getNumOperands(); I != E; I++)
+    CMP.add(MI.getOperand(I));
+  CMP.cloneMemRefs(*CMP);
+  CMP.addDef(Flag, RegState::Implicit);
+
+  Builder.buildInstr(MOS::BR)
+      .add(MI.getOperand(0))
+      .addUse(Flag, RegState::Kill)
+      .add(MI.getOperand(2));
+
+  MI.eraseFromParent();
 }
 
 bool MOSInstrInfo::reverseBranchCondition(
     SmallVectorImpl<MachineOperand> &Cond) const {
-  assert(Cond.size() == 2);
-  auto &Val = Cond[1];
-  Val.setImm(!Val.getImm());
+  // Condition includes all arguments except the branch target.
+  MachineOperand &ValMO =
+      (Cond.front().getImm() == MOS::CmpBrZeroMultiByte) ? Cond[1] : Cond[2];
+  ValMO.setImm(!ValMO.getImm());
   // Success.
   return false;
 }
@@ -1294,7 +1382,9 @@ MOSInstrInfo::getSerializableTargetIndices() const {
 ArrayRef<std::pair<unsigned, const char *>>
 MOSInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
   static const std::pair<unsigned, const char *> Flags[] = {
-      {MOS::MO_LO, "lo"}, {MOS::MO_HI, "hi"}, {MOS::MO_HI_JT, "hi-jt"},
+      {MOS::MO_LO, "lo"},
+      {MOS::MO_HI, "hi"},
+      {MOS::MO_HI_JT, "hi-jt"},
       {MOS::MO_ZEROPAGE, "zeropage"}};
   return Flags;
 }

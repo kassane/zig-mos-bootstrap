@@ -18,8 +18,7 @@
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/LostDebugLocObserver.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/RuntimeLibcalls.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/IR/RuntimeLibcalls.h"
 
 namespace llvm {
 
@@ -104,6 +103,9 @@ private:
                       MachineInstr &MI) const;
 
   bool legalizeBrJt(LegalizerHelper &Helper, MachineRegisterInfo &MRI,
+                    MachineInstr &MI) const;
+
+  bool legalizeTrap(LegalizerHelper &Helper, MachineRegisterInfo &MRI,
                     MachineInstr &MI) const;
 
   // Variadic Arguments

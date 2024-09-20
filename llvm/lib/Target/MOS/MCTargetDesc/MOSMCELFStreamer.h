@@ -31,13 +31,18 @@ public:
         MCII(createMOSMCInstrInfo()) {}
 
   void initSections(bool NoExecStack, const MCSubtargetInfo &STI) override;
-  void changeSection(MCSection *Section, const MCExpr *Subsection) override;
+  void changeSection(MCSection *Section, uint32_t Subsection = 0) override;
+
+  void emitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI) override;
 
   void emitValueImpl(const MCExpr *Value, unsigned Size,
                      SMLoc Loc = SMLoc()) override;
 
   void emitMosAddrAsciz(const MCExpr *Value, unsigned Size,
                         SMLoc Loc = SMLoc());
+
+  void emitMappingSymbol(StringRef Name);
+  void emit816MXState(bool IsMLow, bool IsMHigh, bool IsXLow, bool IsXHigh);
 
   bool hasBSS() const { return HasBSS; }
   bool hasZPBSS() const { return HasZPBSS; }
@@ -47,19 +52,28 @@ public:
   bool hasFiniArray() const { return HasFiniArray; }
 
 private:
+  enum MXFlagState {
+    MXFlagUnknown,
+    MXFlagLow,
+    MXFlagHigh
+  };
+
+  int64_t MappingSymbolCounter = 0;
   bool HasBSS = false;
   bool HasZPBSS = false;
   bool HasData = false;
   bool HasZPData = false;
   bool HasInitArray = false;
   bool HasFiniArray = false;
+  bool Has65816Instructions = false;
+  MXFlagState MState = MXFlagUnknown;
+  MXFlagState XState = MXFlagUnknown;
 };
 
 MCStreamer *createMOSMCELFStreamer(const Triple &T, MCContext &Ctx,
                                    std::unique_ptr<MCAsmBackend> &&TAB,
                                    std::unique_ptr<MCObjectWriter> &&OW,
-                                   std::unique_ptr<MCCodeEmitter> &&Emitter,
-                                   bool RelaxAll);
+                                   std::unique_ptr<MCCodeEmitter> &&Emitter);
 
 } // end namespace llvm
 

@@ -20,14 +20,6 @@
 # RUN: ld.lld %t.o.w65c02 -o %t.w65c02
 # RUN: llvm-readobj --file-headers --sections -l %t.w65c02 | FileCheck %s -check-prefixes=CHECK,W65C02
 
-# RUN: llvm-mc -filetype=obj -triple=mos -mcpu=mosw65816 %s -o %t.o.w65816
-# RUN: ld.lld %t.o.w65816 -o %t.w65816
-# RUN: llvm-readobj --file-headers --sections -l %t.w65816 | FileCheck %s -check-prefixes=CHECK,W65816
-
-# RUN: llvm-mc -filetype=obj -triple=mos -mcpu=mos65el02 %s -o %t.o.65el02
-# RUN: ld.lld %t.o.65el02 -o %t.65el02
-# RUN: llvm-readobj --file-headers --sections -l %t.65el02 | FileCheck %s -check-prefixes=CHECK,65EL02
-
 # RUN: llvm-mc -filetype=obj -triple=mos -mcpu=mos65ce02 %s -o %t.o.65ce02
 # RUN: ld.lld %t.o.65ce02 -o %t.65ce02
 # RUN: llvm-readobj --file-headers --sections -l %t.65ce02 | FileCheck %s -check-prefixes=CHECK,65CE02
@@ -106,18 +98,6 @@ _start:
 // W65C02-NEXT:    EF_MOS_ARCH_65C02 (0x8)
 // W65C02-NEXT:    EF_MOS_ARCH_R65C02 (0x10)
 // W65C02-NEXT:    EF_MOS_ARCH_W65C02 (0x20)
-// W65816-NEXT:  Flags [
-// W65816-NEXT:    EF_MOS_ARCH_6502 (0x1)
-// W65816-NEXT:    EF_MOS_ARCH_6502_BCD (0x2)
-// W65816-NEXT:    EF_MOS_ARCH_65C02 (0x8)
-// W65816-NEXT:    EF_MOS_ARCH_W65816 (0x100)
-// W65816-NEXT:    EF_MOS_ARCH_W65C02 (0x20)
-// 65EL02-NEXT:  Flags [
-// 65EL02-NEXT:    EF_MOS_ARCH_6502 (0x1)
-// 65EL02-NEXT:    EF_MOS_ARCH_6502_BCD (0x2)
-// 65EL02-NEXT:    EF_MOS_ARCH_65C02 (0x8)
-// 65EL02-NEXT:    EF_MOS_ARCH_65EL02 (0x200)
-// 65EL02-NEXT:    EF_MOS_ARCH_W65C02 (0x20)
 // 65CE02-NEXT:  Flags [
 // 65CE02-NEXT:    EF_MOS_ARCH_6502 (0x1)
 // 65CE02-NEXT:    EF_MOS_ARCH_6502_BCD (0x2)

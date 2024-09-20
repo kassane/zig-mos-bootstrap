@@ -15,6 +15,7 @@ namespace clang {
 namespace format {
 namespace {
 
+void dropDiagnosticHandler(const llvm::SMDiagnostic &, void *) {}
 FormatStyle getGoogleStyle() { return getGoogleStyle(FormatStyle::LK_Cpp); }
 
 #define EXPECT_ALL_STYLES_EQUAL(Styles)                                        \
@@ -153,12 +154,12 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   Style.Language = FormatStyle::LK_Cpp;
   CHECK_PARSE_BOOL(AllowAllArgumentsOnNextLine);
   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
+  CHECK_PARSE_BOOL(AllowShortCaseExpressionOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortCaseLabelsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortCompoundRequirementOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortEnumsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortLoopsOnASingleLine);
   CHECK_PARSE_BOOL(BinPackArguments);
-  CHECK_PARSE_BOOL(BinPackParameters);
   CHECK_PARSE_BOOL(BreakAdjacentStringLiterals);
   CHECK_PARSE_BOOL(BreakAfterJavaFieldAnnotations);
   CHECK_PARSE_BOOL(BreakBeforeTernaryOperators);
@@ -176,14 +177,16 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(IndentWrappedFunctionNames);
   CHECK_PARSE_BOOL(InsertBraces);
   CHECK_PARSE_BOOL(InsertNewlineAtEOF);
-  CHECK_PARSE_BOOL(KeepEmptyLinesAtEOF);
-  CHECK_PARSE_BOOL(KeepEmptyLinesAtTheStartOfBlocks);
+  CHECK_PARSE_BOOL_FIELD(KeepEmptyLines.AtEndOfFile, "KeepEmptyLinesAtEOF");
+  CHECK_PARSE_BOOL_FIELD(KeepEmptyLines.AtStartOfBlock,
+                         "KeepEmptyLinesAtTheStartOfBlocks");
   CHECK_PARSE_BOOL(ObjCSpaceAfterProperty);
   CHECK_PARSE_BOOL(ObjCSpaceBeforeProtocolList);
   CHECK_PARSE_BOOL(Cpp11BracedListStyle);
   CHECK_PARSE_BOOL(ReflowComments);
   CHECK_PARSE_BOOL(RemoveBracesLLVM);
   CHECK_PARSE_BOOL(RemoveSemicolon);
+  CHECK_PARSE_BOOL(SkipMacroDefinitionBody);
   CHECK_PARSE_BOOL(SpacesInSquareBrackets);
   CHECK_PARSE_BOOL(SpaceInEmptyBlock);
   CHECK_PARSE_BOOL(SpacesInContainerLiterals);
@@ -204,6 +207,7 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements,
                           AcrossEmptyLines);
   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AcrossComments);
+  CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AlignCaseArrows);
   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AlignCaseColons);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterCaseLabel);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterClass);
@@ -222,6 +226,9 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, SplitEmptyFunction);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, SplitEmptyRecord);
   CHECK_PARSE_NESTED_BOOL(BraceWrapping, SplitEmptyNamespace);
+  CHECK_PARSE_NESTED_BOOL(KeepEmptyLines, AtEndOfFile);
+  CHECK_PARSE_NESTED_BOOL(KeepEmptyLines, AtStartOfBlock);
+  CHECK_PARSE_NESTED_BOOL(KeepEmptyLines, AtStartOfFile);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, AfterControlStatements);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, AfterForeachMacros);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions,
@@ -230,7 +237,9 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
                           AfterFunctionDefinitionName);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, AfterIfMacros);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, AfterOverloadedOperator);
+  CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, AfterPlacementOperator);
   CHECK_PARSE_NESTED_BOOL(SpaceBeforeParensOptions, BeforeNonEmptyParentheses);
+  CHECK_PARSE_NESTED_BOOL(SpacesInParensOptions, ExceptDoubleParentheses);
   CHECK_PARSE_NESTED_BOOL(SpacesInParensOptions, InCStyleCasts);
   CHECK_PARSE_NESTED_BOOL(SpacesInParensOptions, InConditionalStatements);
   CHECK_PARSE_NESTED_BOOL(SpacesInParensOptions, InEmptyParentheses);
@@ -394,6 +403,14 @@ TEST(ConfigParseTest, ParsesConfiguration) {
   CHECK_PARSE("BreakBeforeBinaryOperators: true", BreakBeforeBinaryOperators,
               FormatStyle::BOS_All);
 
+  Style.BreakBinaryOperations = FormatStyle::BBO_Never;
+  CHECK_PARSE("BreakBinaryOperations: OnePerLine", BreakBinaryOperations,
+              FormatStyle::BBO_OnePerLine);
+  CHECK_PARSE("BreakBinaryOperations: RespectPrecedence", BreakBinaryOperations,
+              FormatStyle::BBO_RespectPrecedence);
+  CHECK_PARSE("BreakBinaryOperations: Never", BreakBinaryOperations,
+              FormatStyle::BBO_Never);
+
   Style.BreakConstructorInitializers = FormatStyle::BCIS_BeforeColon;
   CHECK_PARSE("BreakConstructorInitializers: BeforeComma",
               BreakConstructorInitializers, FormatStyle::BCIS_BeforeComma);
@@ -417,6 +434,19 @@ TEST(ConfigParseTest, ParsesConfiguration) {
   // For backward compatibility:
   CHECK_PARSE("BreakBeforeInheritanceComma: true", BreakInheritanceList,
               FormatStyle::BILS_BeforeComma);
+
+  Style.BinPackParameters = FormatStyle::BPPS_OnePerLine;
+  CHECK_PARSE("BinPackParameters: BinPack", BinPackParameters,
+              FormatStyle::BPPS_BinPack);
+  CHECK_PARSE("BinPackParameters: OnePerLine", BinPackParameters,
+              FormatStyle::BPPS_OnePerLine);
+  CHECK_PARSE("BinPackParameters: AlwaysOnePerLine", BinPackParameters,
+              FormatStyle::BPPS_AlwaysOnePerLine);
+  // For backward compatibility.
+  CHECK_PARSE("BinPackParameters: true", BinPackParameters,
+              FormatStyle::BPPS_BinPack);
+  CHECK_PARSE("BinPackParameters: false", BinPackParameters,
+              FormatStyle::BPPS_OnePerLine);
 
   Style.PackConstructorInitializers = FormatStyle::PCIS_BinPack;
   CHECK_PARSE("PackConstructorInitializers: Never", PackConstructorInitializers,
@@ -476,6 +506,8 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               FormatStyle::ENAS_DontAlign);
   CHECK_PARSE("AlignEscapedNewlines: Left", AlignEscapedNewlines,
               FormatStyle::ENAS_Left);
+  CHECK_PARSE("AlignEscapedNewlines: LeftWithLastLine", AlignEscapedNewlines,
+              FormatStyle::ENAS_LeftWithLastLine);
   CHECK_PARSE("AlignEscapedNewlines: Right", AlignEscapedNewlines,
               FormatStyle::ENAS_Right);
   // For backward compatibility:
@@ -608,24 +640,6 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               SpaceBeforeParens,
               FormatStyle::SBPO_ControlStatementsExceptControlMacros);
 
-  Style.SpaceBeforeParens = FormatStyle::SBPO_Custom;
-  Style.SpaceBeforeParensOptions.AfterPlacementOperator =
-      FormatStyle::SpaceBeforeParensCustom::APO_Always;
-  CHECK_PARSE("SpaceBeforeParensOptions:\n"
-              "  AfterPlacementOperator: Never",
-              SpaceBeforeParensOptions.AfterPlacementOperator,
-              FormatStyle::SpaceBeforeParensCustom::APO_Never);
-
-  CHECK_PARSE("SpaceBeforeParensOptions:\n"
-              "  AfterPlacementOperator: Always",
-              SpaceBeforeParensOptions.AfterPlacementOperator,
-              FormatStyle::SpaceBeforeParensCustom::APO_Always);
-
-  CHECK_PARSE("SpaceBeforeParensOptions:\n"
-              "  AfterPlacementOperator: Leave",
-              SpaceBeforeParensOptions.AfterPlacementOperator,
-              FormatStyle::SpaceBeforeParensCustom::APO_Leave);
-
   // For backward compatibility:
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
@@ -633,20 +647,24 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               FormatStyle::SIPO_Custom);
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
-  CHECK_PARSE("SpacesInParentheses: true", SpacesInParensOptions,
-              FormatStyle::SpacesInParensCustom(true, false, false, true));
+  CHECK_PARSE(
+      "SpacesInParentheses: true", SpacesInParensOptions,
+      FormatStyle::SpacesInParensCustom(false, true, false, false, true));
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
-  CHECK_PARSE("SpacesInConditionalStatement: true", SpacesInParensOptions,
-              FormatStyle::SpacesInParensCustom(true, false, false, false));
+  CHECK_PARSE(
+      "SpacesInConditionalStatement: true", SpacesInParensOptions,
+      FormatStyle::SpacesInParensCustom(false, true, false, false, false));
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
-  CHECK_PARSE("SpacesInCStyleCastParentheses: true", SpacesInParensOptions,
-              FormatStyle::SpacesInParensCustom(false, true, false, false));
+  CHECK_PARSE(
+      "SpacesInCStyleCastParentheses: true", SpacesInParensOptions,
+      FormatStyle::SpacesInParensCustom(false, false, true, false, false));
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
-  CHECK_PARSE("SpaceInEmptyParentheses: true", SpacesInParensOptions,
-              FormatStyle::SpacesInParensCustom(false, false, true, false));
+  CHECK_PARSE(
+      "SpaceInEmptyParentheses: true", SpacesInParensOptions,
+      FormatStyle::SpacesInParensCustom(false, false, false, true, false));
   Style.SpacesInParens = FormatStyle::SIPO_Never;
   Style.SpacesInParensOptions = {};
 
@@ -693,30 +711,63 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               "  AfterControlStatement: false",
               BraceWrapping.AfterControlStatement, FormatStyle::BWACS_Never);
 
-  Style.AlwaysBreakAfterReturnType = FormatStyle::RTBS_All;
-  CHECK_PARSE("AlwaysBreakAfterReturnType: None", AlwaysBreakAfterReturnType,
+  Style.BreakAfterReturnType = FormatStyle::RTBS_All;
+  CHECK_PARSE("BreakAfterReturnType: None", BreakAfterReturnType,
               FormatStyle::RTBS_None);
-  CHECK_PARSE("AlwaysBreakAfterReturnType: All", AlwaysBreakAfterReturnType,
+  CHECK_PARSE("BreakAfterReturnType: Automatic", BreakAfterReturnType,
+              FormatStyle::RTBS_Automatic);
+  CHECK_PARSE("BreakAfterReturnType: ExceptShortType", BreakAfterReturnType,
+              FormatStyle::RTBS_ExceptShortType);
+  CHECK_PARSE("BreakAfterReturnType: All", BreakAfterReturnType,
               FormatStyle::RTBS_All);
-  CHECK_PARSE("AlwaysBreakAfterReturnType: TopLevel",
-              AlwaysBreakAfterReturnType, FormatStyle::RTBS_TopLevel);
-  CHECK_PARSE("AlwaysBreakAfterReturnType: AllDefinitions",
-              AlwaysBreakAfterReturnType, FormatStyle::RTBS_AllDefinitions);
-  CHECK_PARSE("AlwaysBreakAfterReturnType: TopLevelDefinitions",
-              AlwaysBreakAfterReturnType,
+  CHECK_PARSE("BreakAfterReturnType: TopLevel", BreakAfterReturnType,
+              FormatStyle::RTBS_TopLevel);
+  CHECK_PARSE("BreakAfterReturnType: AllDefinitions", BreakAfterReturnType,
+              FormatStyle::RTBS_AllDefinitions);
+  CHECK_PARSE("BreakAfterReturnType: TopLevelDefinitions", BreakAfterReturnType,
               FormatStyle::RTBS_TopLevelDefinitions);
+  // For backward compatibility:
+  CHECK_PARSE("AlwaysBreakAfterReturnType: None", BreakAfterReturnType,
+              FormatStyle::RTBS_None);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: Automatic", BreakAfterReturnType,
+              FormatStyle::RTBS_Automatic);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: ExceptShortType",
+              BreakAfterReturnType, FormatStyle::RTBS_ExceptShortType);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: All", BreakAfterReturnType,
+              FormatStyle::RTBS_All);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: TopLevel", BreakAfterReturnType,
+              FormatStyle::RTBS_TopLevel);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: AllDefinitions",
+              BreakAfterReturnType, FormatStyle::RTBS_AllDefinitions);
+  CHECK_PARSE("AlwaysBreakAfterReturnType: TopLevelDefinitions",
+              BreakAfterReturnType, FormatStyle::RTBS_TopLevelDefinitions);
 
-  Style.AlwaysBreakTemplateDeclarations = FormatStyle::BTDS_Yes;
-  CHECK_PARSE("AlwaysBreakTemplateDeclarations: No",
-              AlwaysBreakTemplateDeclarations, FormatStyle::BTDS_No);
+  Style.BreakTemplateDeclarations = FormatStyle::BTDS_Yes;
+  CHECK_PARSE("BreakTemplateDeclarations: Leave", BreakTemplateDeclarations,
+              FormatStyle::BTDS_Leave);
+  CHECK_PARSE("BreakTemplateDeclarations: No", BreakTemplateDeclarations,
+              FormatStyle::BTDS_No);
+  CHECK_PARSE("BreakTemplateDeclarations: MultiLine", BreakTemplateDeclarations,
+              FormatStyle::BTDS_MultiLine);
+  CHECK_PARSE("BreakTemplateDeclarations: Yes", BreakTemplateDeclarations,
+              FormatStyle::BTDS_Yes);
+  CHECK_PARSE("BreakTemplateDeclarations: false", BreakTemplateDeclarations,
+              FormatStyle::BTDS_MultiLine);
+  CHECK_PARSE("BreakTemplateDeclarations: true", BreakTemplateDeclarations,
+              FormatStyle::BTDS_Yes);
+  // For backward compatibility:
+  CHECK_PARSE("AlwaysBreakTemplateDeclarations: Leave",
+              BreakTemplateDeclarations, FormatStyle::BTDS_Leave);
+  CHECK_PARSE("AlwaysBreakTemplateDeclarations: No", BreakTemplateDeclarations,
+              FormatStyle::BTDS_No);
   CHECK_PARSE("AlwaysBreakTemplateDeclarations: MultiLine",
-              AlwaysBreakTemplateDeclarations, FormatStyle::BTDS_MultiLine);
-  CHECK_PARSE("AlwaysBreakTemplateDeclarations: Yes",
-              AlwaysBreakTemplateDeclarations, FormatStyle::BTDS_Yes);
+              BreakTemplateDeclarations, FormatStyle::BTDS_MultiLine);
+  CHECK_PARSE("AlwaysBreakTemplateDeclarations: Yes", BreakTemplateDeclarations,
+              FormatStyle::BTDS_Yes);
   CHECK_PARSE("AlwaysBreakTemplateDeclarations: false",
-              AlwaysBreakTemplateDeclarations, FormatStyle::BTDS_MultiLine);
+              BreakTemplateDeclarations, FormatStyle::BTDS_MultiLine);
   CHECK_PARSE("AlwaysBreakTemplateDeclarations: true",
-              AlwaysBreakTemplateDeclarations, FormatStyle::BTDS_Yes);
+              BreakTemplateDeclarations, FormatStyle::BTDS_Yes);
 
   Style.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_All;
   CHECK_PARSE("AlwaysBreakAfterDefinitionReturnType: None",
@@ -1219,7 +1270,8 @@ TEST(ConfigParseTest, GetStyleOfFile) {
   llvm::consumeError(Style4.takeError());
 
   // Test 5: error on invalid yaml on command line
-  auto Style5 = getStyle("{invalid_key=invalid_value}", "a.h", "LLVM", "", &FS);
+  auto Style5 = getStyle("{invalid_key=invalid_value}", "a.h", "LLVM", "", &FS,
+                         /*AllowUnknownOptions=*/false, dropDiagnosticHandler);
   ASSERT_FALSE((bool)Style5);
   llvm::consumeError(Style5.takeError());
 
@@ -1235,11 +1287,13 @@ TEST(ConfigParseTest, GetStyleOfFile) {
                                                   "InvalidKey: InvalidValue")));
   ASSERT_TRUE(
       FS.addFile("/d/test.cpp", 0, llvm::MemoryBuffer::getMemBuffer("int i;")));
-  auto Style7a = getStyle("file", "/d/.clang-format", "LLVM", "", &FS);
+  auto Style7a = getStyle("file", "/d/.clang-format", "LLVM", "", &FS,
+                          /*AllowUnknownOptions=*/false, dropDiagnosticHandler);
   ASSERT_FALSE((bool)Style7a);
   llvm::consumeError(Style7a.takeError());
 
-  auto Style7b = getStyle("file", "/d/.clang-format", "LLVM", "", &FS, true);
+  auto Style7b = getStyle("file", "/d/.clang-format", "LLVM", "", &FS,
+                          /*AllowUnknownOptions=*/true, dropDiagnosticHandler);
   ASSERT_TRUE((bool)Style7b);
 
   // Test 8: inferred per-language defaults apply.
@@ -1429,6 +1483,26 @@ TEST(ConfigParseTest, GetStyleOfSpecificFile) {
   llvm::sys::fs::remove(TestFilePath.c_str());
   ASSERT_TRUE(static_cast<bool>(Style));
   ASSERT_EQ(*Style, getGoogleStyle());
+}
+
+TEST(ConfigParseTest, GetStyleOutput) {
+  llvm::vfs::InMemoryFileSystem FS;
+
+  // Don't suppress output.
+  testing::internal::CaptureStderr();
+  auto Style = getStyle("{invalid_key=invalid_value}", "a.h", "LLVM", "", &FS,
+                        /*AllowUnknownOptions=*/true);
+  auto Output = testing::internal::GetCapturedStderr();
+  ASSERT_TRUE((bool)Style);
+  ASSERT_FALSE(Output.empty());
+
+  // Suppress stderr.
+  testing::internal::CaptureStderr();
+  Style = getStyle("{invalid_key=invalid_value}", "a.h", "LLVM", "", &FS,
+                   /*AllowUnknownOptions=*/true, dropDiagnosticHandler);
+  Output = testing::internal::GetCapturedStderr();
+  ASSERT_TRUE((bool)Style);
+  ASSERT_TRUE(Output.empty());
 }
 
 } // namespace

@@ -23,10 +23,13 @@ unittest("AnalysisTests") {
     "CallGraphTest.cpp",
     "CaptureTrackingTest.cpp",
     "ConstraintSystemTest.cpp",
+    "CtxProfAnalysisTest.cpp",
     "DDGTest.cpp",
+    "DXILResourceTest.cpp",
     "DomTreeUpdaterTest.cpp",
     "FunctionPropertiesAnalysisTest.cpp",
     "GlobalsModRefTest.cpp",
+    "GraphWriterTest.cpp",
     "IRSimilarityIdentifierTest.cpp",
     "IVDescriptorsTest.cpp",
     "InlineCostTest.cpp",
@@ -51,7 +54,6 @@ unittest("AnalysisTests") {
     "UnrollAnalyzerTest.cpp",
     "ValueLatticeTest.cpp",
     "ValueTrackingTest.cpp",
-    "VectorFunctionABITest.cpp",
     "VectorUtilsTest.cpp",
   ]
 
