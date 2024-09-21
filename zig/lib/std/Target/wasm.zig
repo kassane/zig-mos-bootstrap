@@ -9,7 +9,7 @@ pub const Feature = enum {
     bulk_memory,
     exception_handling,
     extended_const,
-    half_precision,
+    fp16,
     multimemory,
     multivalue,
     mutable_globals,
@@ -50,9 +50,9 @@ pub const all_features = blk: {
         .description = "Enable extended const expressions",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.half_precision)] = .{
-        .llvm_name = "half-precision",
-        .description = "Enable half precision instructions",
+    result[@intFromEnum(Feature.fp16)] = .{
+        .llvm_name = "fp16",
+        .description = "Enable FP16 instructions",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.multimemory)] = .{
@@ -117,7 +117,7 @@ pub const cpu = struct {
             .bulk_memory,
             .exception_handling,
             .extended_const,
-            .half_precision,
+            .fp16,
             .multimemory,
             .multivalue,
             .mutable_globals,

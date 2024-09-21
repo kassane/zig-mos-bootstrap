@@ -21,16 +21,19 @@ pub const Feature = enum {
     experimental_rvb23s64,
     experimental_rvb23u64,
     experimental_rvm23u32,
+    experimental_smctr,
     experimental_smmpm,
     experimental_smnpm,
+    experimental_ssctr,
     experimental_ssnpm,
     experimental_sspm,
-    experimental_ssqosid,
     experimental_supm,
     experimental_zacas,
     experimental_zalasr,
     experimental_zicfilp,
     experimental_zicfiss,
+    experimental_zvbc32e,
+    experimental_zvkgs,
     f,
     forced_atomics,
     forced_sw_shadow_stack,
@@ -104,6 +107,7 @@ pub const Feature = enum {
     sscofpmf,
     sscounterenw,
     sscsrind,
+    ssqosid,
     ssstateen,
     ssstrict,
     sstc,
@@ -522,6 +526,13 @@ pub const all_features = blk: {
             .zimop,
         }),
     };
+    result[@intFromEnum(Feature.experimental_smctr)] = .{
+        .llvm_name = "experimental-smctr",
+        .description = "'Smctr' (Control Transfer Records Machine Level)",
+        .dependencies = featureSet(&[_]Feature{
+            .sscsrind,
+        }),
+    };
     result[@intFromEnum(Feature.experimental_smmpm)] = .{
         .llvm_name = "experimental-smmpm",
         .description = "'Smmpm' (Machine-level Pointer Masking for M-mode)",
@@ -532,6 +543,13 @@ pub const all_features = blk: {
         .description = "'Smnpm' (Machine-level Pointer Masking for next lower privilege mode)",
         .dependencies = featureSet(&[_]Feature{}),
     };
+    result[@intFromEnum(Feature.experimental_ssctr)] = .{
+        .llvm_name = "experimental-ssctr",
+        .description = "'Ssctr' (Control Transfer Records Supervisor Level)",
+        .dependencies = featureSet(&[_]Feature{
+            .sscsrind,
+        }),
+    };
     result[@intFromEnum(Feature.experimental_ssnpm)] = .{
         .llvm_name = "experimental-ssnpm",
         .description = "'Ssnpm' (Supervisor-level Pointer Masking for next lower privilege mode)",
@@ -540,11 +558,6 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.experimental_sspm)] = .{
         .llvm_name = "experimental-sspm",
         .description = "'Sspm' (Indicates Supervisor-mode Pointer Masking)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.experimental_ssqosid)] = .{
-        .llvm_name = "experimental-ssqosid",
-        .description = "'Ssqosid' (Quality-of-Service (QoS) Identifiers)",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.experimental_supm)] = .{
@@ -575,6 +588,18 @@ pub const all_features = blk: {
         .dependencies = featureSet(&[_]Feature{
             .zicsr,
             .zimop,
+        }),
+    };
+    result[@intFromEnum(Feature.experimental_zvbc32e)] = .{
+        .llvm_name = "experimental-zvbc32e",
+        .description = "'Zvbc32e' (Vector Carryless Multiplication with 32-bits elements)",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
+    result[@intFromEnum(Feature.experimental_zvkgs)] = .{
+        .llvm_name = "experimental-zvkgs",
+        .description = "'Zvkgs' (Vector-Scalar GCM instructions for Cryptography)",
+        .dependencies = featureSet(&[_]Feature{
+            .zvkg,
         }),
     };
     result[@intFromEnum(Feature.f)] = .{
@@ -1039,6 +1064,11 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.sscsrind)] = .{
         .llvm_name = "sscsrind",
         .description = "'Sscsrind' (Indirect CSR Access Supervisor Level)",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
+    result[@intFromEnum(Feature.ssqosid)] = .{
+        .llvm_name = "ssqosid",
+        .description = "'Ssqosid' (Quality-of-Service (QoS) Identifiers)",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.ssstateen)] = .{
@@ -1773,9 +1803,7 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.zvknhb)] = .{
         .llvm_name = "zvknhb",
         .description = "'Zvknhb' (Vector SHA-2 (SHA-256 and SHA-512))",
-        .dependencies = featureSet(&[_]Feature{
-            .zve64x,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.zvks)] = .{
         .llvm_name = "zvks",
@@ -1979,6 +2007,25 @@ pub const cpu = struct {
             .zifencei,
         }),
     };
+    pub const rp2350_hazard3 = CpuModel{
+        .name = "rp2350_hazard3",
+        .llvm_name = "rp2350-hazard3",
+        .features = featureSet(&[_]Feature{
+            .@"32bit",
+            .a,
+            .c,
+            .i,
+            .m,
+            .zba,
+            .zbb,
+            .zbkb,
+            .zbs,
+            .zcb,
+            .zcmp,
+            .zicsr,
+            .zifencei,
+        }),
+    };
     pub const sifive_7_series = CpuModel{
         .name = "sifive_7_series",
         .llvm_name = "sifive-7-series",
@@ -2098,10 +2145,58 @@ pub const cpu = struct {
             .ziccif,
             .zicclsm,
             .ziccrse,
+            .zicntr,
             .zifencei,
             .zihintntl,
             .zihintpause,
             .zihpm,
+            .zkt,
+        }),
+    };
+    pub const sifive_p470 = CpuModel{
+        .name = "sifive_p470",
+        .llvm_name = "sifive-p470",
+        .features = featureSet(&[_]Feature{
+            .@"64bit",
+            .a,
+            .auipc_addi_fusion,
+            .c,
+            .conditional_cmv_fusion,
+            .i,
+            .lui_addi_fusion,
+            .m,
+            .no_default_unroll,
+            .no_sink_splat_operands,
+            .unaligned_scalar_mem,
+            .unaligned_vector_mem,
+            .use_postra_scheduler,
+            .v,
+            .xsifivecdiscarddlone,
+            .xsifivecflushdlone,
+            .za64rs,
+            .zba,
+            .zbb,
+            .zbs,
+            .zfhmin,
+            .zic64b,
+            .zicbom,
+            .zicbop,
+            .zicboz,
+            .ziccamoa,
+            .ziccif,
+            .zicclsm,
+            .ziccrse,
+            .zicntr,
+            .zifencei,
+            .zihintntl,
+            .zihintpause,
+            .zihpm,
+            .zkt,
+            .zvbb,
+            .zvknc,
+            .zvkng,
+            .zvksc,
+            .zvksg,
         }),
     };
     pub const sifive_p670 = CpuModel{
@@ -2135,10 +2230,12 @@ pub const cpu = struct {
             .ziccif,
             .zicclsm,
             .ziccrse,
+            .zicntr,
             .zifencei,
             .zihintntl,
             .zihintpause,
             .zihpm,
+            .zkt,
             .zvbb,
             .zvknc,
             .zvkng,
@@ -2353,6 +2450,65 @@ pub const cpu = struct {
             .no_default_unroll,
             .use_postra_scheduler,
             .zicsr,
+            .zifencei,
+        }),
+    };
+    pub const syntacore_scr4_rv32 = CpuModel{
+        .name = "syntacore_scr4_rv32",
+        .llvm_name = "syntacore-scr4-rv32",
+        .features = featureSet(&[_]Feature{
+            .@"32bit",
+            .c,
+            .d,
+            .i,
+            .m,
+            .no_default_unroll,
+            .use_postra_scheduler,
+            .zifencei,
+        }),
+    };
+    pub const syntacore_scr4_rv64 = CpuModel{
+        .name = "syntacore_scr4_rv64",
+        .llvm_name = "syntacore-scr4-rv64",
+        .features = featureSet(&[_]Feature{
+            .@"64bit",
+            .a,
+            .c,
+            .d,
+            .i,
+            .m,
+            .no_default_unroll,
+            .use_postra_scheduler,
+            .zifencei,
+        }),
+    };
+    pub const syntacore_scr5_rv32 = CpuModel{
+        .name = "syntacore_scr5_rv32",
+        .llvm_name = "syntacore-scr5-rv32",
+        .features = featureSet(&[_]Feature{
+            .@"32bit",
+            .a,
+            .c,
+            .d,
+            .i,
+            .m,
+            .no_default_unroll,
+            .use_postra_scheduler,
+            .zifencei,
+        }),
+    };
+    pub const syntacore_scr5_rv64 = CpuModel{
+        .name = "syntacore_scr5_rv64",
+        .llvm_name = "syntacore-scr5-rv64",
+        .features = featureSet(&[_]Feature{
+            .@"64bit",
+            .a,
+            .c,
+            .d,
+            .i,
+            .m,
+            .no_default_unroll,
+            .use_postra_scheduler,
             .zifencei,
         }),
     };
