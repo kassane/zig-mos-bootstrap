@@ -489,10 +489,10 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   // MCObjectFileInfo needs a MCContext reference in order to initialize itself.
   std::unique_ptr<MCObjectFileInfo> MOFI(
       TheTarget->createMCObjectFileInfo(Ctx, PIC));
-  if (Opts.DarwinTargetVariantTriple)
-    MOFI->setDarwinTargetVariantTriple(*Opts.DarwinTargetVariantTriple);
-  if (!Opts.DarwinTargetVariantSDKVersion.empty())
-    MOFI->setDarwinTargetVariantSDKVersion(Opts.DarwinTargetVariantSDKVersion);
+  // if (Opts.DarwinTargetVariantTriple)
+  //   MOFI->setDarwinTargetVariantTriple(*Opts.DarwinTargetVariantTriple);
+  // if (!Opts.DarwinTargetVariantSDKVersion.empty())
+  //   MOFI->setDarwinTargetVariantSDKVersion(Opts.DarwinTargetVariantSDKVersion);
   Ctx.setObjectFileInfo(MOFI.get());
 
   if (Opts.GenDwarfForAssembly)
