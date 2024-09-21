@@ -197,8 +197,12 @@ $ZIG build \
   --search-prefix "$ROOTDIR/out/$TARGET-$MCPU" \
   -Dflat \
   -Dstatic-llvm \
-  -Doptimize=ReleaseFast \
+  -Doptimize=ReleaseSafe \
   -Dllvm-has-mos \
+  -Dno-langref \
+  -Dskip-release \
+  -Dskip-debug \
+  -Dskip-non-native \
   -Dstrip \
   -Dtarget="$TARGET" \
   -Dcpu="$MCPU" \
