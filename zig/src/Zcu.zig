@@ -3011,7 +3011,6 @@ pub fn atomicPtrAlignment(
         .wasm32,
         .csky,
         .spirv32,
-        .dxil,
         .loongarch32,
         .xtensa,
         => 32,
