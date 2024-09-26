@@ -51,9 +51,7 @@ _LIBCPP_WEAK string_view __libcpp_tzdb_directory() {
 #if defined(__linux__)
   return "/usr/share/zoneinfo/";
 #else
-// Zig patch: change this compilation error into a runtime crash.
-//#  error "unknown path to the IANA Time Zone Database"
-  abort();
+#  error "unknown path to the IANA Time Zone Database"
 #endif
 }
 

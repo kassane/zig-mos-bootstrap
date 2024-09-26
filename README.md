@@ -19,7 +19,7 @@ This project owes its existence to the invaluable contributions of several indiv
 This repository copies sources from upstream. Patches listed below. Use git
 to find and inspect the patch diffs.
 
- * LLVM-mos (commit d9d6b939ed5e8a1d0976ca69984980e1032b9461)
+ * LLVM-MOS (LLVM 20.0.0)
  * zlib 1.3.1
  * zstd 1.5.2
  * zig 0.14.0-dev

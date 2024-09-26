@@ -50,7 +50,7 @@ cmake "$ROOTDIR/llvm" \
   -DCLANG_TOOL_C_INDEX_TEST_BUILD=OFF \
   -DCLANG_TOOL_ARCMT_TEST_BUILD=OFF \
   -DCLANG_TOOL_C_ARCMT_TEST_BUILD=OFF \
-  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS" \
+  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS;M68k" \
   -DCLANG_TOOL_LIBCLANG_BUILD=OFF
 cmake --build . --target install
 
@@ -186,7 +186,7 @@ cmake "$ROOTDIR/llvm" \
   -DCLANG_TOOL_C_ARCMT_TEST_BUILD=OFF \
   -DCLANG_TOOL_LIBCLANG_BUILD=OFF \
   -DLIBCLANG_BUILD_STATIC=ON \
-  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS" \
+  -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="MOS;M68k" \
   -DLLD_BUILD_TOOLS=OFF
 cmake --build . --target install
 
@@ -199,10 +199,7 @@ $ZIG build \
   -Dstatic-llvm \
   -Doptimize=ReleaseSafe \
   -Dllvm-has-mos \
-  -Dno-langref \
-  -Dskip-release \
-  -Dskip-debug \
-  -Dskip-non-native \
+  -Dllvm-has-m68k \
   -Dtarget="$TARGET" \
   -Dcpu="$MCPU" \
   -Dversion-string="$ZIG_VERSION"
