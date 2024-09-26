@@ -203,7 +203,6 @@ $ZIG build \
   -Dskip-release \
   -Dskip-debug \
   -Dskip-non-native \
-  -Dstrip \
   -Dtarget="$TARGET" \
   -Dcpu="$MCPU" \
   -Dversion-string="$ZIG_VERSION"
