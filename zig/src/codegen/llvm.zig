@@ -37,9 +37,19 @@ const compilerRtIntAbbrev = target_util.compilerRtIntAbbrev;
 
 const Error = error{ OutOfMemory, CodegenFail };
 
+fn subArchName(features: std.Target.Cpu.Feature.Set, arch: anytype, mappings: anytype) ?[]const u8 {
+    inline for (mappings) |mapping| {
+        if (arch.featureSetHas(features, mapping[0])) return mapping[1];
+    }
+
+    return null;
+}
+
 pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
     var llvm_triple = std.ArrayList(u8).init(allocator);
     defer llvm_triple.deinit();
+
+    const features = target.cpu.features;
 
     const llvm_arch = switch (target.cpu.arch) {
         .arm => "arm",
@@ -55,10 +65,11 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .loongarch32 => "loongarch32",
         .loongarch64 => "loongarch64",
         .m68k => "m68k",
-        .mips => "mips",
-        .mipsel => "mipsel",
-        .mips64 => "mips64",
-        .mips64el => "mips64el",
+        // MIPS sub-architectures are a bit irregular, so we handle them manually here.
+        .mips => if (std.Target.mips.featureSetHas(features, .mips32r6)) "mipsisa32r6" else "mips",
+        .mipsel => if (std.Target.mips.featureSetHas(features, .mips32r6)) "mipsisa32r6el" else "mipsel",
+        .mips64 => if (std.Target.mips.featureSetHas(features, .mips64r6)) "mipsisa64r6" else "mips64",
+        .mips64el => if (std.Target.mips.featureSetHas(features, .mips64r6)) "mipsisa64r6el" else "mips64el",
         .mos => "mos",
         .msp430 => "msp430",
         .powerpc => "powerpc",
@@ -89,9 +100,71 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
 
         .kalimba,
         .spu_2,
+        .propeller1,
+        .propeller2,
         => unreachable, // Gated by hasLlvmSupport().
+
     };
+
     try llvm_triple.appendSlice(llvm_arch);
+
+    const llvm_sub_arch: ?[]const u8 = switch (target.cpu.arch) {
+        .arm, .armeb, .thumb, .thumbeb => subArchName(features, std.Target.arm, .{
+            .{ .v4t, "v4t" },
+            .{ .v5t, "v5t" },
+            .{ .v5te, "v5te" },
+            .{ .v5tej, "v5tej" },
+            .{ .v6, "v6" },
+            .{ .v6k, "v6k" },
+            .{ .v6kz, "v6kz" },
+            .{ .v6m, "v6m" },
+            .{ .v6t2, "v6t2" },
+            // v7k and v7s imply v7a so they have to be tested first.
+            .{ .v7k, "v7k" },
+            .{ .v7s, "v7s" },
+            .{ .v7a, "v7a" },
+            .{ .v7em, "v7em" },
+            .{ .v7m, "v7m" },
+            .{ .v7r, "v7r" },
+            .{ .v7ve, "v7ve" },
+            .{ .v8a, "v8a" },
+            .{ .v8_1a, "v8.1a" },
+            .{ .v8_2a, "v8.2a" },
+            .{ .v8_3a, "v8.3a" },
+            .{ .v8_4a, "v8.4a" },
+            .{ .v8_5a, "v8.5a" },
+            .{ .v8_6a, "v8.6a" },
+            .{ .v8_7a, "v8.7a" },
+            .{ .v8_8a, "v8.8a" },
+            .{ .v8_9a, "v8.9a" },
+            .{ .v8m, "v8m.base" },
+            .{ .v8m_main, "v8m.main" },
+            .{ .v8_1m_main, "v8.1m.main" },
+            .{ .v8r, "v8r" },
+            .{ .v9a, "v9a" },
+            .{ .v9_1a, "v9.1a" },
+            .{ .v9_2a, "v9.2a" },
+            .{ .v9_3a, "v9.3a" },
+            .{ .v9_4a, "v9.4a" },
+            .{ .v9_5a, "v9.5a" },
+        }),
+        .powerpc => subArchName(features, std.Target.powerpc, .{
+            .{ .spe, "spe" },
+        }),
+        .spirv => subArchName(features, std.Target.spirv, .{
+            .{ .v1_5, "1.5" },
+        }),
+        .spirv32, .spirv64 => subArchName(features, std.Target.spirv, .{
+            .{ .v1_5, "1.5" },
+            .{ .v1_4, "1.4" },
+            .{ .v1_3, "1.3" },
+            .{ .v1_2, "1.2" },
+            .{ .v1_1, "1.1" },
+        }),
+        else => null,
+    };
+
+    if (llvm_sub_arch) |sub| try llvm_triple.appendSlice(sub);
 
     // Unlike CPU backends, GPU backends actually care about the vendor tag.
     try llvm_triple.appendSlice(switch (target.cpu.arch) {
@@ -135,7 +208,6 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .tvos => "tvos",
         .watchos => "watchos",
         .driverkit => "driverkit",
-        .shadermodel => "shadermodel",
         .visionos => "xros",
         .serenity => "serenity",
         .vulkan => "vulkan",
@@ -173,6 +245,7 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .eabi => "eabi",
         .eabihf => "eabihf",
         .android => "android",
+        .androideabi => "androideabi",
         .musl => "musl",
         .musleabi => "musleabi",
         .musleabihf => "musleabihf",
@@ -224,7 +297,6 @@ pub fn targetOs(os_tag: std.Target.Os.Tag) llvm.OSType {
         .wasi => .WASI,
         .emscripten => .Emscripten,
         .driverkit => .DriverKit,
-        .shadermodel => .ShaderModel,
         .vulkan => .Vulkan,
         .serenity => .Serenity,
         .bridgeos => .BridgeOS,
@@ -284,7 +356,7 @@ pub fn targetArch(arch_tag: std.Target.Cpu.Arch) llvm.ArchType {
         .wasm32 => .wasm32,
         .wasm64 => .wasm64,
         .ve => .ve,
-        .spu_2 => .UnknownArch,
+        .propeller1, .propeller2, .spu_2 => .UnknownArch,
     };
 }
 
@@ -3852,13 +3924,13 @@ pub const Object = struct {
 
             .undef => unreachable, // handled above
             .simple_value => |simple_value| switch (simple_value) {
-                .undefined,
-                .void,
-                .null,
-                .empty_struct,
-                .@"unreachable",
-                .generic_poison,
-                => unreachable, // non-runtime values
+                .undefined => unreachable, // non-runtime value
+                .void => unreachable, // non-runtime value
+                .null => unreachable, // non-runtime value
+                .empty_struct => unreachable, // non-runtime value
+                .@"unreachable" => unreachable, // non-runtime value
+                .generic_poison => unreachable, // non-runtime value
+
                 .false => .false,
                 .true => .true,
             },
@@ -5141,7 +5213,6 @@ pub const FuncGen = struct {
                 .float_from_int => try self.airFloatFromInt(inst),
                 .cmpxchg_weak   => try self.airCmpxchg(inst, .weak),
                 .cmpxchg_strong => try self.airCmpxchg(inst, .strong),
-                .fence          => try self.airFence(inst),
                 .atomic_rmw     => try self.airAtomicRmw(inst),
                 .atomic_load    => try self.airAtomicLoad(inst),
                 .memset         => try self.airMemset(inst, false),
@@ -9668,13 +9739,6 @@ pub const FuncGen = struct {
         return self.wip.cast(.ptrtoint, result, try o.lowerType(Type.usize), "");
     }
 
-    fn airFence(self: *FuncGen, inst: Air.Inst.Index) !Builder.Value {
-        const atomic_order = self.air.instructions.items(.data)[@intFromEnum(inst)].fence;
-        const ordering = toLlvmAtomicOrdering(atomic_order);
-        _ = try self.wip.fence(self.sync_scope, ordering);
-        return .none;
-    }
-
     fn airCmpxchg(
         self: *FuncGen,
         inst: Air.Inst.Index,
@@ -12244,6 +12308,7 @@ fn ccAbiPromoteInt(
             .sparc64,
             .powerpc64,
             .powerpc64le,
+            .s390x,
             => switch (int_info.bits) {
                 0...63 => int_info.signedness,
                 else => null,
@@ -12727,6 +12792,8 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
         // LLVM does does not have a backend for these.
         .kalimba,
         .spu_2,
+        .propeller1,
+        .propeller2,
         => unreachable,
     }
 }

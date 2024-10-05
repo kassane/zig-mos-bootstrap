@@ -2753,6 +2753,19 @@ pub const Sigaction = switch (native_os) {
             restorer: ?*const fn () callconv(.C) void = null,
             __resv: [1]c_int = .{0},
         },
+        .s390x => if (builtin.abi == .gnu) extern struct {
+            pub const handler_fn = *align(1) const fn (i32) callconv(.C) void;
+            pub const sigaction_fn = *const fn (i32, *const siginfo_t, ?*anyopaque) callconv(.C) void;
+
+            handler: extern union {
+                handler: ?handler_fn,
+                sigaction: ?sigaction_fn,
+            },
+            __glibc_reserved0: c_int = 0,
+            flags: c_uint,
+            restorer: ?*const fn () callconv(.C) void = null,
+            mask: sigset_t,
+        } else linux.Sigaction,
         else => linux.Sigaction,
     },
     .emscripten => emscripten.Sigaction,
@@ -5946,7 +5959,7 @@ pub const PR = switch (native_os) {
 };
 pub const _errno = switch (native_os) {
     .linux => switch (native_abi) {
-        .android => private.__errno,
+        .android, .androideabi => private.__errno,
         else => private.__errno_location,
     },
     .emscripten => private.__errno_location,
@@ -6389,14 +6402,14 @@ pub const Stat = switch (native_os) {
                 return self.ctim;
             }
         } else extern struct {
-            dev: dev_t,
+            dev: u32,
             __pad0: [3]u32,
             ino: ino_t,
             mode: mode_t,
             nlink: nlink_t,
             uid: uid_t,
             gid: gid_t,
-            rdev: dev_t,
+            rdev: u32,
             __pad1: [3]u32,
             size: off_t,
             atim: timespec,
@@ -6754,7 +6767,7 @@ pub const pthread_mutex_t = switch (native_os) {
                 .mips64, .powerpc64, .powerpc64le, .sparc64 => 40,
                 else => if (@sizeOf(usize) == 8) 40 else 24,
             },
-            .android => if (@sizeOf(usize) == 8) 40 else 4,
+            .android, .androideabi => if (@sizeOf(usize) == 8) 40 else 4,
             else => @compileError("unsupported ABI"),
         };
     },
@@ -6848,7 +6861,7 @@ pub const pthread_cond_t = switch (native_os) {
 
 pub const pthread_rwlock_t = switch (native_os) {
     .linux => switch (native_abi) {
-        .android => switch (@sizeOf(usize)) {
+        .android, .androideabi => switch (@sizeOf(usize)) {
             4 => extern struct {
                 data: [40]u8 align(@alignOf(usize)) = [_]u8{0} ** 40,
             },
@@ -9450,7 +9463,7 @@ pub extern "c" fn pthread_rwlock_unlock(rwl: *pthread_rwlock_t) callconv(.C) E;
 pub const pthread_t = *opaque {};
 pub const FILE = opaque {};
 
-pub extern "c" fn dlopen(path: [*:0]const u8, mode: RTLD) ?*anyopaque;
+pub extern "c" fn dlopen(path: ?[*:0]const u8, mode: RTLD) ?*anyopaque;
 pub extern "c" fn dlclose(handle: *anyopaque) c_int;
 pub extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) ?*anyopaque;
 pub extern "c" fn dlerror() ?[*:0]u8;
@@ -9506,7 +9519,7 @@ else if (native_os == .linux and builtin.target.isMusl())
 else
     private.getcontext;
 
-pub const max_align_t = if (native_abi == .msvc)
+pub const max_align_t = if (native_abi == .msvc or native_abi == .itanium)
     f64
 else if (builtin.target.isDarwin())
     c_longdouble

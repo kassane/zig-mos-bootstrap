@@ -31,7 +31,7 @@ pub fn libcNeedsLibUnwind(target: std.Target) bool {
         .wasi, // Wasm/WASI currently doesn't offer support for libunwind, so don't link it.
         => false,
 
-        .windows => target.abi != .msvc,
+        .windows => target.abi.isGnu(),
         else => true,
     };
 }
@@ -87,7 +87,7 @@ pub fn hasValgrindSupport(target: std.Target) bool {
         .aarch64_be,
         => {
             return target.os.tag == .linux or target.os.tag == .solaris or target.os.tag == .illumos or
-                (target.os.tag == .windows and target.abi != .msvc);
+                (target.os.tag == .windows and target.abi.isGnu());
         },
         else => return false,
     }
@@ -169,6 +169,8 @@ pub fn hasLlvmSupport(target: std.Target, ofmt: std.Target.ObjectFormat) bool {
         // No LLVM backend exists.
         .kalimba,
         .spu_2,
+        .propeller1,
+        .propeller2,
         => false,
     };
 }
@@ -305,20 +307,17 @@ pub fn libcFullLinkFlags(target: std.Target) []const []const u8 {
             "-lc",
             "-lnetwork",
         },
-        else => switch (target.abi) {
-            .android => &[_][]const u8{
-                "-lm",
-                "-lc",
-                "-ldl",
-            },
-            else => &[_][]const u8{
-                "-lm",
-                "-lpthread",
-                "-lc",
-                "-ldl",
-                "-lrt",
-                "-lutil",
-            },
+        else => if (target.isAndroid()) &[_][]const u8{
+            "-lm",
+            "-lc",
+            "-ldl",
+        } else &[_][]const u8{
+            "-lm",
+            "-lpthread",
+            "-lc",
+            "-ldl",
+            "-lrt",
+            "-lutil",
         },
     };
 }
@@ -585,14 +584,6 @@ pub inline fn backendSupportsFeature(backend: std.builtin.CompilerBackend, compt
             .stage2_x86_64,
             .stage2_riscv64,
             => true,
-            else => false,
-        },
-        .panic_unwrap_error => switch (backend) {
-            .stage2_c, .stage2_llvm => true,
-            else => false,
-        },
-        .safety_check_formatted => switch (backend) {
-            .stage2_c, .stage2_llvm => true,
             else => false,
         },
         .error_return_trace => switch (backend) {

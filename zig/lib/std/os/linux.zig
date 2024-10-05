@@ -904,7 +904,19 @@ pub fn mmap(address: ?[*]u8, length: usize, prot: usize, flags: MAP, fd: i32, of
             @truncate(@as(u64, @bitCast(offset)) / MMAP2_UNIT),
         );
     } else {
-        return syscall6(
+        // The s390x mmap() syscall existed before Linux supported syscalls with 5+ parameters, so
+        // it takes a single pointer to an array of arguments instead.
+        return if (native_arch == .s390x) syscall1(
+            .mmap,
+            @intFromPtr(&[_]usize{
+                @intFromPtr(address),
+                length,
+                prot,
+                @as(u32, @bitCast(flags)),
+                @bitCast(@as(isize, fd)),
+                @as(u64, @bitCast(offset)),
+            }),
+        ) else syscall6(
             .mmap,
             @intFromPtr(address),
             length,
@@ -8064,9 +8076,31 @@ pub const rtattr = extern struct {
     len: c_ushort,
 
     /// Type of option
-    type: IFLA,
+    type: extern union {
+        /// IFLA_* from linux/if_link.h
+        link: IFLA,
+        /// IFA_* from linux/if_addr.h
+        addr: IFA,
+    },
 
     pub const ALIGNTO = 4;
+};
+
+pub const IFA = enum(c_ushort) {
+    UNSPEC,
+    ADDRESS,
+    LOCAL,
+    LABEL,
+    BROADCAST,
+    ANYCAST,
+    CACHEINFO,
+    MULTICAST,
+    FLAGS,
+    RT_PRIORITY,
+    TARGET_NETNSID,
+    PROTO,
+
+    _,
 };
 
 pub const IFLA = enum(c_ushort) {
