@@ -256,6 +256,7 @@ pub fn targetTriple(allocator: Allocator, target: std.Target) ![]const u8 {
         .simulator => "simulator",
         .macabi => "macabi",
         .ohos => "ohos",
+        .ohoseabi => "ohoseabi",
     };
     try llvm_triple.appendSlice(llvm_abi);
 
@@ -6035,6 +6036,7 @@ pub const FuncGen = struct {
         const o = self.ng.object;
         const pt = o.pt;
         const zcu = pt.zcu;
+        const ip = &zcu.intern_pool;
         const scalar_ty = operand_ty.scalarType(zcu);
         const int_ty = switch (scalar_ty.zigTypeTag(zcu)) {
             .@"enum" => scalar_ty.intTagType(zcu),
@@ -6113,6 +6115,12 @@ pub const FuncGen = struct {
                 return phi.toValue();
             },
             .float => return self.buildFloatCmp(fast, op, operand_ty, .{ lhs, rhs }),
+            .@"struct" => blk: {
+                const struct_obj = ip.loadStructType(scalar_ty.toIntern());
+                assert(struct_obj.layout == .@"packed");
+                const backing_index = struct_obj.backingIntTypeUnordered(ip);
+                break :blk Type.fromInterned(backing_index);
+            },
             else => unreachable,
         };
         const is_signed = int_ty.isSignedInt(zcu);
@@ -12448,6 +12456,7 @@ fn backendSupportsF80(target: std.Target) bool {
 /// if it produces miscompilations.
 fn backendSupportsF16(target: std.Target) bool {
     return switch (target.cpu.arch) {
+        .hexagon,
         .powerpc,
         .powerpcle,
         .powerpc64,

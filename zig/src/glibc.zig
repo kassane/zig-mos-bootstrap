@@ -169,14 +169,14 @@ fn useElfInitFini(target: std.Target) bool {
     };
 }
 
-pub const CRTFile = enum {
+pub const CrtFile = enum {
     crti_o,
     crtn_o,
     scrt1_o,
     libc_nonshared_a,
 };
 
-pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: std.Progress.Node) !void {
+pub fn buildCrtFile(comp: *Compilation, crt_file: CrtFile, prog_node: std.Progress.Node) !void {
     if (!build_options.have_llvm) {
         return error.ZigCompilerNotBuiltWithLLVMExtensions;
     }
@@ -292,7 +292,8 @@ pub fn buildCRTFile(comp: *Compilation, crt_file: CRTFile, prog_node: std.Progre
                 .owner = undefined,
             };
             var files = [_]Compilation.CSourceFile{ start_o, abi_note_o, init_o };
-            return comp.build_crt_file("Scrt1", .Obj, .@"glibc Scrt1.o", prog_node, &files);
+            const basename = if (comp.config.output_mode == .Exe and !comp.config.pie) "crt1" else "Scrt1";
+            return comp.build_crt_file(basename, .Obj, .@"glibc Scrt1.o", prog_node, &files);
         },
         .libc_nonshared_a => {
             const s = path.sep_str;
@@ -845,12 +846,8 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
         stubs_asm.shrinkRetainingCapacity(0);
         try stubs_asm.appendSlice(".text\n");
 
-        var inc_i: usize = 0;
-
-        const fn_inclusions_len = mem.readInt(u16, metadata.inclusions[inc_i..][0..2], .little);
-        inc_i += 2;
-
         var sym_i: usize = 0;
+        var sym_name_buf = std.ArrayList(u8).init(arena);
         var opt_symbol_name: ?[]const u8 = null;
         var versions_buffer: [32]u8 = undefined;
         var versions_len: usize = undefined;
@@ -871,32 +868,38 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
         // twice, which causes a "duplicate symbol" assembler error.
         var versions_written = std.AutoArrayHashMap(Version, void).init(arena);
 
+        var inc_fbs = std.io.fixedBufferStream(metadata.inclusions);
+        var inc_reader = inc_fbs.reader();
+
+        const fn_inclusions_len = try inc_reader.readInt(u16, .little);
+
         while (sym_i < fn_inclusions_len) : (sym_i += 1) {
             const sym_name = opt_symbol_name orelse n: {
-                const name = mem.sliceTo(metadata.inclusions[inc_i..], 0);
-                inc_i += name.len + 1;
+                sym_name_buf.clearRetainingCapacity();
+                try inc_reader.streamUntilDelimiter(sym_name_buf.writer(), 0, null);
 
-                opt_symbol_name = name;
+                opt_symbol_name = sym_name_buf.items;
                 versions_buffer = undefined;
                 versions_len = 0;
-                break :n name;
-            };
-            const targets = mem.readInt(u32, metadata.inclusions[inc_i..][0..4], .little);
-            inc_i += 4;
 
-            const lib_index = metadata.inclusions[inc_i];
-            inc_i += 1;
-            const is_terminal = (targets & (1 << 31)) != 0;
-            if (is_terminal) opt_symbol_name = null;
+                break :n sym_name_buf.items;
+            };
+            const targets = try std.leb.readUleb128(u64, inc_reader);
+            var lib_index = try inc_reader.readByte();
+
+            const is_terminal = (lib_index & (1 << 7)) != 0;
+            if (is_terminal) {
+                lib_index &= ~@as(u8, 1 << 7);
+                opt_symbol_name = null;
+            }
 
             // Test whether the inclusion applies to our current library and target.
             const ok_lib_and_target =
                 (lib_index == lib_i) and
-                ((targets & (@as(u32, 1) << @as(u5, @intCast(target_targ_index)))) != 0);
+                ((targets & (@as(u64, 1) << @as(u6, @intCast(target_targ_index)))) != 0);
 
             while (true) {
-                const byte = metadata.inclusions[inc_i];
-                inc_i += 1;
+                const byte = try inc_reader.readByte();
                 const last = (byte & 0b1000_0000) != 0;
                 const ver_i = @as(u7, @truncate(byte));
                 if (ok_lib_and_target and ver_i <= target_ver_index) {
@@ -932,10 +935,11 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                 var ver_buf_i: u8 = 0;
                 while (ver_buf_i < versions_len) : (ver_buf_i += 1) {
                     // Example:
+                    // .balign 4
                     // .globl _Exit_2_2_5
                     // .type _Exit_2_2_5, %function;
                     // .symver _Exit_2_2_5, _Exit@@GLIBC_2.2.5
-                    // _Exit_2_2_5:
+                    // _Exit_2_2_5: .long 0
                     const ver_index = versions_buffer[ver_buf_i];
                     const ver = metadata.all_versions[ver_index];
 
@@ -954,12 +958,14 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                                 .{ sym_name, ver.major, ver.minor },
                             );
                         try stubs_asm.writer().print(
+                            \\.balign {d}
                             \\.globl {s}
                             \\.type {s}, %function;
                             \\.symver {s}, {s}{s}GLIBC_{d}.{d}
-                            \\{s}:
+                            \\{s}: {s} 0
                             \\
                         , .{
+                            target.ptrBitWidth() / 8,
                             sym_plus_ver,
                             sym_plus_ver,
                             sym_plus_ver,
@@ -968,6 +974,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                             ver.major,
                             ver.minor,
                             sym_plus_ver,
+                            wordDirective(target),
                         });
                     } else {
                         const sym_plus_ver = if (want_default)
@@ -979,12 +986,14 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                                 .{ sym_name, ver.major, ver.minor, ver.patch },
                             );
                         try stubs_asm.writer().print(
+                            \\.balign {d}
                             \\.globl {s}
                             \\.type {s}, %function;
                             \\.symver {s}, {s}{s}GLIBC_{d}.{d}.{d}
-                            \\{s}:
+                            \\{s}: {s} 0
                             \\
                         , .{
+                            target.ptrBitWidth() / 8,
                             sym_plus_ver,
                             sym_plus_ver,
                             sym_plus_ver,
@@ -994,6 +1003,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                             ver.minor,
                             ver.patch,
                             sym_plus_ver,
+                            wordDirective(target),
                         });
                     }
                 }
@@ -1021,14 +1031,17 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
         // a strong reference.
         if (std.mem.eql(u8, lib.name, "c")) {
             try stubs_asm.writer().print(
+                \\.balign {d}
                 \\.globl _IO_stdin_used
                 \\{s} _IO_stdin_used
                 \\
-            , .{wordDirective(target)});
+            , .{
+                target.ptrBitWidth() / 8,
+                wordDirective(target),
+            });
         }
 
-        const obj_inclusions_len = mem.readInt(u16, metadata.inclusions[inc_i..][0..2], .little);
-        inc_i += 2;
+        const obj_inclusions_len = try inc_reader.readInt(u16, .little);
 
         sym_i = 0;
         opt_symbol_name = null;
@@ -1036,33 +1049,32 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
         versions_len = undefined;
         while (sym_i < obj_inclusions_len) : (sym_i += 1) {
             const sym_name = opt_symbol_name orelse n: {
-                const name = mem.sliceTo(metadata.inclusions[inc_i..], 0);
-                inc_i += name.len + 1;
+                sym_name_buf.clearRetainingCapacity();
+                try inc_reader.streamUntilDelimiter(sym_name_buf.writer(), 0, null);
 
-                opt_symbol_name = name;
+                opt_symbol_name = sym_name_buf.items;
                 versions_buffer = undefined;
                 versions_len = 0;
-                break :n name;
+
+                break :n sym_name_buf.items;
             };
-            const targets = mem.readInt(u32, metadata.inclusions[inc_i..][0..4], .little);
-            inc_i += 4;
+            const targets = try std.leb.readUleb128(u64, inc_reader);
+            const size = try std.leb.readUleb128(u16, inc_reader);
+            var lib_index = try inc_reader.readByte();
 
-            const size = mem.readInt(u16, metadata.inclusions[inc_i..][0..2], .little);
-            inc_i += 2;
-
-            const lib_index = metadata.inclusions[inc_i];
-            inc_i += 1;
-            const is_terminal = (targets & (1 << 31)) != 0;
-            if (is_terminal) opt_symbol_name = null;
+            const is_terminal = (lib_index & (1 << 7)) != 0;
+            if (is_terminal) {
+                lib_index &= ~@as(u8, 1 << 7);
+                opt_symbol_name = null;
+            }
 
             // Test whether the inclusion applies to our current library and target.
             const ok_lib_and_target =
                 (lib_index == lib_i) and
-                ((targets & (@as(u32, 1) << @as(u5, @intCast(target_targ_index)))) != 0);
+                ((targets & (@as(u64, 1) << @as(u6, @intCast(target_targ_index)))) != 0);
 
             while (true) {
-                const byte = metadata.inclusions[inc_i];
-                inc_i += 1;
+                const byte = try inc_reader.readByte();
                 const last = (byte & 0b1000_0000) != 0;
                 const ver_i = @as(u7, @truncate(byte));
                 if (ok_lib_and_target and ver_i <= target_ver_index) {
@@ -1098,11 +1110,12 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                 var ver_buf_i: u8 = 0;
                 while (ver_buf_i < versions_len) : (ver_buf_i += 1) {
                     // Example:
+                    // .balign 4
                     // .globl environ_2_2_5
                     // .type environ_2_2_5, %object;
                     // .size environ_2_2_5, 4;
                     // .symver environ_2_2_5, environ@@GLIBC_2.2.5
-                    // environ_2_2_5:
+                    // environ_2_2_5: .fill 4, 1, 0
                     const ver_index = versions_buffer[ver_buf_i];
                     const ver = metadata.all_versions[ver_index];
 
@@ -1121,13 +1134,15 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                                 .{ sym_name, ver.major, ver.minor },
                             );
                         try stubs_asm.writer().print(
+                            \\.balign {d}
                             \\.globl {s}
                             \\.type {s}, %object;
                             \\.size {s}, {d};
                             \\.symver {s}, {s}{s}GLIBC_{d}.{d}
-                            \\{s}:
+                            \\{s}: .fill {d}, 1, 0
                             \\
                         , .{
+                            target.ptrBitWidth() / 8,
                             sym_plus_ver,
                             sym_plus_ver,
                             sym_plus_ver,
@@ -1138,6 +1153,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                             ver.major,
                             ver.minor,
                             sym_plus_ver,
+                            size,
                         });
                     } else {
                         const sym_plus_ver = if (want_default)
@@ -1149,13 +1165,15 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                                 .{ sym_name, ver.major, ver.minor, ver.patch },
                             );
                         try stubs_asm.writer().print(
+                            \\.balign {d}
                             \\.globl {s}
                             \\.type {s}, %object;
                             \\.size {s}, {d};
                             \\.symver {s}, {s}{s}GLIBC_{d}.{d}.{d}
-                            \\{s}:
+                            \\{s}: .fill {d}, 1, 0
                             \\
                         , .{
+                            target.ptrBitWidth() / 8,
                             sym_plus_ver,
                             sym_plus_ver,
                             sym_plus_ver,
@@ -1167,6 +1185,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) !voi
                             ver.minor,
                             ver.patch,
                             sym_plus_ver,
+                            size,
                         });
                     }
                 }
