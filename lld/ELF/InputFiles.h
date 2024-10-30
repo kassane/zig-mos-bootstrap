@@ -45,9 +45,8 @@ class Symbol;
 std::optional<MemoryBufferRef> readFile(StringRef path);
 
 // Add symbols in File to the symbol table.
-void parseFile(InputFile *file);
-void parseFiles(const std::vector<InputFile *> &files,
-                InputFile *armCmseImpLib);
+void parseFile(Ctx &, InputFile *file);
+void parseFiles(Ctx &, const std::vector<InputFile *> &files);
 
 // The root class of input files.
 class InputFile {
@@ -112,7 +111,7 @@ public:
   }
 
   template <typename RelT> Symbol &getRelocTargetSym(const RelT &rel) const {
-    uint32_t symIndex = rel.getSymbol(config->isMips64EL);
+    uint32_t symIndex = rel.getSymbol(ctx.arg.isMips64EL);
     return getSymbol(symIndex);
   }
 
@@ -389,12 +388,12 @@ public:
 class XO65TempFile {
   SmallString<64> path;
   int fd;
-  StringRef ctx;
+  StringRef ctxStr;
   StringRef description;
   std::unique_ptr<MemoryBuffer> buffer;
 
 public:
-  XO65TempFile(StringRef prefix, StringRef suffix, StringRef ctx,
+  XO65TempFile(StringRef prefix, StringRef suffix, StringRef ctxStr,
                StringRef description);
   ~XO65TempFile();
 

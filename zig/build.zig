@@ -1272,6 +1272,7 @@ const llvm_libs = [_][]const u8{
     "LLVMAsmPrinter",
     "LLVMSelectionDAG",
     "LLVMCodeGen",
+    "LLVMCGData",
     "LLVMTarget",
     "LLVMObjCARCOpts",
     "LLVMCodeGenTypes",

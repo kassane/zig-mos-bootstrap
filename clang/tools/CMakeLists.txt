@@ -5,7 +5,6 @@ add_clang_subdirectory(driver)
 add_clang_subdirectory(apinotes-test)
 add_clang_subdirectory(clang-diff)
 add_clang_subdirectory(clang-format)
-add_clang_subdirectory(clang-format-vs)
 add_clang_subdirectory(clang-fuzzer)
 add_clang_subdirectory(clang-import-test)
 add_clang_subdirectory(clang-linker-wrapper)
@@ -20,7 +19,6 @@ endif()
 
 add_clang_subdirectory(c-index-test)
 
-add_clang_subdirectory(clang-rename)
 add_clang_subdirectory(clang-refactor)
 
 if(CLANG_ENABLE_ARCMT)
