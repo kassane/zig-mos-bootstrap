@@ -271,6 +271,7 @@ enum ZigClangTypeClass {
     ZigClangType_Elaborated,
     ZigClangType_FunctionNoProto,
     ZigClangType_FunctionProto,
+    ZigClangType_HLSLAttributedResource,
     ZigClangType_InjectedClassName,
     ZigClangType_MacroQualified,
     ZigClangType_ConstantMatrix,

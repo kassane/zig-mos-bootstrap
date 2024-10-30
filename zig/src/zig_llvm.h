@@ -182,6 +182,7 @@ enum ZigLLVM_ArchType {
     ZigLLVM_mipsel,         // MIPSEL: mipsel, mipsallegrexe, mipsr6el
     ZigLLVM_mips64,         // MIPS64: mips64, mips64r6, mipsn32, mipsn32r6
     ZigLLVM_mips64el,       // MIPS64EL: mips64el, mips64r6el, mipsn32el, mipsn32r6el
+    ZigLLVM_mos,            // MOS: mos 65xx
     ZigLLVM_msp430,         // MSP430: msp430
     ZigLLVM_ppc,            // PPC: powerpc
     ZigLLVM_ppcle,          // PPCLE: powerpc (little endian)
@@ -205,8 +206,6 @@ enum ZigLLVM_ArchType {
     ZigLLVM_xtensa,         // Tensilica: Xtensa
     ZigLLVM_nvptx,          // NVPTX: 32-bit
     ZigLLVM_nvptx64,        // NVPTX: 64-bit
-    ZigLLVM_le32,           // le32: generic little-endian 32-bit CPU (PNaCl)
-    ZigLLVM_le64,           // le64: generic little-endian 64-bit CPU (PNaCl)
     ZigLLVM_amdil,          // AMDIL
     ZigLLVM_amdil64,        // AMDIL with 64-bit pointers
     ZigLLVM_hsail,          // AMD HSAIL
@@ -315,8 +314,12 @@ enum ZigLLVM_EnvironmentType {
     ZigLLVM_EABIHF,
     ZigLLVM_Android,
     ZigLLVM_Musl,
+    ZigLLVM_MuslEABIN32,
+    ZigLLVM_MuslEABI64,
     ZigLLVM_MuslEABI,
     ZigLLVM_MuslEABIHF,
+    ZigLLVM_MuslF32,
+    ZigLLVM_MuslSF,
     ZigLLVM_MuslX32,
 
     ZigLLVM_MSVC,
