@@ -2902,7 +2902,6 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
                 .breakpoint,
                 .disable_instrumentation,
                 .set_float_mode,
-                .set_align_stack,
                 .branch_hint,
                 => break :b true,
                 else => break :b false,
@@ -9274,6 +9273,15 @@ fn builtinCall(
             });
             return rvalue(gz, ri, result, node);
         },
+        .FieldType => {
+            const ty_inst = try typeExpr(gz, scope, params[0]);
+            const name_inst = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = .slice_const_u8_type } }, params[1]);
+            const result = try gz.addPlNode(.field_type_ref, node, Zir.Inst.FieldTypeRef{
+                .container_type = ty_inst,
+                .field_name = name_inst,
+            });
+            return rvalue(gz, ri, result, node);
+        },
 
         // zig fmt: off
         .as         => return as(       gz, scope, ri, node, params[0], params[1]),
@@ -9310,14 +9318,6 @@ fn builtinCall(
             const float_mode_ty = try gz.addBuiltinValue(node, .float_mode);
             const order = try expr(gz, scope, .{ .rl = .{ .coerced_ty = float_mode_ty } }, params[0]);
             _ = try gz.addExtendedPayload(.set_float_mode, Zir.Inst.UnNode{
-                .node = gz.nodeIndexToRelative(node),
-                .operand = order,
-            });
-            return rvalue(gz, ri, .void_value, node);
-        },
-        .set_align_stack => {
-            const order = try expr(gz, scope, coerced_align_ri, params[0]);
-            _ = try gz.addExtendedPayload(.set_align_stack, Zir.Inst.UnNode{
                 .node = gz.nodeIndexToRelative(node),
                 .operand = order,
             });

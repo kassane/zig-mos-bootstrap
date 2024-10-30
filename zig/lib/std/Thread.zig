@@ -1141,8 +1141,7 @@ const LinuxThreadImpl = struct {
 
     fn getCpuCount() !usize {
         const cpu_set = try posix.sched_getaffinity(0);
-        // TODO: should not need this usize cast
-        return @as(usize, posix.CPU_COUNT(cpu_set));
+        return posix.CPU_COUNT(cpu_set);
     }
 
     thread: *ThreadCompletion,
@@ -1338,7 +1337,7 @@ const LinuxThreadImpl = struct {
                       [len] "r" (self.mapped.len),
                     : "memory"
                 ),
-                .loongarch64 => asm volatile (
+                .loongarch32, .loongarch64 => asm volatile (
                     \\ or      $a0, $zero, %[ptr]
                     \\ or      $a1, $zero, %[len]
                     \\ ori     $a7, $zero, 215     # SYS_munmap

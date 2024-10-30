@@ -522,6 +522,7 @@ set(ZIG_STAGE2_SOURCES
     src/Sema.zig
     src/Sema/bitcast.zig
     src/Sema/comptime_ptr_access.zig
+    src/ThreadSafeQueue.zig
     src/Type.zig
     src/Value.zig
     src/Zcu.zig
@@ -591,17 +592,11 @@ set(ZIG_STAGE2_SOURCES
     src/link.zig
     src/link/C.zig
     src/link/Coff.zig
-    src/link/Coff/Atom.zig
-    src/link/Coff/ImportTable.zig
-    src/link/Coff/Object.zig
-    src/link/Coff/Relocation.zig
-    src/link/Coff/lld.zig
     src/link/Dwarf.zig
     src/link/Elf.zig
     src/link/Elf/Archive.zig
     src/link/Elf/Atom.zig
     src/link/Elf/AtomList.zig
-    src/link/Elf/LdScript.zig
     src/link/Elf/LinkerDefined.zig
     src/link/Elf/Merge.zig
     src/link/Elf/Object.zig
@@ -615,6 +610,7 @@ set(ZIG_STAGE2_SOURCES
     src/link/Elf/relocatable.zig
     src/link/Elf/relocation.zig
     src/link/Elf/synthetic_sections.zig
+    src/link/LdScript.zig
     src/link/MachO.zig
     src/link/MachO/Archive.zig
     src/link/MachO/Atom.zig
@@ -832,11 +828,6 @@ else()
   else()
     set(ZIG2_LINK_FLAGS "-Wl,-z,stack-size=0x10000000")
   endif()
-endif()
-
-option(ZIG2_NO_RTLIB "Build zig2 without linking to a compiler runtime library (for `zig cc` only)" OFF)
-if(ZIG2_NO_RTLIB)
-  set(ZIG2_LINK_FLAGS "${ZIG2_LINK_FLAGS} -rtlib=none")
 endif()
 
 set(ZIG1_WASM_MODULE "${PROJECT_SOURCE_DIR}/stage1/zig1.wasm")

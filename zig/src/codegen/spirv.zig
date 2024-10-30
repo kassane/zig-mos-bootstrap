@@ -169,6 +169,13 @@ pub const Object = struct {
     ///   via the usual `intern_map` mechanism.
     ptr_types: PtrTypeMap = .{},
 
+    /// For test declarations for Vulkan, we have to add a push constant with a pointer to a
+    /// buffer that we can use. We only need to generate this once, this holds the link information
+    /// related to that.
+    error_push_constant: ?struct {
+        push_constant_ptr: SpvModule.Decl.Index,
+    } = null,
+
     pub fn init(gpa: Allocator) Object {
         return .{
             .gpa = gpa,
@@ -190,6 +197,7 @@ pub const Object = struct {
         nav_index: InternPool.Nav.Index,
         air: Air,
         liveness: Liveness,
+        do_codegen: bool,
     ) !void {
         const zcu = pt.zcu;
         const gpa = zcu.gpa;
@@ -214,7 +222,7 @@ pub const Object = struct {
         };
         defer nav_gen.deinit();
 
-        nav_gen.genNav() catch |err| switch (err) {
+        nav_gen.genNav(do_codegen) catch |err| switch (err) {
             error.CodegenFail => {
                 try zcu.failed_codegen.put(gpa, nav_index, nav_gen.error_msg.?);
             },
@@ -239,7 +247,7 @@ pub const Object = struct {
     ) !void {
         const nav = pt.zcu.funcInfo(func_index).owner_nav;
         // TODO: Separate types for generating decls and functions?
-        try self.genNav(pt, nav, air, liveness);
+        try self.genNav(pt, nav, air, liveness, true);
     }
 
     pub fn updateNav(
@@ -247,7 +255,7 @@ pub const Object = struct {
         pt: Zcu.PerThread,
         nav: InternPool.Nav.Index,
     ) !void {
-        try self.genNav(pt, nav, undefined, undefined);
+        try self.genNav(pt, nav, undefined, undefined, false);
     }
 
     /// Fetch or allocate a result id for nav index. This function also marks the nav as alive.
@@ -1639,13 +1647,18 @@ const NavGen = struct {
 
                     comptime assert(zig_call_abi_ver == 3);
                     switch (fn_info.cc) {
-                        .Unspecified, .Kernel, .Fragment, .Vertex, .C => {},
-                        else => unreachable, // TODO
+                        .auto,
+                        .spirv_kernel,
+                        .spirv_fragment,
+                        .spirv_vertex,
+                        .spirv_device,
+                        => {},
+                        else => unreachable,
                     }
 
-                    // TODO: Put this somewhere in Sema.zig
-                    if (fn_info.is_var_args)
-                        return self.fail("VarArgs functions are unsupported for SPIR-V", .{});
+                    // Guaranteed by callConvSupportsVarArgs, there are nog SPIR-V CCs which support
+                    // varargs.
+                    assert(!fn_info.is_var_args);
 
                     // Note: Logic is different from functionType().
                     const param_ty_ids = try self.gpa.alloc(IdRef, fn_info.param_types.len);
@@ -1837,11 +1850,16 @@ const NavGen = struct {
         return switch (as) {
             .generic => switch (target.os.tag) {
                 .vulkan => .Private,
-                else => .Generic,
+                .opencl => .Generic,
+                else => unreachable,
             },
             .shared => .Workgroup,
             .local => .Private,
-            .global => .CrossWorkgroup,
+            .global => switch (target.os.tag) {
+                .opencl => .CrossWorkgroup,
+                .vulkan => .PhysicalStorageBuffer,
+                else => unreachable,
+            },
             .constant => .UniformConstant,
             .input => .Input,
             .output => .Output,
@@ -2897,30 +2915,118 @@ const NavGen = struct {
             .flags = .{ .address_space = .global },
         });
         const ptr_anyerror_ty_id = try self.resolveType(ptr_anyerror_ty, .direct);
-        const kernel_proto_ty_id = try self.functionType(Type.void, &.{ptr_anyerror_ty});
-
-        const test_id = self.spv.declPtr(spv_test_decl_index).result_id;
 
         const spv_decl_index = try self.spv.allocDecl(.func);
         const kernel_id = self.spv.declPtr(spv_decl_index).result_id;
-
-        const error_id = self.spv.allocId();
-        const p_error_id = self.spv.allocId();
+        // for some reason we don't need to decorate the push constant here...
+        try self.spv.declareDeclDeps(spv_decl_index, &.{spv_test_decl_index});
 
         const section = &self.spv.sections.functions;
-        try section.emit(self.spv.gpa, .OpFunction, .{
-            .id_result_type = try self.resolveType(Type.void, .direct),
-            .id_result = kernel_id,
-            .function_control = .{},
-            .function_type = kernel_proto_ty_id,
-        });
-        try section.emit(self.spv.gpa, .OpFunctionParameter, .{
-            .id_result_type = ptr_anyerror_ty_id,
-            .id_result = p_error_id,
-        });
-        try section.emit(self.spv.gpa, .OpLabel, .{
-            .id_result = self.spv.allocId(),
-        });
+
+        const target = self.getTarget();
+
+        const p_error_id = self.spv.allocId();
+        switch (target.os.tag) {
+            .opencl => {
+                const kernel_proto_ty_id = try self.functionType(Type.void, &.{ptr_anyerror_ty});
+
+                try section.emit(self.spv.gpa, .OpFunction, .{
+                    .id_result_type = try self.resolveType(Type.void, .direct),
+                    .id_result = kernel_id,
+                    .function_control = .{},
+                    .function_type = kernel_proto_ty_id,
+                });
+
+                try section.emit(self.spv.gpa, .OpFunctionParameter, .{
+                    .id_result_type = ptr_anyerror_ty_id,
+                    .id_result = p_error_id,
+                });
+
+                try section.emit(self.spv.gpa, .OpLabel, .{
+                    .id_result = self.spv.allocId(),
+                });
+            },
+            .vulkan => {
+                const ptr_ptr_anyerror_ty_id = self.spv.allocId();
+                try self.spv.sections.types_globals_constants.emit(self.spv.gpa, .OpTypePointer, .{
+                    .id_result = ptr_ptr_anyerror_ty_id,
+                    .storage_class = .PushConstant,
+                    .type = ptr_anyerror_ty_id,
+                });
+
+                if (self.object.error_push_constant == null) {
+                    const spv_err_decl_index = try self.spv.allocDecl(.global);
+                    try self.spv.declareDeclDeps(spv_err_decl_index, &.{});
+
+                    const push_constant_struct_ty_id = try self.spv.structType(
+                        &.{ptr_anyerror_ty_id},
+                        &.{"error_out_ptr"},
+                    );
+                    try self.spv.decorate(push_constant_struct_ty_id, .Block);
+                    try self.spv.decorateMember(push_constant_struct_ty_id, 0, .{ .Offset = .{ .byte_offset = 0 } });
+
+                    const ptr_push_constant_struct_ty_id = self.spv.allocId();
+                    try self.spv.sections.types_globals_constants.emit(self.spv.gpa, .OpTypePointer, .{
+                        .id_result = ptr_push_constant_struct_ty_id,
+                        .storage_class = .PushConstant,
+                        .type = push_constant_struct_ty_id,
+                    });
+
+                    try self.spv.sections.types_globals_constants.emit(self.spv.gpa, .OpVariable, .{
+                        .id_result_type = ptr_push_constant_struct_ty_id,
+                        .id_result = self.spv.declPtr(spv_err_decl_index).result_id,
+                        .storage_class = .PushConstant,
+                    });
+
+                    self.object.error_push_constant = .{
+                        .push_constant_ptr = spv_err_decl_index,
+                    };
+                }
+
+                try self.spv.sections.execution_modes.emit(self.spv.gpa, .OpExecutionMode, .{
+                    .entry_point = kernel_id,
+                    .mode = .{ .LocalSize = .{
+                        .x_size = 1,
+                        .y_size = 1,
+                        .z_size = 1,
+                    } },
+                });
+
+                const kernel_proto_ty_id = try self.functionType(Type.void, &.{});
+                try section.emit(self.spv.gpa, .OpFunction, .{
+                    .id_result_type = try self.resolveType(Type.void, .direct),
+                    .id_result = kernel_id,
+                    .function_control = .{},
+                    .function_type = kernel_proto_ty_id,
+                });
+                try section.emit(self.spv.gpa, .OpLabel, .{
+                    .id_result = self.spv.allocId(),
+                });
+
+                const spv_err_decl_index = self.object.error_push_constant.?.push_constant_ptr;
+                const push_constant_id = self.spv.declPtr(spv_err_decl_index).result_id;
+
+                const zero_id = try self.constInt(Type.u32, 0, .direct);
+                // We cannot use OpInBoundsAccessChain to dereference cross-storage class, so we have to use
+                // a load.
+                const tmp = self.spv.allocId();
+                try section.emit(self.spv.gpa, .OpInBoundsAccessChain, .{
+                    .id_result_type = ptr_ptr_anyerror_ty_id,
+                    .id_result = tmp,
+                    .base = push_constant_id,
+                    .indexes = &.{zero_id},
+                });
+                try section.emit(self.spv.gpa, .OpLoad, .{
+                    .id_result_type = ptr_anyerror_ty_id,
+                    .id_result = p_error_id,
+                    .pointer = tmp,
+                });
+            },
+            else => unreachable,
+        }
+
+        const test_id = self.spv.declPtr(spv_test_decl_index).result_id;
+        const error_id = self.spv.allocId();
         try section.emit(self.spv.gpa, .OpFunctionCall, .{
             .id_result_type = anyerror_ty_id,
             .id_result = error_id,
@@ -2930,29 +3036,43 @@ const NavGen = struct {
         try section.emit(self.spv.gpa, .OpStore, .{
             .pointer = p_error_id,
             .object = error_id,
+            .memory_access = .{
+                .Aligned = .{ .literal_integer = @sizeOf(u16) },
+            },
         });
         try section.emit(self.spv.gpa, .OpReturn, {});
         try section.emit(self.spv.gpa, .OpFunctionEnd, {});
-
-        try self.spv.declareDeclDeps(spv_decl_index, &.{spv_test_decl_index});
 
         // Just generate a quick other name because the intel runtime crashes when the entry-
         // point name is the same as a different OpName.
         const test_name = try std.fmt.allocPrint(self.gpa, "test {s}", .{name});
         defer self.gpa.free(test_name);
-        try self.spv.declareEntryPoint(spv_decl_index, test_name, .Kernel);
+
+        const execution_mode: spec.ExecutionModel = switch (target.os.tag) {
+            .vulkan => .GLCompute,
+            .opencl => .Kernel,
+            else => unreachable,
+        };
+
+        try self.spv.declareEntryPoint(spv_decl_index, test_name, execution_mode);
     }
 
-    fn genNav(self: *NavGen) !void {
+    fn genNav(self: *NavGen, do_codegen: bool) !void {
         const pt = self.pt;
         const zcu = pt.zcu;
         const ip = &zcu.intern_pool;
-        const spv_decl_index = try self.object.resolveNav(zcu, self.owner_nav);
-        const result_id = self.spv.declPtr(spv_decl_index).result_id;
 
         const nav = ip.getNav(self.owner_nav);
         const val = zcu.navValue(self.owner_nav);
         const ty = val.typeOf(zcu);
+
+        if (!do_codegen and !ty.hasRuntimeBits(zcu)) {
+            return;
+        }
+
+        const spv_decl_index = try self.object.resolveNav(zcu, self.owner_nav);
+        const result_id = self.spv.declPtr(spv_decl_index).result_id;
+
         switch (self.spv.declPtr(spv_decl_index).kind) {
             .func => {
                 const fn_info = zcu.typeToFunc(ty).?;
@@ -2962,11 +3082,10 @@ const NavGen = struct {
                 try self.func.prologue.emit(self.spv.gpa, .OpFunction, .{
                     .id_result_type = return_ty_id,
                     .id_result = result_id,
-                    .function_control = switch (fn_info.cc) {
-                        .Inline => .{ .Inline = true },
-                        else => .{},
-                    },
                     .function_type = prototype_ty_id,
+                    // Note: the backend will never be asked to generate an inline function
+                    // (this is handled in sema), so we don't need to set function_control here.
+                    .function_control = .{},
                 });
 
                 comptime assert(zig_call_abi_ver == 3);
@@ -3343,7 +3462,9 @@ const NavGen = struct {
             .store, .store_safe => return self.airStore(inst),
 
             .br             => return self.airBr(inst),
-            .repeat         => return self.fail("TODO implement `repeat`", .{}),
+            // For now just ignore this instruction. This effectively falls back on the old implementation,
+            // this doesn't change anything for us.
+            .repeat         => return,
             .breakpoint     => return,
             .cond_br        => return self.airCondBr(inst),
             .loop           => return self.airLoop(inst),
@@ -3356,7 +3477,7 @@ const NavGen = struct {
 
             .dbg_stmt                  => return self.airDbgStmt(inst),
             .dbg_inline_block          => try self.airDbgInlineBlock(inst),
-            .dbg_var_ptr, .dbg_var_val => return self.airDbgVar(inst),
+            .dbg_var_ptr, .dbg_var_val, .dbg_arg_inline => return self.airDbgVar(inst),
 
             .unwrap_errunion_err => try self.airErrUnionErr(inst),
             .unwrap_errunion_payload => try self.airErrUnionPayload(inst),
@@ -6534,10 +6655,6 @@ const NavGen = struct {
             .function = callee_id,
             .id_ref_3 = params[0..n_params],
         });
-
-        if (return_type == .noreturn_type) {
-            try self.func.body.emit(self.spv.gpa, .OpUnreachable, {});
-        }
 
         if (self.liveness.isUnused(inst) or !Type.fromInterned(return_type).hasRuntimeBitsIgnoreComptime(zcu)) {
             return null;

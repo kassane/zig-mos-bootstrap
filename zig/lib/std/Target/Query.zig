@@ -6,7 +6,7 @@
 /// `null` means native.
 cpu_arch: ?Target.Cpu.Arch = null,
 
-cpu_model: CpuModel = CpuModel.determined_by_cpu_arch,
+cpu_model: CpuModel = CpuModel.determined_by_arch_os,
 
 /// Sparse set of CPU features to add to the set from `cpu_model`.
 cpu_features_add: Target.Cpu.Feature.Set = Target.Cpu.Feature.Set.empty,
@@ -48,7 +48,7 @@ pub const CpuModel = union(enum) {
 
     /// If CPU Architecture is native, then the CPU model will be native. Otherwise,
     /// it will be baseline.
-    determined_by_cpu_arch,
+    determined_by_arch_os,
 
     explicit: *const Target.Cpu.Model,
 
@@ -58,7 +58,7 @@ pub const CpuModel = union(enum) {
         const b_tag: Tag = b;
         if (a_tag != b_tag) return false;
         return switch (a) {
-            .native, .baseline, .determined_by_cpu_arch => true,
+            .native, .baseline, .determined_by_arch_os => true,
             .explicit => |a_model| a_model == b.explicit,
         };
     }
@@ -124,7 +124,7 @@ pub fn fromTarget(target: Target) Query {
 }
 
 fn updateOsVersionRange(self: *Query, os: Target.Os) void {
-    self.os_version_min, self.os_version_max = switch (os.tag.getVersionRangeTag()) {
+    self.os_version_min, self.os_version_max = switch (os.tag.versionRangeTag()) {
         .none => .{ .{ .none = {} }, .{ .none = {} } },
         .semver => .{
             .{ .semver = os.version_range.semver.min },
@@ -349,7 +349,7 @@ test parseVersion {
 
 pub fn isNativeCpu(self: Query) bool {
     return self.cpu_arch == null and
-        (self.cpu_model == .native or self.cpu_model == .determined_by_cpu_arch) and
+        (self.cpu_model == .native or self.cpu_model == .determined_by_arch_os) and
         self.cpu_features_sub.isEmpty() and self.cpu_features_add.isEmpty();
 }
 
@@ -461,7 +461,7 @@ pub fn serializeCpu(q: Query, buffer: *std.ArrayList(u8)) Allocator.Error!void {
         .baseline => {
             buffer.appendSliceAssumeCapacity("baseline");
         },
-        .determined_by_cpu_arch => {
+        .determined_by_arch_os => {
             if (q.cpu_arch == null) {
                 buffer.appendSliceAssumeCapacity("native");
             } else {
@@ -523,7 +523,7 @@ fn parseOs(result: *Query, diags: *ParseOptions.Diagnostics, text: []const u8) !
     diags.os_tag = tag;
 
     const version_text = it.rest();
-    if (version_text.len > 0) switch (tag.getVersionRangeTag()) {
+    if (version_text.len > 0) switch (tag.versionRangeTag()) {
         .none => return error.InvalidOperatingSystemVersion,
         .semver, .linux => range: {
             var range_it = mem.splitSequence(u8, version_text, "...");

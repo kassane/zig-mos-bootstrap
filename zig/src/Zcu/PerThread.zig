@@ -179,10 +179,10 @@ pub fn astGenFile(
                 .inode = header.stat_inode,
                 .mtime = header.stat_mtime,
             };
+            file.prev_status = file.status;
             file.status = .success_zir;
             log.debug("AstGen cached success: {s}", .{file.sub_file_path});
 
-            // TODO don't report compile errors until Sema @importFile
             if (file.zir.hasCompileErrors()) {
                 {
                     comp.mutex.lock();
@@ -258,6 +258,7 @@ pub fn astGenFile(
     // Any potential AST errors are converted to ZIR errors here.
     file.zir = try AstGen.generate(gpa, file.tree);
     file.zir_loaded = true;
+    file.prev_status = file.status;
     file.status = .success_zir;
     log.debug("AstGen fresh success: {s}", .{file.sub_file_path});
 
@@ -350,6 +351,9 @@ pub fn updateZirRefs(pt: Zcu.PerThread) Allocator.Error!void {
     defer cleanupUpdatedFiles(gpa, &updated_files);
     for (zcu.import_table.values()) |file_index| {
         const file = zcu.fileByIndex(file_index);
+        if (file.prev_status != file.status and file.prev_status != .never_loaded) {
+            try zcu.markDependeeOutdated(.not_marked_po, .{ .file = file_index });
+        }
         const old_zir = file.prev_zir orelse continue;
         const new_zir = file.zir;
         const gop = try updated_files.getOrPut(gpa, file_index);
@@ -551,11 +555,13 @@ pub fn ensureCauAnalyzed(pt: Zcu.PerThread, cau_index: InternPool.Cau.Index) Zcu
     const cau_outdated = zcu.outdated.swapRemove(anal_unit) or
         zcu.potentially_outdated.swapRemove(anal_unit);
 
+    const prev_failed = zcu.failed_analysis.contains(anal_unit) or zcu.transitive_failed_analysis.contains(anal_unit);
+
     if (cau_outdated) {
         _ = zcu.outdated_ready.swapRemove(anal_unit);
     } else {
         // We can trust the current information about this `Cau`.
-        if (zcu.failed_analysis.contains(anal_unit) or zcu.transitive_failed_analysis.contains(anal_unit)) {
+        if (prev_failed) {
             return error.AnalysisFail;
         }
         // If it wasn't failed and wasn't marked outdated, then either...
@@ -578,9 +584,13 @@ pub fn ensureCauAnalyzed(pt: Zcu.PerThread, cau_index: InternPool.Cau.Index) Zcu
                 // Since it does not, this must be a transitive failure.
                 try zcu.transitive_failed_analysis.put(gpa, anal_unit, {});
             }
-            // We treat errors as up-to-date, since those uses would just trigger a transitive error.
-            // The exception is types, since type declarations may require re-analysis if the type, e.g. its captures, changed.
-            const outdated = cau.owner.unwrap() == .type;
+            // We consider this `Cau` to be outdated if:
+            // * Previous analysis succeeded; in this case, we need to re-analyze dependants to ensure
+            //   they hit a transitive error here, rather than reporting a different error later (which
+            //   may now be invalid).
+            // * The `Cau` is a type; in this case, the declaration site may require re-analysis to
+            //   construct a valid type.
+            const outdated = !prev_failed or cau.owner.unwrap() == .type;
             break :res .{ .{
                 .invalidate_decl_val = outdated,
                 .invalidate_decl_ref = outdated,
@@ -597,10 +607,9 @@ pub fn ensureCauAnalyzed(pt: Zcu.PerThread, cau_index: InternPool.Cau.Index) Zcu
             );
             zcu.retryable_failures.appendAssumeCapacity(anal_unit);
             zcu.failed_analysis.putAssumeCapacityNoClobber(anal_unit, msg);
-            // We treat errors as up-to-date, since those uses would just trigger a transitive error
             break :res .{ .{
-                .invalidate_decl_val = false,
-                .invalidate_decl_ref = false,
+                .invalidate_decl_val = true,
+                .invalidate_decl_ref = true,
             }, true };
         },
     };
@@ -707,11 +716,13 @@ pub fn ensureFuncBodyAnalyzed(pt: Zcu.PerThread, maybe_coerced_func_index: Inter
     const func_outdated = zcu.outdated.swapRemove(anal_unit) or
         zcu.potentially_outdated.swapRemove(anal_unit);
 
+    const prev_failed = zcu.failed_analysis.contains(anal_unit) or zcu.transitive_failed_analysis.contains(anal_unit);
+
     if (func_outdated) {
         _ = zcu.outdated_ready.swapRemove(anal_unit);
     } else {
         // We can trust the current information about this function.
-        if (zcu.failed_analysis.contains(anal_unit) or zcu.transitive_failed_analysis.contains(anal_unit)) {
+        if (prev_failed) {
             return error.AnalysisFail;
         }
         switch (func.analysisUnordered(ip).state) {
@@ -730,7 +741,10 @@ pub fn ensureFuncBodyAnalyzed(pt: Zcu.PerThread, maybe_coerced_func_index: Inter
                 // Since it does not, this must be a transitive failure.
                 try zcu.transitive_failed_analysis.put(gpa, anal_unit, {});
             }
-            break :res .{ false, true }; // we treat errors as up-to-date IES, since those uses would just trigger a transitive error
+            // We consider the IES to be outdated if the function previously succeeded analysis; in this case,
+            // we need to re-analyze dependants to ensure they hit a transitive error here, rather than reporting
+            // a different error later (which may now be invalid).
+            break :res .{ !prev_failed, true };
         },
         error.OutOfMemory => return error.OutOfMemory, // TODO: graceful handling like `ensureCauAnalyzed`
     };
@@ -831,6 +845,7 @@ fn ensureFuncBodyAnalyzedInner(
         return .{ .ies_outdated = ies_outdated };
     }
 
+    // This job depends on any resolve_type_fully jobs queued up before it.
     try comp.queueJob(.{ .codegen_func = .{
         .func = func_index,
         .air = air,
@@ -1002,6 +1017,7 @@ fn createFileRootStruct(
     codegen_type: {
         if (zcu.comp.config.use_llvm) break :codegen_type;
         if (file.mod.strip) break :codegen_type;
+        // This job depends on any resolve_type_fully jobs queued up before it.
         try zcu.comp.queueJob(.{ .codegen_type = wip_ty.index });
     }
     zcu.setFileRootType(file_index, wip_ty.index);
@@ -1348,6 +1364,7 @@ fn semaCau(pt: Zcu.PerThread, cau_index: InternPool.Cau.Index) !SemaCauResult {
             if (file.mod.strip) break :queue_codegen;
         }
 
+        // This job depends on any resolve_type_fully jobs queued up before it.
         try zcu.comp.queueJob(.{ .codegen_nav = nav_index });
     }
 
@@ -1445,6 +1462,7 @@ pub fn importPkg(pt: Zcu.PerThread, mod: *Module) !Zcu.ImportFileResult {
         .tree = undefined,
         .zir = undefined,
         .status = .never_loaded,
+        .prev_status = .never_loaded,
         .mod = mod,
     };
 
@@ -1555,6 +1573,7 @@ pub fn importFile(
         .tree = undefined,
         .zir = undefined,
         .status = .never_loaded,
+        .prev_status = .never_loaded,
         .mod = mod,
     };
 
@@ -2074,7 +2093,7 @@ fn analyzeFnBody(pt: Zcu.PerThread, func_index: InternPool.Index) Zcu.SemaError!
         .code = zir,
         .owner = anal_unit,
         .func_index = func_index,
-        .func_is_naked = fn_ty_info.cc == .Naked,
+        .func_is_naked = fn_ty_info.cc == .naked,
         .fn_ret_ty = Type.fromInterned(fn_ty_info.return_type),
         .fn_ret_ty_ies = null,
         .branch_quota = @max(func.branchQuotaUnordered(ip), Sema.default_branch_quota),
@@ -2577,7 +2596,7 @@ pub fn populateTestFunctions(
     }
 }
 
-pub fn linkerUpdateNav(pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !void {
+pub fn linkerUpdateNav(pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) error{OutOfMemory}!void {
     const zcu = pt.zcu;
     const comp = zcu.comp;
     const ip = &zcu.intern_pool;
@@ -2747,6 +2766,7 @@ pub fn getCoerced(pt: Zcu.PerThread, val: Value, new_ty: Type) Allocator.Error!V
                 .is_const = e.is_const,
                 .is_threadlocal = e.is_threadlocal,
                 .is_weak_linkage = e.is_weak_linkage,
+                .is_dll_import = e.is_dll_import,
                 .alignment = e.alignment,
                 .@"addrspace" = e.@"addrspace",
                 .zir_index = e.zir_index,
@@ -3146,6 +3166,7 @@ pub fn navPtrType(pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) Allocator.
 pub fn getExtern(pt: Zcu.PerThread, key: InternPool.Key.Extern) Allocator.Error!InternPool.Index {
     const result = try pt.zcu.intern_pool.getExtern(pt.zcu.gpa, pt.tid, key);
     if (result.new_nav.unwrap()) |nav| {
+        // This job depends on any resolve_type_fully jobs queued up before it.
         try pt.zcu.comp.queueJob(.{ .codegen_nav = nav });
     }
     return result.index;
