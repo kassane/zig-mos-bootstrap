@@ -68,7 +68,7 @@ stable_hash llvm::stableHashValue(const MachineOperand &MO) {
     }
 
     // Register operands don't have target flags.
-    return stable_hash_combine(MO.getType(), MO.getReg(), MO.getSubReg(),
+    return stable_hash_combine(MO.getType(), MO.getReg().id(), MO.getSubReg(),
                                MO.isDef());
   case MachineOperand::MO_Immediate:
     return stable_hash_combine(MO.getType(), MO.getTargetFlags(), MO.getImm());
@@ -119,6 +119,8 @@ stable_hash llvm::stableHashValue(const MachineOperand &MO) {
   }
 
   case MachineOperand::MO_FrameIndex:
+    return stable_hash_combine(MO.getType(), MO.getTargetFlags(),
+                               MO.getIndex(), MO.getOffset());
   case MachineOperand::MO_JumpTableIndex:
     return stable_hash_combine(MO.getType(), MO.getTargetFlags(),
                                MO.getIndex());

@@ -19,6 +19,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+
 #ifndef LLVM_CODEGEN_TARGETLOWERING_H
 #define LLVM_CODEGEN_TARGETLOWERING_H
 
@@ -73,7 +74,7 @@ class FastISel;
 class FunctionLoweringInfo;
 class GlobalValue;
 class Loop;
-class GISelKnownBits;
+class GISelValueTracking;
 class IntrinsicInst;
 class IRBuilderBase;
 struct KnownBits;
@@ -94,6 +95,7 @@ class TargetRegisterClass;
 class TargetRegisterInfo;
 class TargetTransformInfo;
 class Value;
+class VPIntrinsic;
 
 namespace Sched {
 
@@ -328,9 +330,6 @@ public:
   };
   using ArgListTy = std::vector<ArgListEntry>;
 
-  virtual void markLibCallAttributes(MachineFunction *MF, unsigned CC,
-                                     ArgListTy &Args) const {};
-
   static ISD::NodeType getExtendForContent(BooleanContent Content) {
     switch (Content) {
     case UndefinedBooleanContent:
@@ -349,7 +348,7 @@ public:
   explicit TargetLoweringBase(const TargetMachine &TM);
   TargetLoweringBase(const TargetLoweringBase &) = delete;
   TargetLoweringBase &operator=(const TargetLoweringBase &) = delete;
-  virtual ~TargetLoweringBase() = default;
+  virtual ~TargetLoweringBase();
 
   /// Return true if the target support strict float operation
   bool isStrictFPEnabled() const {
@@ -415,11 +414,25 @@ public:
     return ShiftValueTy;
   }
 
+  /// Returns the type to be used for the index operand vector operations. By
+  /// default we assume it will have the same size as an address space 0
+  /// pointer.
+  virtual unsigned getVectorIdxWidth(const DataLayout &DL) const {
+    return DL.getPointerSizeInBits(0);
+  }
+
   /// Returns the type to be used for the index operand of:
   /// ISD::INSERT_VECTOR_ELT, ISD::EXTRACT_VECTOR_ELT,
   /// ISD::INSERT_SUBVECTOR, and ISD::EXTRACT_SUBVECTOR
-  virtual MVT getVectorIdxTy(const DataLayout &DL) const {
-    return getPointerTy(DL);
+  MVT getVectorIdxTy(const DataLayout &DL) const {
+    return MVT::getIntegerVT(getVectorIdxWidth(DL));
+  }
+
+  /// Returns the type to be used for the index operand of:
+  /// G_INSERT_VECTOR_ELT, G_EXTRACT_VECTOR_ELT,
+  /// G_INSERT_SUBVECTOR, and G_EXTRACT_SUBVECTOR
+  LLT getVectorIdxLLT(const DataLayout &DL) const {
+    return LLT::scalar(getVectorIdxWidth(DL));
   }
 
   /// Returns the type to be used for the EVL/AVL operand of VP nodes:
@@ -1417,6 +1430,11 @@ public:
   bool isSuitableForBitTests(unsigned NumDests, unsigned NumCmps,
                              const APInt &Low, const APInt &High,
                              const DataLayout &DL) const {
+    // If target does not have legal shift left, do not emit bit tests at all.
+    EVT PTy = getPointerTy(DL);
+    if (!isOperationLegal(ISD::SHL, PTy))
+      return false;
+
     // FIXME: I don't think NumCmps is the correct metric: a single case and a
     // range of cases both require only one branch to lower. Just looking at the
     // number of clusters and destinations should be enough to decide whether to
@@ -1638,6 +1656,24 @@ public:
            getCondCodeAction(CC, VT) == Custom;
   }
 
+  /// Return how a PARTIAL_REDUCE_U/SMLA node with Acc type AccVT and Input type
+  /// InputVT should be treated. Either it's legal, needs to be promoted to a
+  /// larger size, needs to be expanded to some other code sequence, or the
+  /// target has a custom expander for it.
+  LegalizeAction getPartialReduceMLAAction(EVT AccVT, EVT InputVT) const {
+    PartialReduceActionTypes TypePair = {AccVT.getSimpleVT().SimpleTy,
+                                         InputVT.getSimpleVT().SimpleTy};
+    auto It = PartialReduceMLAActions.find(TypePair);
+    return It != PartialReduceMLAActions.end() ? It->second : Expand;
+  }
+
+  /// Return true if a PARTIAL_REDUCE_U/SMLA node with the specified types is
+  /// legal or custom for this target.
+  bool isPartialReduceMLALegalOrCustom(EVT AccVT, EVT InputVT) const {
+    LegalizeAction Action = getPartialReduceMLAAction(AccVT, InputVT);
+    return Action == Legal || Action == Custom;
+  }
+
   /// If the action for this operation is to promote, this method returns the
   /// ValueType to promote to.
   MVT getTypeToPromoteTo(unsigned Op, MVT VT) const {
@@ -1725,7 +1761,7 @@ public:
   virtual Align getByValTypeAlignment(Type *Ty, const DataLayout &DL) const;
 
   /// Return the type of registers that this ValueType will eventually require.
-  MVT getRegisterType(MVT VT) const {
+  virtual MVT getRegisterType(MVT VT) const {
     assert((unsigned)VT.SimpleTy < std::size(RegisterTypeForVT));
     return RegisterTypeForVT[VT.SimpleTy];
   }
@@ -1789,6 +1825,12 @@ public:
     return getRegisterType(Context, VT);
   }
 
+  // Variant of the above that includes flags, particularly isPointer.
+  virtual MVT getRegisterTypeForCallingConv(LLVMContext &Context,
+      CallingConv::ID CC, EVT VT, const ISD::ArgFlagsTy& Flags) const {
+    return getRegisterTypeForCallingConv(Context, CC, VT);
+  }
+
   /// Certain targets require unusual breakdowns of certain types. For MIPS,
   /// this occurs when a vector type is used, as vector are passed through the
   /// integer register set.
@@ -1798,11 +1840,24 @@ public:
     return getNumRegisters(Context, VT);
   }
 
+  // Variant of the above that includes flags, particularly isPointer.
+  virtual unsigned getNumRegistersForCallingConv(LLVMContext &Context,
+      CallingConv::ID CC, EVT VT, const ISD::ArgFlagsTy& Flags) const {
+    return getNumRegistersForCallingConv(Context, CC, VT);
+  }
+
   /// Certain targets have context sensitive alignment requirements, where one
   /// type has the alignment requirement of another type.
   virtual Align getABIAlignmentForCallingConv(Type *ArgTy,
                                               const DataLayout &DL) const {
     return DL.getABITypeAlign(ArgTy);
+  }
+
+  /// Certain targets require unusual breakdowns of certain types for inline
+  /// assembly.
+  virtual unsigned getNumRegistersForInlineAsm(LLVMContext &Context,
+                                               EVT VT) const {
+    return getNumRegisters(Context, VT);
   }
 
   /// If true, then instruction selection should seek to shrink the FP constant
@@ -1811,12 +1866,16 @@ public:
   virtual bool ShouldShrinkFPConstant(EVT) const { return true; }
 
   /// Return true if it is profitable to reduce a load to a smaller type.
+  /// \p ByteOffset is only set if we know the pointer offset at compile time
+  /// otherwise we should assume that additional pointer math is required.
   /// Example: (i16 (trunc (i32 (load x))) -> i16 load x
-  virtual bool shouldReduceLoadWidth(SDNode *Load, ISD::LoadExtType ExtTy,
-                                     EVT NewVT) const {
+  /// Example: (i16 (trunc (srl (i32 (load x)), 16)) -> i16 load x+2
+  virtual bool shouldReduceLoadWidth(
+      SDNode *Load, ISD::LoadExtType ExtTy, EVT NewVT,
+      std::optional<unsigned> ByteOffset = std::nullopt) const {
     // By default, assume that it is cheaper to extract a subvector from a wide
     // vector load rather than creating multiple narrow vector loads.
-    if (NewVT.isVector() && !Load->hasOneUse())
+    if (NewVT.isVector() && !SDValue(Load, 0).hasOneUse())
       return false;
 
     return true;
@@ -2147,8 +2206,8 @@ public:
     return MaxDivRemBitWidthSupported;
   }
 
-  /// Returns the size in bits of the maximum larget fp convert the backend
-  /// supports. Larger operations will be expanded by ExpandLargeFPConvert.
+  /// Returns the size in bits of the maximum fp to/from int conversion the
+  /// backend supports. Larger operations will be expanded by ExpandFp.
   unsigned getMaxLargeFPConvertBitWidthSupported() const {
     return MaxLargeFPConvertBitWidthSupported;
   }
@@ -2170,6 +2229,14 @@ public:
   /// weak memory ordering. Defaults to false.
   virtual bool shouldInsertFencesForAtomic(const Instruction *I) const {
     return false;
+  }
+
+  // The memory ordering that AtomicExpandPass should assign to a atomic
+  // instruction that it has lowered by adding fences. This can be used
+  // to "fold" one of the fences into the atomic instruction.
+  virtual AtomicOrdering
+  atomicOperationOrderAfterFenceSplit(const Instruction *I) const {
+    return AtomicOrdering::Monotonic;
   }
 
   /// Whether AtomicExpandPass should automatically insert a trailing fence
@@ -2703,6 +2770,18 @@ protected:
       setCondCodeAction(CCs, VT, Action);
   }
 
+  /// Indicate how a PARTIAL_REDUCE_U/SMLA node with Acc type AccVT and Input
+  /// type InputVT should be treated by the target. Either it's legal, needs to
+  /// be promoted to a larger size, needs to be expanded to some other code
+  /// sequence, or the target has a custom expander for it.
+  void setPartialReduceMLAAction(MVT AccVT, MVT InputVT,
+                                 LegalizeAction Action) {
+    assert(AccVT.isValid() && InputVT.isValid() &&
+           "setPartialReduceMLAAction types aren't valid");
+    PartialReduceActionTypes TypePair = {AccVT.SimpleTy, InputVT.SimpleTy};
+    PartialReduceMLAActions[TypePair] = Action;
+  }
+
   /// If Opc/OrigVT is specified as being promoted, the promotion code defaults
   /// to trying a larger integer/fp until it can find one that works. If that
   /// default is insufficient, this method can be used by the target to override
@@ -2773,8 +2852,8 @@ protected:
     MaxDivRemBitWidthSupported = SizeInBits;
   }
 
-  /// Set the size in bits of the maximum fp convert the backend supports.
-  /// Larger operations will be expanded by ExpandLargeFPConvert.
+  /// Set the size in bits of the maximum fp to/from int conversion the backend
+  /// supports. Larger operations will be expanded by ExpandFp.
   void setMaxLargeFPConvertBitWidthSupported(unsigned SizeInBits) {
     MaxLargeFPConvertBitWidthSupported = SizeInBits;
   }
@@ -2815,9 +2894,11 @@ public:
   /// If ScalableOffset is zero, there is no scalable offset.
   struct AddrMode {
     GlobalValue *BaseGV = nullptr;
-    int64_t      BaseOffs = 0;
-    bool         HasBaseReg = false;
-    int64_t      Scale = 0;
+    int64_t BaseOffs = 0;
+    bool HasBaseReg = false;
+    Type *BaseType = nullptr;
+    int64_t Scale = 0;
+    Type *ScaleType = nullptr;
     int64_t ScalableOffset = 0;
     AddrMode() = default;
   };
@@ -3086,6 +3167,11 @@ public:
     return false;
   }
 
+  /// Return true if narrow types are generally cheaper than wide types.
+  virtual bool preferNarrowTypes() const {
+    return false;
+  }
+
   /// Return true if this constant should be sign extended when promoting to
   /// a larger type.
   virtual bool signExtendConstant(const ConstantInt *C) const { return false; }
@@ -3153,6 +3239,28 @@ public:
   /// \p Factor is the interleave factor.
   virtual bool lowerInterleavedStore(StoreInst *SI, ShuffleVectorInst *SVI,
                                      unsigned Factor) const {
+    return false;
+  }
+
+  /// Lower an interleaved load to target specific intrinsics. Return
+  /// true on success.
+  ///
+  /// \p Load is a vp.load instruction.
+  /// \p Mask is a mask value
+  /// \p DeinterleaveRes is a list of deinterleaved results.
+  virtual bool lowerInterleavedVPLoad(VPIntrinsic *Load, Value *Mask,
+                                      ArrayRef<Value *> DeinterleaveRes) const {
+    return false;
+  }
+
+  /// Lower an interleaved store to target specific intrinsics. Return
+  /// true on success.
+  ///
+  /// \p Store is the vp.store instruction.
+  /// \p Mask is a mask value
+  /// \p InterleaveOps is a list of values being interleaved.
+  virtual bool lowerInterleavedVPStore(VPIntrinsic *Store, Value *Mask,
+                                       ArrayRef<Value *> InterleaveOps) const {
     return false;
   }
 
@@ -3417,6 +3525,34 @@ public:
     return false;
   }
 
+  // Get the preferred opcode for FP_TO_XINT nodes.
+  // By default, this checks if the provded operation is an illegal FP_TO_UINT
+  // and if so, checks if FP_TO_SINT is legal or custom for use as a
+  // replacement. If both UINT and SINT conversions are Custom, we choose SINT
+  // by default because that's the right thing on PPC.
+  virtual unsigned getPreferredFPToIntOpcode(unsigned Op, EVT FromVT,
+                                             EVT ToVT) const {
+    if (isOperationLegal(Op, ToVT))
+      return Op;
+    switch (Op) {
+    case ISD::FP_TO_UINT:
+      if (isOperationLegalOrCustom(ISD::FP_TO_SINT, ToVT))
+        return ISD::FP_TO_SINT;
+      break;
+    case ISD::STRICT_FP_TO_UINT:
+      if (isOperationLegalOrCustom(ISD::STRICT_FP_TO_SINT, ToVT))
+        return ISD::STRICT_FP_TO_SINT;
+      break;
+    case ISD::VP_FP_TO_UINT:
+      if (isOperationLegalOrCustom(ISD::VP_FP_TO_SINT, ToVT))
+        return ISD::VP_FP_TO_SINT;
+      break;
+    default:
+      break;
+    }
+    return Op;
+  }
+
   /// Create the IR node for the given complex deinterleaving operation.
   /// If one cannot be created using all the given inputs, nullptr should be
   /// returned.
@@ -3472,6 +3608,10 @@ public:
   /// the set of reserved registers.
   /// The default implementation just freezes the set of reserved registers.
   virtual void finalizeLowering(MachineFunction &MF) const;
+
+  /// Returns true if it's profitable to allow merging store of loads when there
+  /// are functions calls between the load and the store.
+  virtual bool shouldMergeStoreOfLoadsOverCall(EVT, EVT) const { return true; }
 
   //===----------------------------------------------------------------------===//
   //  GlobalISel Hooks
@@ -3547,8 +3687,9 @@ private:
   /// Larger operations will be expanded by ExpandLargeDivRem.
   unsigned MaxDivRemBitWidthSupported;
 
-  /// Size in bits of the maximum larget fp convert size the backend
-  /// supports. Larger operations will be expanded by ExpandLargeFPConvert.
+  /// Size in bits of the maximum fp to/from int conversion size the
+  /// backend supports. Larger operations will be expanded by
+  /// ExpandFp.
   unsigned MaxLargeFPConvertBitWidthSupported;
 
   /// Size in bits of the minimum cmpxchg or ll/sc operation the
@@ -3624,6 +3765,13 @@ private:
   /// large enough to fit all of the value types. This can be done by rounding
   /// up the MVT::VALUETYPE_SIZE value to the next multiple of 8.
   uint32_t CondCodeActions[ISD::SETCC_INVALID][(MVT::VALUETYPE_SIZE + 7) / 8];
+
+  using PartialReduceActionTypes =
+      std::pair<MVT::SimpleValueType, MVT::SimpleValueType>;
+  /// For each result type and input type for the ISD::PARTIAL_REDUCE_U/SMLA
+  /// nodes, keep a LegalizeAction which indicates how instruction selection
+  /// should deal with this operation.
+  DenseMap<PartialReduceActionTypes, LegalizeAction> PartialReduceMLAActions;
 
   ValueTypeActionImpl ValueTypeActions;
 
@@ -3786,6 +3934,7 @@ public:
   TargetLowering &operator=(const TargetLowering &) = delete;
 
   explicit TargetLowering(const TargetMachine &TM);
+  ~TargetLowering() override;
 
   bool isPositionIndependent() const;
 
@@ -4107,7 +4256,7 @@ public:
   /// or one and return them in the KnownZero/KnownOne bitsets. The DemandedElts
   /// argument allows us to only collect the known bits that are shared by the
   /// requested vector elements. This is for GISel.
-  virtual void computeKnownBitsForTargetInstr(GISelKnownBits &Analysis,
+  virtual void computeKnownBitsForTargetInstr(GISelValueTracking &Analysis,
                                               Register R, KnownBits &Known,
                                               const APInt &DemandedElts,
                                               const MachineRegisterInfo &MRI,
@@ -4117,7 +4266,7 @@ public:
   /// typically be inferred from the number of low known 0 bits. However, for a
   /// pointer with a non-integral address space, the alignment value may be
   /// independent from the known low bits.
-  virtual Align computeKnownAlignForTargetInstr(GISelKnownBits &Analysis,
+  virtual Align computeKnownAlignForTargetInstr(GISelValueTracking &Analysis,
                                                 Register R,
                                                 const MachineRegisterInfo &MRI,
                                                 unsigned Depth = 0) const;
@@ -4142,11 +4291,9 @@ public:
   /// information about sign bits to GlobalISel combiners. The DemandedElts
   /// argument allows us to only collect the minimum sign bits that are shared
   /// by the requested vector elements.
-  virtual unsigned computeNumSignBitsForTargetInstr(GISelKnownBits &Analysis,
-                                                    Register R,
-                                                    const APInt &DemandedElts,
-                                                    const MachineRegisterInfo &MRI,
-                                                    unsigned Depth = 0) const;
+  virtual unsigned computeNumSignBitsForTargetInstr(
+      GISelValueTracking &Analysis, Register R, const APInt &DemandedElts,
+      const MachineRegisterInfo &MRI, unsigned Depth = 0) const;
 
   /// Attempt to simplify any target nodes based on the demanded vector
   /// elements, returning true on success. Otherwise, analyze the expression and
@@ -4207,6 +4354,7 @@ public:
   /// NaN. If \p sNaN is true, returns if \p Op is known to never be a signaling
   /// NaN.
   virtual bool isKnownNeverNaNForTargetNode(SDValue Op,
+                                            const APInt &DemandedElts,
                                             const SelectionDAG &DAG,
                                             bool SNaN = false,
                                             unsigned Depth = 0) const;
@@ -4490,7 +4638,7 @@ public:
   virtual bool checkForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
                                          const TargetRegisterInfo *TRI,
                                          const TargetInstrInfo *TII,
-                                         unsigned &PhysReg, int &Cost) const {
+                                         MCRegister &PhysReg, int &Cost) const {
     return false;
   }
 
@@ -4513,6 +4661,9 @@ public:
       SelectionDAG & /*DAG*/, SmallVectorImpl<SDValue> & /*InVals*/) const {
     llvm_unreachable("Not Implemented");
   }
+
+  virtual void markLibCallAttributes(MachineFunction *MF, unsigned CC,
+                                     ArgListTy &Args) const {}
 
   /// This structure contains the information necessary for lowering
   /// pointer-authenticating indirect calls.  It is equivalent to the "ptrauth"
@@ -4716,6 +4867,8 @@ public:
     // shouldExtendTypeInLibCall can get the original type before soften.
     ArrayRef<EVT> OpsVTBeforeSoften;
     EVT RetVTBeforeSoften;
+    ArrayRef<Type *> OpsTypeOverrides;
+
     bool IsSigned : 1;
     bool DoesNotReturn : 1;
     bool IsReturnValueUsed : 1;
@@ -4751,6 +4904,13 @@ public:
       OpsVTBeforeSoften = OpsVT;
       RetVTBeforeSoften = RetVT;
       IsSoften = Value;
+      return *this;
+    }
+
+    /// Override the argument type for an operand. Leave the type as null to use
+    /// the type from the operand's node.
+    MakeLibCallOptions &setOpsTypeOverrides(ArrayRef<Type *> OpsTypes) {
+      OpsTypeOverrides = OpsTypes;
       return *this;
     }
   };
@@ -4929,11 +5089,6 @@ public:
 
   bool verifyReturnAddressArgumentIsConstant(SDValue Op,
                                              SelectionDAG &DAG) const;
-
-#ifndef NDEBUG
-  /// Check the given SDNode.  Aborts if it is invalid.
-  virtual void verifyTargetSDNode(const SDNode *N) const {};
-#endif
 
   //===--------------------------------------------------------------------===//
   // Inline Asm Support hooks
@@ -5539,6 +5694,10 @@ public:
   /// temporarily, advance store position, before re-loading the final vector.
   SDValue expandVECTOR_COMPRESS(SDNode *Node, SelectionDAG &DAG) const;
 
+  /// Expands PARTIAL_REDUCE_S/UMLA nodes to a series of simpler operations,
+  /// consisting of zext/sext, extract_subvector, mul and add operations.
+  SDValue expandPartialReduceMLA(SDNode *Node, SelectionDAG &DAG) const;
+
   /// Legalize a SETCC or VP_SETCC with given LHS and RHS and condition code CC
   /// on the current target. A VP_SETCC will additionally be given a Mask
   /// and/or EVL not equal to SDValue().
@@ -5621,6 +5780,18 @@ public:
   // Expand vector operation by dividing it into smaller length operations and
   // joining their results. SDValue() is returned when expansion did not happen.
   SDValue expandVectorNaryOpBySplitting(SDNode *Node, SelectionDAG &DAG) const;
+
+  /// Replace an extraction of a load with a narrowed load.
+  ///
+  /// \param ResultVT type of the result extraction.
+  /// \param InVecVT type of the input vector to with bitcasts resolved.
+  /// \param EltNo index of the vector element to load.
+  /// \param OriginalLoad vector load that to be replaced.
+  /// \returns \p ResultVT Load on success SDValue() on failure.
+  SDValue scalarizeExtractedVectorLoad(EVT ResultVT, const SDLoc &DL,
+                                       EVT InVecVT, SDValue EltNo,
+                                       LoadSDNode *OriginalLoad,
+                                       SelectionDAG &DAG) const;
 
 private:
   SDValue foldSetCCWithAnd(EVT VT, SDValue N0, SDValue N1, ISD::CondCode Cond,

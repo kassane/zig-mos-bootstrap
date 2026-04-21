@@ -1,0 +1,65 @@
+# RUN: llc -run-pass=irtranslator -verify-machineinstrs -o - %s | FileCheck %s
+--- |
+  target triple = "mos"
+
+  define void @args_stack(i64 %a, i64 %b, i8 %c, i16 %d, i8* %e) {
+  ; CHECK-LABEL: name: args_stack
+  entry:
+  ; CHECK-LABEL: entry:
+    ; CHECK-NEXT: liveins: $a, $x, $rc2, $rc3, $rc4, $rc5, $rc6, $rc7, $rc8, $rc9, $rc10, $rc11, $rc12, $rc13, $rc14, $rc15
+
+    ; CHECK:      %21:_(p0) = G_FRAME_INDEX %fixed-stack.3
+    ; CHECK-NEXT: %2:_(s8) = G_LOAD %21(p0) :: (invariant load (s8) from %fixed-stack.3)
+
+    ; CHECK-NEXT: %24:_(p0) = G_FRAME_INDEX %fixed-stack.2
+    ; CHECK-NEXT: %22:_(s8) = G_LOAD %24(p0) :: (invariant load (s8) from %fixed-stack.2)
+    ; CHECK-NEXT: %25:_(p0) = G_FRAME_INDEX %fixed-stack.1
+    ; CHECK-NEXT: %23:_(s8) = G_LOAD %25(p0) :: (invariant load (s8) from %fixed-stack.1)
+    ; CHECK-NEXT: %3:_(s16) = G_MERGE_VALUES %22(s8), %23(s8)
+
+    ; CHECK-NEXT: %26:_(p0) = G_FRAME_INDEX %fixed-stack.0
+    ; CHECK-NEXT: %4:_(p0) = G_LOAD %26(p0) :: (invariant load (p0) from %fixed-stack.0, align 1)
+
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @call_args_stack(i8* %ptr) {
+    ; CHECK-LABEL: name: call_args_stack
+
+    call void @args_stack(i64 1, i64 2, i8 3, i16 4, i8* %ptr)
+
+    ; CHECK:      %0:_(p0) = COPY $rs1
+    ; CHECK-NEXT: %1:_(s64) = G_CONSTANT i64 1
+    ; CHECK-NEXT: %2:_(s64) = G_CONSTANT i64 2
+    ; CHECK-NEXT: %3:_(s8) = G_CONSTANT i8 3
+    ; CHECK-NEXT: %4:_(s16) = G_CONSTANT i16 4
+
+    ; CHECK: ADJCALLSTACKDOWN 5, 0, implicit-def $rs0, implicit $rs0
+
+    ; CHECK:      %21:_(p0) = COPY $rs0
+    ; CHECK-NEXT: %22:_(s16) = G_CONSTANT i16 0
+    ; CHECK-NEXT: %23:_(p0) = G_PTR_ADD %21, %22(s16)
+    ; CHECK-NEXT: G_STORE %3(s8), %23(p0) :: (store (s8) into stack)
+
+    ; CHECK-NEXT: %24:_(s8), %25:_(s8) = G_UNMERGE_VALUES %4(s16)
+    ; CHECK-NEXT: %26:_(s16) = G_CONSTANT i16 1
+    ; CHECK-NEXT: %27:_(p0) = G_PTR_ADD %21, %26(s16)
+    ; CHECK-NEXT: G_STORE %24(s8), %27(p0) :: (store (s8) into stack + 1)
+
+    ; CHECK-NEXT: %28:_(s16) = G_CONSTANT i16 2
+    ; CHECK-NEXT: %29:_(p0) = G_PTR_ADD %21, %28(s16)
+    ; CHECK-NEXT: G_STORE %25(s8), %29(p0) :: (store (s8) into stack + 2)
+
+    ; CHECK-NEXT: %30:_(s16) = G_CONSTANT i16 3
+    ; CHECK-NEXT: %31:_(p0) = G_PTR_ADD %21, %30(s16)
+    ; CHECK-NEXT: G_STORE %0(p0), %31(p0) :: (store (p0) into stack + 3, align 1)
+
+    ; CHECK: JSR @args_stack, mos_csr, implicit $a, implicit $x, implicit $rc2, implicit $rc3, implicit $rc4, implicit $rc5, implicit $rc6, implicit $rc7, implicit $rc8, implicit $rc9, implicit $rc10, implicit $rc11, implicit $rc12, implicit $rc13, implicit $rc14, implicit $rc15
+
+    ; CHECK-NEXT: ADJCALLSTACKUP 5, 0, implicit-def $rs0, implicit $rs0
+
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+...

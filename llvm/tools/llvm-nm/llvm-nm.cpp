@@ -1834,7 +1834,8 @@ static bool getSymbolNamesFromObject(SymbolicFile &Obj,
       auto *ELFObj = dyn_cast<ELFObjectFileBase>(&Obj);
       bool HasMappingSymbol =
           ELFObj && llvm::is_contained({ELF::EM_ARM, ELF::EM_AARCH64,
-                                        ELF::EM_CSKY, ELF::EM_RISCV},
+                                        ELF::EM_CSKY, ELF::EM_MOS,
+                                        ELF::EM_RISCV},
                                        ELFObj->getEMachine());
       if (!HasMappingSymbol && !DebugSyms &&
           (*SymFlagsOrErr & SymbolRef::SF_FormatSpecific))
@@ -2390,7 +2391,7 @@ exportSymbolNamesFromFiles(const std::vector<std::string> &InputFilenames) {
   std::vector<NMSymbol> SymbolList;
   for (const auto &FileName : InputFilenames) {
     std::vector<NMSymbol> FileSymList = dumpSymbolNamesFromFile(FileName);
-    SymbolList.insert(SymbolList.end(), FileSymList.begin(), FileSymList.end());
+    llvm::append_range(SymbolList, FileSymList);
   }
 
   // Delete symbols which should not be printed from SymolList.

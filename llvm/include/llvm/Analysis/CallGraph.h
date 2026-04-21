@@ -42,6 +42,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+
 #ifndef LLVM_ANALYSIS_CALLGRAPH_H
 #define LLVM_ANALYSIS_CALLGRAPH_H
 
@@ -84,6 +85,10 @@ class CallGraph {
   /// This node has edges to it from all functions making indirect calls
   /// or calling an external function.
   std::unique_ptr<CallGraphNode> CallsExternalNode;
+
+  /// This node has edges to if from all functions that call external NoCallback
+  /// functions. These edges are in lieu of edges to CallsExternalNode.
+  std::unique_ptr<CallGraphNode> NoCallbackNode;
 
 public:
   explicit CallGraph(Module &M);
@@ -128,10 +133,6 @@ public:
   CallGraphNode *getCallsExternalNode() const {
     return CallsExternalNode.get();
   }
-
-  /// Old node has been deleted, and New is to be used in its place, update the
-  /// ExternalCallingNode.
-  void ReplaceExternalCallEdge(CallGraphNode *Old, CallGraphNode *New);
 
   //===---------------------------------------------------------------------
   // Functions to keep a call graph up to date with a function that has been
@@ -250,18 +251,6 @@ public:
     *I = CalledFunctions.back();
     CalledFunctions.pop_back();
   }
-
-  /// Removes the edge in the node for the specified call site.
-  ///
-  /// Note that this method takes linear time, so it should be used sparingly.
-  void removeCallEdgeFor(CallBase &Call);
-
-  /// Removes all call edges from this node to the specified callee
-  /// function.
-  ///
-  /// This takes more time to execute than removeCallEdgeTo, so it should not
-  /// be used unless necessary.
-  void removeAnyCallEdgeTo(CallGraphNode *Callee);
 
   /// Removes one edge associated with a null callsite from this node to
   /// the specified callee function.

@@ -75,6 +75,9 @@ private:
   /// FirstNew - Index of the first register added to NewRegs.
   const unsigned FirstNew;
 
+  // EnableRemat - true when rematerializing is enabled.
+  bool EnableRemat = true;
+
   /// ScannedRemattable - true when remattable values have been identified.
   bool ScannedRemattable = false;
 
@@ -184,6 +187,9 @@ public:
   /// values if DefMI may be rematerializable.
   bool checkRematerializable(VNInfo *VNI, const MachineInstr *DefMI);
 
+  /// setRematEnable - Set whether rematerializing is enabled.
+  void setRematEnable(bool Enable);
+
   /// Remat - Information needed to rematerialize at a specific location.
   struct Remat {
     const VNInfo *const ParentVNI;  // parent_'s value at the remat location.
@@ -200,9 +206,7 @@ public:
 
   /// canRematerializeAt - Determine if ParentVNI can be rematerialized at
   /// UseIdx. It is assumed that parent_.getVNINfoAt(UseIdx) == ParentVNI.
-  /// When cheapAsAMove is set, only cheap remats are allowed.
-  bool canRematerializeAt(Remat &RM, VNInfo *OrigVNI, SlotIndex UseIdx,
-                          bool cheapAsAMove);
+  bool canRematerializeAt(Remat &RM, VNInfo *OrigVNI, SlotIndex UseIdx);
 
   /// rematerializeAt - Rematerialize RM.ParentVNI into DestReg by inserting an
   /// instruction into MBB before MI. The new instruction is mapped, but

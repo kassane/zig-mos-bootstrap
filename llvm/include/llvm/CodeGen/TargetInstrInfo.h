@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+
 #ifndef LLVM_CODEGEN_TARGETINSTRINFO_H
 #define LLVM_CODEGEN_TARGETINSTRINFO_H
 
@@ -31,6 +32,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/TypeSize.h"
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -293,8 +295,8 @@ public:
   /// what the load does.
   virtual Register isLoadFromStackSlot(const MachineInstr &MI,
                                        int &FrameIndex,
-                                       unsigned &MemBytes) const {
-    MemBytes = 0;
+                                       TypeSize &MemBytes) const {
+    MemBytes = TypeSize::getZero();
     return isLoadFromStackSlot(MI, FrameIndex);
   }
 
@@ -331,8 +333,8 @@ public:
   /// what the store does.
   virtual Register isStoreToStackSlot(const MachineInstr &MI,
                                       int &FrameIndex,
-                                      unsigned &MemBytes) const {
-    MemBytes = 0;
+                                      TypeSize &MemBytes) const {
+    MemBytes = TypeSize::getZero();
     return isStoreToStackSlot(MI, FrameIndex);
   }
 
@@ -508,6 +510,16 @@ public:
   virtual bool hasCommutePreference(MachineInstr &MI, bool &Commute) const {
     return false;
   }
+
+  /// If possible, converts the instruction to a simplified/canonical form.
+  /// Returns true if the instruction was modified.
+  ///
+  /// This function is only called after register allocation. The MI will be
+  /// modified in place. This is called by passes such as
+  /// MachineCopyPropagation, where their mutation of the MI operands may
+  /// expose opportunities to convert the instruction to a simpler form (e.g.
+  /// a load of 0).
+  virtual bool simplifyInstruction(MachineInstr &MI) const { return false; }
 
   /// A pair composed of a register and a sub-register index.
   /// Used to give some type checking when modeling Reg:SubReg.
@@ -1035,7 +1047,7 @@ public:
   /// marked renamable.
   virtual void copyPhysReg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI, const DebugLoc &DL,
-                           MCRegister DestReg, MCRegister SrcReg, bool KillSrc,
+                           Register DestReg, Register SrcReg, bool KillSrc,
                            bool RenamableDest = false,
                            bool RenamableSrc = false) const {
     llvm_unreachable("Target didn't implement TargetInstrInfo::copyPhysReg!");
@@ -1224,6 +1236,12 @@ public:
                                   MachineInstr &LoadMI,
                                   LiveIntervals *LIS = nullptr) const;
 
+  // If the COPY instruction in MI can be folded to a stack operation, return
+  // the register class to use.
+  virtual const TargetRegisterClass *canFoldCopy(const MachineInstr &MI,
+                                                 const TargetInstrInfo &TII,
+                                                 unsigned FoldIdx) const;
+
   /// This function defines the logic to lower COPY instruction to
   /// target specific instruction(s).
   void lowerCopy(MachineInstr *MI, const TargetRegisterInfo *TRI) const;
@@ -1275,6 +1293,41 @@ public:
     return false;
   }
 
+  /// Find chains of accumulations that can be rewritten as a tree for increased
+  /// ILP.
+  bool getAccumulatorReassociationPatterns(
+      MachineInstr &Root, SmallVectorImpl<unsigned> &Patterns) const;
+
+  /// Find the chain of accumulator instructions in \P MBB and return them in
+  /// \P Chain.
+  void getAccumulatorChain(MachineInstr *CurrentInstr,
+                           SmallVectorImpl<Register> &Chain) const;
+
+  /// Return true when \P OpCode is an instruction which performs
+  /// accumulation into one of its operand registers.
+  virtual bool isAccumulationOpcode(unsigned Opcode) const { return false; }
+
+  /// Returns an opcode which defines the accumulator used by \P Opcode.
+  virtual unsigned getAccumulationStartOpcode(unsigned Opcode) const {
+    llvm_unreachable("Function not implemented for target!");
+    return 0;
+  }
+
+  /// Returns the opcode that should be use to reduce accumulation registers.
+  virtual unsigned
+  getReduceOpcodeForAccumulator(unsigned int AccumulatorOpCode) const {
+    llvm_unreachable("Function not implemented for target!");
+    return 0;
+  }
+
+  /// Reduces branches of the accumulator tree into a single register.
+  void reduceAccumulatorTree(SmallVectorImpl<Register> &RegistersToReduce,
+                             SmallVectorImpl<MachineInstr *> &InsInstrs,
+                             MachineFunction &MF, MachineInstr &Root,
+                             MachineRegisterInfo &MRI,
+                             DenseMap<Register, unsigned> &InstrIdxForVirtReg,
+                             Register ResultReg) const;
+
   /// Return the inverse operation opcode if it exists for \P Opcode (e.g. add
   /// for sub and vice versa).
   virtual std::optional<unsigned> getInverseOpcode(unsigned Opcode) const {
@@ -1306,7 +1359,7 @@ public:
       MachineInstr &Root, unsigned Pattern,
       SmallVectorImpl<MachineInstr *> &InsInstrs,
       SmallVectorImpl<MachineInstr *> &DelInstrs,
-      DenseMap<unsigned, unsigned> &InstIdxForVirtReg) const;
+      DenseMap<Register, unsigned> &InstIdxForVirtReg) const;
 
   /// When calculate the latency of the root instruction, accumulate the
   /// latency of the sequence to the root latency.
@@ -1329,7 +1382,7 @@ public:
                       SmallVectorImpl<MachineInstr *> &InsInstrs,
                       SmallVectorImpl<MachineInstr *> &DelInstrs,
                       ArrayRef<unsigned> OperandIndices,
-                      DenseMap<unsigned, unsigned> &InstrIdxForVirtReg) const;
+                      DenseMap<Register, unsigned> &InstrIdxForVirtReg) const;
 
   /// Reassociation of some instructions requires inverse operations (e.g.
   /// (X + A) - Y => (X - Y) + A). This method returns a pair of new opcodes
@@ -1433,7 +1486,7 @@ public:
   /// a store or a load and a store into two or more instruction. If this is
   /// possible, returns true as well as the new instructions by reference.
   virtual bool
-  unfoldMemoryOperand(MachineFunction &MF, MachineInstr &MI, unsigned Reg,
+  unfoldMemoryOperand(MachineFunction &MF, MachineInstr &MI, Register Reg,
                       bool UnfoldLoad, bool UnfoldStore,
                       SmallVectorImpl<MachineInstr *> &NewMIs) const {
     return false;
@@ -1566,7 +1619,7 @@ public:
   ///   DAG->addMutation(createLoadClusterDAGMutation(DAG->TII, DAG->TRI));
   /// or
   ///   DAG->addMutation(createStoreClusterDAGMutation(DAG->TII, DAG->TRI));
-  /// to TargetPassConfig::createMachineScheduler() to have an effect.
+  /// to TargetMachine::createMachineScheduler() to have an effect.
   ///
   /// \p BaseOps1 and \p BaseOps2 are memory operands of two memory operations.
   /// \p Offset1 and \p Offset2 are the byte offsets for the memory
@@ -1755,9 +1808,7 @@ public:
   virtual MachineInstr *optimizeLoadInstr(MachineInstr &MI,
                                           const MachineRegisterInfo *MRI,
                                           Register &FoldAsLoadDefReg,
-                                          MachineInstr *&DefMI) const {
-    return nullptr;
-  }
+                                          MachineInstr *&DefMI) const;
 
   /// 'Reg' is known to be defined by a move immediate instruction,
   /// try to fold the immediate into the use instruction.
@@ -2261,6 +2312,25 @@ public:
   virtual const MachineOperand &getCalleeOperand(const MachineInstr &MI) const {
     return MI.getOperand(0);
   }
+
+  virtual bool shouldOverlapInterval(const MachineInstr &MI) const {
+    return true;
+  }
+
+  /// Returns true if the operand can have more than TiedMax tied operands, and
+  /// the logic for determining tied operands is custom.
+  virtual bool hasCustomTiedOperands(unsigned Opcode) const {
+    return false;
+  }
+
+  /// For an instruction where hasCustomTiedOperands(), implement
+  /// MachinInstr.findTiedOperandIdx().
+  virtual unsigned findCustomTiedOperandIdx(const MachineInstr &MI,
+                                            unsigned OpIdx) const {
+    llvm_unreachable("target did not implement");
+  }
+
+  virtual bool shouldRematPhysRegCopy() const { return true; }
 
   /// Return the uniformity behavior of the given instruction.
   virtual InstructionUniformity

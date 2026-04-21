@@ -141,6 +141,19 @@ def call_graph_profile_sort: JJ<"call-graph-profile-sort=">,
 def : FF<"no-call-graph-profile-sort">, Alias<call_graph_profile_sort>, AliasArgs<["none"]>,
   Flags<[HelpHidden]>;
 
+defm irpgo_profile: EEq<"irpgo-profile",
+  "Read a temporary profile file for use with --bp-startup-sort=">;
+def bp_compression_sort: JJ<"bp-compression-sort=">, MetaVarName<"[none,function,data,both]">,
+  HelpText<"Improve Lempel-Ziv compression by grouping similar sections together, resulting in a smaller compressed app size">;
+def bp_startup_sort: JJ<"bp-startup-sort=">, MetaVarName<"[none,function]">,
+  HelpText<"Utilize a temporal profile file to reduce page faults during program startup">;
+
+// Auxiliary options related to balanced partition
+defm bp_compression_sort_startup_functions: BB<"bp-compression-sort-startup-functions",
+  "When --irpgo-profile is pecified, prioritize function similarity for compression in addition to startup time", "">;
+def verbose_bp_section_orderer: FF<"verbose-bp-section-orderer">,
+  HelpText<"Print information on balanced partitioning">;
+
 // --chroot doesn't have a help text because it is an internal option.
 def chroot: Separate<["--"], "chroot">;
 
@@ -297,6 +310,8 @@ defm just_symbols: Eq<"just-symbols", "Just link symbols">;
 
 defm keep_unique: Eq<"keep-unique", "Do not fold this symbol during ICF">;
 
+defm ld65_path: Eq<"ld65-path", "Path to ld65 linker">, MetaVarName<"<path>">;
+
 def library: JoinedOrSeparate<["-"], "l">, MetaVarName<"<libname>">,
   HelpText<"Search for library <libname>">;
 def library_path: JoinedOrSeparate<["-"], "L">, MetaVarName<"<dir>">,
@@ -327,7 +342,7 @@ def noinhibit_exec: F<"noinhibit-exec">,
   HelpText<"Retain the executable output file whenever it is still usable">;
 
 def no_warn_mismatch: F<"no-warn-mismatch">,
-  HelpText<"Suppress errors for certain unknown seciton types">;
+  HelpText<"Suppress errors for certain unknown section types">;
 
 def no_nmagic: F<"no-nmagic">, MetaVarName<"<magic>">,
   HelpText<"Page align sections (default)">;
@@ -343,6 +358,9 @@ def : Flag<["-"], "w">, Alias<no_warnings>, HelpText<"Alias for --no-warnings">;
 
 def o: JoinedOrSeparate<["-"], "o">, MetaVarName<"<path>">,
   HelpText<"Path to file to write output">;
+
+defm od65_path: Eq<"od65-path", "Path to od65 object file dump utility">, MetaVarName<"<path>">;
+defm cc65_launcher: Eq<"cc65-launcher", "Test-only launcher for cc65 utilities">, Flags<[HelpHidden]>;
 
 defm oformat: EEq<"oformat", "Specify the binary format for the output object file">,
   MetaVarName<"[elf,binary]">;
@@ -418,6 +436,10 @@ defm reproduce:
 defm rosegment: BB<"rosegment",
   "Put read-only non-executable sections in their own segment (default)",
   "Do not put read-only non-executable sections in their own segment">;
+
+defm xosegment: BB<"xosegment",
+  "Put execute-only sections in their own segment",
+  "Do not put execute-only sections in their own segment (default)">;
 
 defm rpath: Eq<"rpath", "Add a DT_RUNPATH to the output">;
 
@@ -555,6 +577,12 @@ defm whole_archive: B<"whole-archive",
 
 def why_extract: JJ<"why-extract=">, HelpText<"Print to a file about why archive members are extracted">;
 
+defm why_live
+    : EEq<"why-live",
+          "Report a chain of references preventing garbage collection for "
+          "each symbol matching <glob>">,
+      MetaVarName<"<glob>">;
+
 defm wrap : Eq<"wrap", "Redirect symbol references to __wrap_symbol and "
                        "__real_symbol references to symbol">,
             MetaVarName<"<symbol>">;
@@ -565,7 +593,7 @@ def z: JoinedOrSeparate<["-"], "z">, MetaVarName<"<option>">,
 def visual_studio_diagnostics_format : FF<"vs-diagnostics">,
 HelpText<"Format diagnostics for Visual Studio compatibility">;
 
-def package_metadata: JJ<"package-metadata=">, HelpText<"Emit package metadata note">;
+def package_metadata: JJ<"package-metadata=">, HelpText<"Emit a percent-encoded string to the .note.package section">;
 
 // Aliases
 def: Separate<["-"], "dT">, Alias<default_script>, HelpText<"Alias for --default-script">;
@@ -661,7 +689,7 @@ def opt_remarks_format: Separate<["--"], "opt-remarks-format">,
   HelpText<"The format used for serializing remarks (default: YAML)">;
 def save_temps: F<"save-temps">, HelpText<"Save intermediate LTO compilation results">;
 def save_temps_eq: JJ<"save-temps=">, HelpText<"Save select intermediate LTO compilation results">,
-  Values<"resolution,preopt,promote,internalize,import,opt,precodegen,prelink,combinedindex">;
+  Values<"resolution,preopt,promote,internalize,import,opt,precodegen,prelink,combinedindex,ld65">;
 def lto_basic_block_sections: JJ<"lto-basic-block-sections=">,
   HelpText<"Enable basic block sections for LTO">;
 defm lto_basic_block_address_map: BB<"lto-basic-block-address-map",

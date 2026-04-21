@@ -81,6 +81,10 @@ static cl::opt<bool> UserSinkCommonInsts(
     "sink-common-insts", cl::Hidden, cl::init(false),
     cl::desc("Sink common instructions (default = false)"));
 
+static cl::opt<bool> UserSpeculateBlocks(
+    "speculate-blocks", cl::Hidden, cl::init(false),
+    cl::desc("Speculatively execute blocks (default = false)"));
+
 static cl::opt<bool> UserSpeculateUnpredictables(
     "speculate-unpredictables", cl::Hidden, cl::init(false),
     cl::desc("Speculate unpredictable branches (default = false)"));
@@ -335,6 +339,8 @@ static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options) {
         UserHoistLoadsStoresWithCondFaulting;
   if (UserSinkCommonInsts.getNumOccurrences())
     Options.SinkCommonInsts = UserSinkCommonInsts;
+  if (UserSpeculateBlocks.getNumOccurrences())
+    Options.SpeculateBlocks = UserSpeculateBlocks;
   if (UserSpeculateUnpredictables.getNumOccurrences())
     Options.SpeculateUnpredictables = UserSpeculateUnpredictables;
 }

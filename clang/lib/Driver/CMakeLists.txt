@@ -1,3 +1,5 @@
+# Modified by Daniel Thornburgh (mysterymath@gmail.com).
+
 set(LLVM_LINK_COMPONENTS
   BinaryFormat
   MC
@@ -35,6 +37,7 @@ add_clang_library(clangDriver
   ToolChains/Arch/LoongArch.cpp
   ToolChains/Arch/M68k.cpp
   ToolChains/Arch/Mips.cpp
+  ToolChains/Arch/MOS.cpp
   ToolChains/Arch/PPC.cpp
   ToolChains/Arch/RISCV.cpp
   ToolChains/Arch/Sparc.cpp
@@ -51,6 +54,7 @@ add_clang_library(clangDriver
   ToolChains/CrossWindows.cpp
   ToolChains/CSKYToolChain.cpp
   ToolChains/Cuda.cpp
+  ToolChains/Cygwin.cpp
   ToolChains/Darwin.cpp
   ToolChains/DragonFly.cpp
   ToolChains/Flang.cpp
@@ -67,6 +71,7 @@ add_clang_library(clangDriver
   ToolChains/Linux.cpp
   ToolChains/MipsLinux.cpp
   ToolChains/MinGW.cpp
+  ToolChains/MOSToolchain.cpp
   ToolChains/MSP430.cpp
   ToolChains/MSVC.cpp
   ToolChains/NaCl.cpp
@@ -94,8 +99,7 @@ add_clang_library(clangDriver
   DEPENDS
   ClangDriverOptions
   # These generated headers are included transitively.
-  ARMTargetParserTableGen
-  AArch64TargetParserTableGen
+  target_parser_gen
 
   LINK_LIBS
   clangBasic

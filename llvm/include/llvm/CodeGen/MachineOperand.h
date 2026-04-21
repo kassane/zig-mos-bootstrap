@@ -32,7 +32,6 @@ class MachineRegisterInfo;
 class MCCFIInstruction;
 class MDNode;
 class ModuleSlotTracker;
-class TargetIntrinsicInfo;
 class TargetRegisterInfo;
 class hash_code;
 class raw_ostream;
@@ -283,8 +282,7 @@ public:
   /// Providing a valid \p TRI and \p IntrinsicInfo results in a more
   /// target-specific printing. If \p TRI and \p IntrinsicInfo are null, the
   /// function will try to pick it up from the parent.
-  void print(raw_ostream &os, const TargetRegisterInfo *TRI = nullptr,
-             const TargetIntrinsicInfo *IntrinsicInfo = nullptr) const;
+  void print(raw_ostream &os, const TargetRegisterInfo *TRI = nullptr) const;
 
   /// More complex way of printing a MachineOperand.
   /// \param TypeToPrint specifies the generic type to be printed on uses and
@@ -310,14 +308,12 @@ public:
   void print(raw_ostream &os, ModuleSlotTracker &MST, LLT TypeToPrint,
              std::optional<unsigned> OpIdx, bool PrintDef, bool IsStandalone,
              bool ShouldPrintRegisterTies, unsigned TiedOperandIdx,
-             const TargetRegisterInfo *TRI,
-             const TargetIntrinsicInfo *IntrinsicInfo) const;
+             const TargetRegisterInfo *TRI) const;
 
   /// Same as print(os, TRI, IntrinsicInfo), but allows to specify the low-level
   /// type to be printed the same way the full version of print(...) does it.
   void print(raw_ostream &os, LLT TypeToPrint,
-             const TargetRegisterInfo *TRI = nullptr,
-             const TargetIntrinsicInfo *IntrinsicInfo = nullptr) const;
+             const TargetRegisterInfo *TRI = nullptr) const;
 
   void dump() const;
 
@@ -628,7 +624,7 @@ public:
   /// for ExternalSymbol operands.
   int64_t getOffset() const {
     assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
-            isTargetIndex() || isBlockAddress()) &&
+            isTargetIndex() || isBlockAddress() || isFI()) &&
            "Wrong MachineOperand accessor");
     return int64_t(uint64_t(Contents.OffsetedInfo.OffsetHi) << 32) |
            SmallContents.OffsetLo;
@@ -699,7 +695,7 @@ public:
 
   void setOffset(int64_t Offset) {
     assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
-            isTargetIndex() || isBlockAddress()) &&
+            isTargetIndex() || isBlockAddress() || isFI()) &&
            "Wrong MachineOperand mutator");
     SmallContents.OffsetLo = unsigned(Offset);
     Contents.OffsetedInfo.OffsetHi = int(Offset >> 32);
@@ -791,7 +787,8 @@ public:
   void ChangeToMCSymbol(MCSymbol *Sym, unsigned TargetFlags = 0);
 
   /// Replace this operand with a frame index.
-  void ChangeToFrameIndex(int Idx, unsigned TargetFlags = 0);
+  void ChangeToFrameIndex(int Idx, int64_t Offset = 0,
+                          unsigned TargetFlags = 0);
 
   /// Replace this operand with a target index.
   void ChangeToTargetIndex(unsigned Idx, int64_t Offset,
@@ -867,9 +864,10 @@ public:
     Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  static MachineOperand CreateFI(int Idx) {
+  static MachineOperand CreateFI(int Idx, int64_t Offset = 0) {
     MachineOperand Op(MachineOperand::MO_FrameIndex);
     Op.setIndex(Idx);
+    Op.setOffset(Offset);
     return Op;
   }
   static MachineOperand CreateCPI(unsigned Idx, int Offset,

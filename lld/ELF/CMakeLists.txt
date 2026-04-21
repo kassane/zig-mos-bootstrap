@@ -28,6 +28,7 @@ add_lld_library(lldELF
   Arch/LoongArch.cpp
   Arch/Mips.cpp
   Arch/MipsArchTree.cpp
+  Arch/MOS.cpp
   Arch/MSP430.cpp
   Arch/PPC.cpp
   Arch/PPC64.cpp
@@ -37,6 +38,7 @@ add_lld_library(lldELF
   Arch/X86.cpp
   Arch/X86_64.cpp
   ARMErrataFix.cpp
+  BPSectionOrderer.cpp
   CallGraphSort.cpp
   DWARF.cpp
   Driver.cpp
@@ -72,6 +74,7 @@ add_lld_library(lldELF
   Object
   Option
   Passes
+  ProfileData
   Support
   TargetParser
   TransformUtils

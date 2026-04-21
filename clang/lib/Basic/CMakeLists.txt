@@ -1,3 +1,5 @@
+# Modified by Daniel Thornburgh (mysterymath@gmail.com).
+
 set(LLVM_LINK_COMPONENTS
   Support
   TargetParser
@@ -76,6 +78,7 @@ add_clang_library(clangBasic
   MakeSupport.cpp
   Module.cpp
   ObjCRuntime.cpp
+  OffloadArch.cpp
   OpenCLOptions.cpp
   OpenMPKinds.cpp
   OperatorPrecedence.cpp
@@ -105,6 +108,7 @@ add_clang_library(clangBasic
   Targets/Lanai.cpp
   Targets/LoongArch.cpp
   Targets/M68k.cpp
+  Targets/MOS.cpp
   Targets/MSP430.cpp
   Targets/Mips.cpp
   Targets/NVPTX.cpp
@@ -133,8 +137,7 @@ add_clang_library(clangBasic
   omp_gen
   ClangDriverOptions
   # These generated headers are included transitively.
-  ARMTargetParserTableGen
-  AArch64TargetParserTableGen
+  target_parser_gen
   )
 
 target_link_libraries(clangBasic

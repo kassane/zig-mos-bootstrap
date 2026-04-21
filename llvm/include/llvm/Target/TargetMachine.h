@@ -16,9 +16,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
@@ -28,29 +28,34 @@
 #include <string>
 #include <utility>
 
+extern llvm::cl::opt<bool> NoKernelInfoEndLTO;
+
 namespace llvm {
 
 class AAManager;
 using ModulePassManager = PassManager<Module>;
 
 class Function;
+class GlobalObject;
 class GlobalValue;
 class MachineModuleInfoWrapperPass;
+struct MachineSchedContext;
 class Mangler;
 class MCAsmInfo;
 class MCContext;
 class MCInstrInfo;
 class MCRegisterInfo;
+class MCStreamer;
 class MCSubtargetInfo;
 class MCSymbol;
 class raw_pwrite_stream;
 class PassBuilder;
 class PassInstrumentationCallbacks;
 struct PerFunctionMIParsingState;
+class ScheduleDAGInstrs;
 class SMDiagnostic;
 class SMRange;
 class Target;
-class TargetIntrinsicInfo;
 class TargetIRAnalysis;
 class TargetTransformInfo;
 class TargetLoweringObjectFile;
@@ -144,6 +149,28 @@ public:
     return nullptr;
   }
 
+  /// Create an instance of ScheduleDAGInstrs to be run within the standard
+  /// MachineScheduler pass for this function and target at the current
+  /// optimization level.
+  ///
+  /// This can also be used to plug a new MachineSchedStrategy into an instance
+  /// of the standard ScheduleDAGMI:
+  ///   return new ScheduleDAGMI(C, std::make_unique<MyStrategy>(C),
+  ///   /*RemoveKillFlags=*/false)
+  ///
+  /// Return NULL to select the default (generic) machine scheduler.
+  virtual ScheduleDAGInstrs *
+  createMachineScheduler(MachineSchedContext *C) const {
+    return nullptr;
+  }
+
+  /// Similar to createMachineScheduler but used when postRA machine scheduling
+  /// is enabled.
+  virtual ScheduleDAGInstrs *
+  createPostMachineScheduler(MachineSchedContext *C) const {
+    return nullptr;
+  }
+
   /// Allocate and return a default initialized instance of the YAML
   /// representation for the MachineFunctionInfo.
   virtual yaml::MachineFunctionInfo *createDefaultFuncInfoYAML() const {
@@ -214,11 +241,6 @@ public:
   const MCRegisterInfo *getMCRegisterInfo() const { return MRI.get(); }
   const MCInstrInfo *getMCInstrInfo() const { return MII.get(); }
   const MCSubtargetInfo *getMCSubtargetInfo() const { return STI.get(); }
-
-  /// If intrinsic information is available, return it.  If not, return null.
-  virtual const TargetIntrinsicInfo *getIntrinsicInfo() const {
-    return nullptr;
-  }
 
   bool requiresStructuredCFG() const { return RequireStructuredCFG; }
   void setRequiresStructuredCFG(bool Value) { RequireStructuredCFG = Value; }
@@ -305,6 +327,14 @@ public:
     return Options.FunctionSections;
   }
 
+  virtual bool hasNoInitSection() const {
+    return false;
+  }
+
+  bool getEnableStaticDataPartitioning() const {
+    return Options.EnableStaticDataPartitioning;
+  }
+
   /// Return true if visibility attribute should not be emitted in XCOFF,
   /// corresponding to -mignore-xcoff-visibility.
   bool getIgnoreXCOFFVisibility() const {
@@ -371,6 +401,11 @@ public:
   // TODO: Populate all pass names by using <Target>PassRegistry.def.
   virtual void registerPassBuilderCallbacks(PassBuilder &) {}
 
+  /// Allow the target to register early alias analyses (AA before BasicAA) with
+  /// the AAManager for use with the new pass manager. Only affects the
+  /// "default" AAManager.
+  virtual void registerEarlyDefaultAliasAnalyses(AAManager &) {}
+
   /// Allow the target to register alias analyses with the AAManager for use
   /// with the new pass manager. Only affects the "default" AAManager.
   virtual void registerDefaultAliasAnalyses(AAManager &) {}
@@ -409,6 +444,8 @@ public:
 
   void getNameWithPrefix(SmallVectorImpl<char> &Name, const GlobalValue *GV,
                          Mangler &Mang, bool MayAlwaysUsePrivate = false) const;
+  virtual StringRef getSectionPrefix(const GlobalObject *GO) const { return {}; }
+
   MCSymbol *getSymbol(const GlobalValue *GV) const;
 
   /// The integer bit size to use for SjLj based exception handling.
@@ -425,6 +462,9 @@ public:
 
   /// Entry point for module splitting. Targets can implement custom module
   /// splitting logic, mainly used by LTO for --lto-partitions.
+  ///
+  /// On success, this guarantees that between 1 and \p NumParts modules were
+  /// created and passed to \p ModuleCallBack.
   ///
   /// \returns `true` if the module was split, `false` otherwise. When  `false`
   /// is returned, it is assumed that \p ModuleCallback has never been called
@@ -465,9 +505,7 @@ public:
 
   virtual Expected<std::unique_ptr<MCStreamer>>
   createMCStreamer(raw_pwrite_stream &Out, raw_pwrite_stream *DwoOut,
-                   CodeGenFileType FileType, MCContext &Ctx) {
-    return nullptr;
-  }
+                   CodeGenFileType FileType, MCContext &Ctx);
 
   /// True if the target uses physical regs (as nearly all targets do). False
   /// for stack machines such as WebAssembly and other virtual-register

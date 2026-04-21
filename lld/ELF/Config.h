@@ -39,6 +39,8 @@ namespace lld::elf {
 class InputFile;
 class BinaryFile;
 class BitcodeFile;
+class XO65Enclave;
+class XO65File;
 class ELFFileBase;
 class SharedFile;
 class InputSectionBase;
@@ -136,6 +138,9 @@ enum LtoKind : uint8_t {UnifiedThin, UnifiedRegular, Default};
 // For -z gcs=
 enum class GcsPolicy { Implicit, Never, Always };
 
+// For some options that resemble -z bti-report={none,warning,error}
+enum class ReportPolicy { None, Warning, Error };
+
 struct SymbolVersion {
   llvm::StringRef name;
   bool isExternCpp;
@@ -223,12 +228,15 @@ struct Config {
   llvm::StringRef thinLTOCacheDir;
   llvm::StringRef thinLTOIndexOnlyArg;
   llvm::StringRef whyExtract;
+  llvm::SmallVector<llvm::GlobPattern, 0> whyLive;
   llvm::StringRef cmseInputLib;
   llvm::StringRef cmseOutputLib;
-  StringRef zBtiReport = "none";
-  StringRef zCetReport = "none";
-  StringRef zPauthReport = "none";
-  StringRef zGcsReport = "none";
+  ReportPolicy zBtiReport = ReportPolicy::None;
+  ReportPolicy zCetReport = ReportPolicy::None;
+  ReportPolicy zPauthReport = ReportPolicy::None;
+  ReportPolicy zGcsReport = ReportPolicy::None;
+  ReportPolicy zGcsReportDynamic = ReportPolicy::None;
+  ReportPolicy zExecuteOnlyReport = ReportPolicy::None;
   bool ltoBBAddrMap;
   llvm::StringRef ltoBasicBlockSections;
   std::pair<llvm::StringRef, llvm::StringRef> thinLTOObjectSuffixReplace;
@@ -264,6 +272,12 @@ struct Config {
   bool armBe8 = false;
   BsymbolicKind bsymbolic = BsymbolicKind::None;
   CGProfileSortKind callGraphProfileSort;
+  llvm::StringRef irpgoProfilePath;
+  bool bpStartupFunctionSort = false;
+  bool bpCompressionSortStartupFunctions = false;
+  bool bpFunctionOrderForCompression = false;
+  bool bpDataOrderForCompression = false;
+  bool bpVerboseSectionOrderer = false;
   bool checkSections;
   bool checkDynamicRelocs;
   std::optional<llvm::DebugCompressionType> compressDebugSections;
@@ -292,7 +306,6 @@ struct Config {
   bool gdbIndex;
   bool gnuHash = false;
   bool gnuUnique;
-  bool hasDynSymTab;
   bool ignoreDataAddressEquality;
   bool ignoreFunctionAddressEquality;
   bool ltoCSProfileGenerate;
@@ -306,7 +319,6 @@ struct Config {
   bool mipsN32Abi = false;
   bool mmapOutputFile;
   bool nmagic;
-  bool noDynamicLinker = false;
   bool noinhibitExec;
   bool nostdlib;
   bool oFormatBinary;
@@ -331,6 +343,7 @@ struct Config {
   llvm::DenseSet<llvm::StringRef> saveTempsArgs;
   llvm::SmallVector<std::pair<llvm::GlobPattern, uint32_t>, 0> shuffleSections;
   bool singleRoRx;
+  bool singleXoRx;
   bool shared;
   bool symbolic;
   bool isStatic = false;
@@ -407,7 +420,10 @@ struct Config {
   StringRef thinLTOJobs;
   unsigned timeTraceGranularity;
   int32_t splitStackAdjustSize;
-  StringRef packageMetadata;
+  StringRef ld65Path;
+  StringRef od65Path;
+  StringRef cc65Launcher;
+  SmallVector<uint8_t, 0> packageMetadata;
 
   // The following config options do not directly correspond to any
   // particular command line options.
@@ -627,6 +643,7 @@ struct Ctx : CommonLinkerContext {
   SmallVector<BinaryFile *, 0> binaryFiles;
   SmallVector<BitcodeFile *, 0> bitcodeFiles;
   SmallVector<BitcodeFile *, 0> lazyBitcodeFiles;
+  XO65Enclave *xo65Enclave = nullptr;
   SmallVector<InputSectionBase *, 0> inputSections;
   SmallVector<EhInputSection *, 0> ehInputSections;
 
@@ -742,6 +759,14 @@ uint64_t errCount(Ctx &ctx);
 ELFSyncStream InternalErr(Ctx &ctx, const uint8_t *buf);
 
 #define CHECK2(E, S) lld::check2((E), [&] { return toStr(ctx, S); })
+
+inline DiagLevel toDiagLevel(ReportPolicy policy) {
+  if (policy == ReportPolicy::Error)
+    return DiagLevel::Err;
+  else if (policy == ReportPolicy::Warning)
+    return DiagLevel::Warn;
+  return DiagLevel::None;
+}
 
 } // namespace lld::elf
 

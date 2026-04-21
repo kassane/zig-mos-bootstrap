@@ -20,6 +20,7 @@
 #define LLVM_BINARYFORMAT_ELF_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -323,6 +324,7 @@ enum {
   EM_VE = 251,            // NEC SX-Aurora VE
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
+  EM_MOS = 6502,          // MOS Technologies 65xx
 };
 
 // Object file classes.
@@ -504,6 +506,36 @@ enum : unsigned {
                                     // relaxation to be applied
 };
 
+// Special values for the st_other field in the symbol table entry for MOS.
+enum {
+  // External symbol is in the zero page.
+  STO_MOS_ZEROPAGE = 0x20
+};
+
+// ELF relocation types for MOS
+enum {
+#include "ELFRelocs/MOS.def"
+};
+
+// https://llvm-mos.org/wiki/ELF_specification
+enum : unsigned {
+  EF_MOS_ARCH_6502 = 0x00000001, // Core NMOS 6502 instruction set, no BCD
+  EF_MOS_ARCH_6502_BCD = 0x00000002, // BCD support, including CLD and SED
+  EF_MOS_ARCH_6502X = 0x00000004, // "Illegal" NMOS 6502 instructions
+  EF_MOS_ARCH_65C02 = 0x00000008, // Core 65C02 instruction set
+  EF_MOS_ARCH_R65C02 = 0x00000010, // Rockwell extensions to 65C02 insns
+  EF_MOS_ARCH_W65C02 = 0x00000020, // WDC extensions to 65C02 insns
+  EF_MOS_ARCH_W65816 = 0x00000100, // 65816 instructions
+  EF_MOS_ARCH_65EL02 = 0x00000200, // 65EL02 instructions
+  EF_MOS_ARCH_65CE02 = 0x00000400,  // 65CE02 instructions
+  EF_MOS_ARCH_HUC6280 = 0x00000800,  // HuC6280 instructions
+  EF_MOS_ARCH_65DTV02 = 0x00001000,  // C64DTV 6502 instructions
+  EF_MOS_ARCH_4510 = 0x00002000,  // CSG 4510 instructions
+  EF_MOS_ARCH_45GS02 = 0x0004000, // 45GS02 instructions
+  EF_MOS_ARCH_SWEET16 = 0x00010000,   // SWEET16 instructions
+  EF_MOS_ARCH_SPC700 = 0x00020000   // SPC700 instructions
+};
+
 // ELF Relocation types for AVR
 enum {
 #include "ELFRelocs/AVR.def"
@@ -619,6 +651,7 @@ enum {
   EF_HEXAGON_MACH_V5 = 0x00000004,   // Hexagon V5
   EF_HEXAGON_MACH_V55 = 0x00000005,  // Hexagon V55
   EF_HEXAGON_MACH_V60 = 0x00000060,  // Hexagon V60
+  EF_HEXAGON_MACH_V61 = 0x00000061,  // Hexagon V61
   EF_HEXAGON_MACH_V62 = 0x00000062,  // Hexagon V62
   EF_HEXAGON_MACH_V65 = 0x00000065,  // Hexagon V65
   EF_HEXAGON_MACH_V66 = 0x00000066,  // Hexagon V66
@@ -630,7 +663,11 @@ enum {
   EF_HEXAGON_MACH_V71T = 0x00008071, // Hexagon V71T
   EF_HEXAGON_MACH_V73 = 0x00000073,  // Hexagon V73
   EF_HEXAGON_MACH_V75 = 0x00000075,  // Hexagon V75
+  EF_HEXAGON_MACH_V77 = 0x00000077,  // Hexagon V77
   EF_HEXAGON_MACH_V79 = 0x00000079,  // Hexagon V79
+  EF_HEXAGON_MACH_V81 = 0x00000081,  // Hexagon V81
+  EF_HEXAGON_MACH_V83 = 0x00000083,  // Hexagon V83
+  EF_HEXAGON_MACH_V85 = 0x00000085,  // Hexagon V85
   EF_HEXAGON_MACH = 0x000003ff,      // Hexagon V..
 
   // Highest ISA version flags
@@ -642,6 +679,7 @@ enum {
   EF_HEXAGON_ISA_V5 = 0x00000040,   // Hexagon V5 ISA
   EF_HEXAGON_ISA_V55 = 0x00000050,  // Hexagon V55 ISA
   EF_HEXAGON_ISA_V60 = 0x00000060,  // Hexagon V60 ISA
+  EF_HEXAGON_ISA_V61 = 0x00000061,  // Hexagon V61 ISA
   EF_HEXAGON_ISA_V62 = 0x00000062,  // Hexagon V62 ISA
   EF_HEXAGON_ISA_V65 = 0x00000065,  // Hexagon V65 ISA
   EF_HEXAGON_ISA_V66 = 0x00000066,  // Hexagon V66 ISA
@@ -651,7 +689,11 @@ enum {
   EF_HEXAGON_ISA_V71 = 0x00000071,  // Hexagon V71 ISA
   EF_HEXAGON_ISA_V73 = 0x00000073,  // Hexagon V73 ISA
   EF_HEXAGON_ISA_V75 = 0x00000075,  // Hexagon V75 ISA
+  EF_HEXAGON_ISA_V77 = 0x00000077,  // Hexagon V77 ISA
   EF_HEXAGON_ISA_V79 = 0x00000079,  // Hexagon V79 ISA
+  EF_HEXAGON_ISA_V81 = 0x00000081,  // Hexagon V81 ISA
+  EF_HEXAGON_ISA_V83 = 0x00000083,  // Hexagon V83 ISA
+  EF_HEXAGON_ISA_V85 = 0x00000085,  // Hexagon V85 ISA
   EF_HEXAGON_ISA = 0x000003ff,      // Hexagon V.. ISA
 };
 
@@ -804,7 +846,7 @@ enum : unsigned {
   EF_AMDGPU_MACH_AMDGCN_GFX1035         = 0x03d,
   EF_AMDGPU_MACH_AMDGCN_GFX1034         = 0x03e,
   EF_AMDGPU_MACH_AMDGCN_GFX90A          = 0x03f,
-  EF_AMDGPU_MACH_AMDGCN_GFX940          = 0x040,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X40   = 0x040,
   EF_AMDGPU_MACH_AMDGCN_GFX1100         = 0x041,
   EF_AMDGPU_MACH_AMDGCN_GFX1013         = 0x042,
   EF_AMDGPU_MACH_AMDGCN_GFX1150         = 0x043,
@@ -815,7 +857,7 @@ enum : unsigned {
   EF_AMDGPU_MACH_AMDGCN_GFX1200         = 0x048,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X49   = 0x049,
   EF_AMDGPU_MACH_AMDGCN_GFX1151         = 0x04a,
-  EF_AMDGPU_MACH_AMDGCN_GFX941          = 0x04b,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4B   = 0x04b,
   EF_AMDGPU_MACH_AMDGCN_GFX942          = 0x04c,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4D   = 0x04d,
   EF_AMDGPU_MACH_AMDGCN_GFX1201         = 0x04e,
@@ -1289,8 +1331,14 @@ enum : unsigned {
   // Section data is string data by default.
   SHF_MIPS_STRING = 0x80000000,
 
-  // Make code section unreadable when in execute-only mode
-  SHF_ARM_PURECODE = 0x20000000
+  // Section contains only program instructions and no program data.
+  SHF_ARM_PURECODE = 0x20000000,
+
+  // Section contains only program instructions and no program data.
+  SHF_AARCH64_PURECODE = 0x20000000,
+
+  // 8-bit addressable section
+  SHF_MOS_ZEROPAGE = 0x10000000
 };
 
 // Section Group Flags
@@ -1788,6 +1836,7 @@ enum : unsigned {
   GNU_PROPERTY_AARCH64_FEATURE_1_AND = 0xc0000000,
   GNU_PROPERTY_AARCH64_FEATURE_PAUTH = 0xc0000001,
   GNU_PROPERTY_X86_FEATURE_1_AND = 0xc0000002,
+  GNU_PROPERTY_RISCV_FEATURE_1_AND = 0xc0000000,
 
   GNU_PROPERTY_X86_UINT32_OR_LO = 0xc0008000,
   GNU_PROPERTY_X86_FEATURE_2_NEEDED = GNU_PROPERTY_X86_UINT32_OR_LO + 1,
@@ -1850,6 +1899,13 @@ enum : unsigned {
   GNU_PROPERTY_X86_ISA_1_V2 = 1 << 1,
   GNU_PROPERTY_X86_ISA_1_V3 = 1 << 2,
   GNU_PROPERTY_X86_ISA_1_V4 = 1 << 3,
+};
+
+// RISC-V processor feature bits.
+enum : unsigned {
+  GNU_PROPERTY_RISCV_FEATURE_1_CFI_LP_UNLABELED = 1 << 0,
+  GNU_PROPERTY_RISCV_FEATURE_1_CFI_SS = 1 << 1,
+  GNU_PROPERTY_RISCV_FEATURE_1_CFI_LP_FUNC_SIG = 1 << 2,
 };
 
 // FreeBSD note types.
@@ -1996,6 +2052,9 @@ uint16_t convertArchNameToEMachine(StringRef Arch);
 
 /// Convert an ELF's e_machine value into an architecture name.
 StringRef convertEMachineToArchName(uint16_t EMachine);
+
+// Convert a triple's architecture to ELF's e_machine value.
+uint16_t convertTripleArchTypeToEMachine(Triple::ArchType ArchType);
 
 // Convert a lowercase string identifier into an OSABI value.
 uint8_t convertNameToOSABI(StringRef Name);

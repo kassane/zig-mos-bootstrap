@@ -437,11 +437,11 @@ void RecognizableInstr::adjustOperandEncoding(OperandEncoding &encoding) {
          "Invalid CDisp scaling");
 }
 
-void RecognizableInstr::handleOperand(
-    bool optional, unsigned &operandIndex, unsigned &physicalOperandIndex,
-    unsigned numPhysicalOperands, const unsigned *operandMapping,
-    OperandEncoding (*encodingFromString)(const std::string &,
-                                          uint8_t OpSize)) {
+void RecognizableInstr::handleOperand(bool optional, unsigned &operandIndex,
+                                      unsigned &physicalOperandIndex,
+                                      unsigned numPhysicalOperands,
+                                      const unsigned *operandMapping,
+                                      EncodingFn encodingFromString) {
   if (optional) {
     if (physicalOperandIndex >= numPhysicalOperands)
       return;
@@ -458,12 +458,12 @@ void RecognizableInstr::handleOperand(
 
   StringRef typeName = (*Operands)[operandIndex].Rec->getName();
 
-  OperandEncoding encoding = encodingFromString(std::string(typeName), OpSize);
+  OperandEncoding encoding = encodingFromString(typeName, OpSize);
   // Adjust the encoding type for an operand based on the instruction.
   adjustOperandEncoding(encoding);
   Spec->operands[operandIndex].encoding = encoding;
   Spec->operands[operandIndex].type =
-      typeFromString(std::string(typeName), HasREX_W, OpSize);
+      typeFromString(typeName, HasREX_W, OpSize);
 
   ++operandIndex;
   ++physicalOperandIndex;
@@ -1020,11 +1020,12 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
 #undef MAP
 }
 
-#define TYPE(str, type)                                                        \
-  if (s == str)                                                                \
-    return type;
-OperandType RecognizableInstr::typeFromString(const std::string &s,
-                                              bool hasREX_W, uint8_t OpSize) {
+#define TYPE(Expected, Type)                                                   \
+  if (Str == Expected)                                                         \
+    return Type;
+
+OperandType RecognizableInstr::typeFromString(StringRef Str, bool hasREX_W,
+                                              uint8_t OpSize) {
   if (hasREX_W) {
     // For instructions with a REX_W prefix, a declared 32-bit register encoding
     // is special.
@@ -1087,6 +1088,7 @@ OperandType RecognizableInstr::typeFromString(const std::string &s,
   TYPE("i512mem_GR32", TYPE_M)
   TYPE("i512mem_GR64", TYPE_M)
   TYPE("i64i32imm_brtarget", TYPE_REL)
+  TYPE("i8imm_brtarget", TYPE_REL)
   TYPE("i16imm_brtarget", TYPE_REL)
   TYPE("i32imm_brtarget", TYPE_REL)
   TYPE("ccode", TYPE_IMM)
@@ -1096,6 +1098,8 @@ OperandType RecognizableInstr::typeFromString(const std::string &s,
   TYPE("brtarget16", TYPE_REL)
   TYPE("brtarget8", TYPE_REL)
   TYPE("f80mem", TYPE_M)
+  TYPE("lea64_8mem", TYPE_M)
+  TYPE("lea64_16mem", TYPE_M)
   TYPE("lea64_32mem", TYPE_M)
   TYPE("lea64mem", TYPE_M)
   TYPE("VR64", TYPE_MM64)
@@ -1160,17 +1164,17 @@ OperandType RecognizableInstr::typeFromString(const std::string &s,
   TYPE("BNDR", TYPE_BNDR)
   TYPE("TILE", TYPE_TMM)
   TYPE("TILEPair", TYPE_TMM_PAIR)
-  errs() << "Unhandled type string " << s << "\n";
+  errs() << "Unhandled type string " << Str << "\n";
   llvm_unreachable("Unhandled type string");
 }
 #undef TYPE
 
-#define ENCODING(str, encoding)                                                \
-  if (s == str)                                                                \
-    return encoding;
-OperandEncoding
-RecognizableInstr::immediateEncodingFromString(const std::string &s,
-                                               uint8_t OpSize) {
+#define ENCODING(Expected, Encoding)                                           \
+  if (Str == Expected)                                                         \
+    return Encoding;
+
+OperandEncoding RecognizableInstr::immediateEncodingFromString(StringRef Str,
+                                                               uint8_t OpSize) {
   if (OpSize != X86Local::OpSize16) {
     // For instructions without an OpSize prefix, a declared 16-bit register or
     // immediate encoding is special.
@@ -1205,13 +1209,12 @@ RecognizableInstr::immediateEncodingFromString(const std::string &s,
   ENCODING("VR256X", ENCODING_IB)
   ENCODING("VR512", ENCODING_IB)
   ENCODING("TILE", ENCODING_IB)
-  errs() << "Unhandled immediate encoding " << s << "\n";
+  errs() << "Unhandled immediate encoding " << Str << "\n";
   llvm_unreachable("Unhandled immediate encoding");
 }
 
 OperandEncoding
-RecognizableInstr::rmRegisterEncodingFromString(const std::string &s,
-                                                uint8_t OpSize) {
+RecognizableInstr::rmRegisterEncodingFromString(StringRef Str, uint8_t OpSize) {
   ENCODING("RST", ENCODING_FP)
   ENCODING("RSTi", ENCODING_FP)
   ENCODING("GR16", ENCODING_RM)
@@ -1242,13 +1245,12 @@ RecognizableInstr::rmRegisterEncodingFromString(const std::string &s,
   ENCODING("BNDR", ENCODING_RM)
   ENCODING("TILE", ENCODING_RM)
   ENCODING("TILEPair", ENCODING_RM)
-  errs() << "Unhandled R/M register encoding " << s << "\n";
+  errs() << "Unhandled R/M register encoding " << Str << "\n";
   llvm_unreachable("Unhandled R/M register encoding");
 }
 
 OperandEncoding
-RecognizableInstr::roRegisterEncodingFromString(const std::string &s,
-                                                uint8_t OpSize) {
+RecognizableInstr::roRegisterEncodingFromString(StringRef Str, uint8_t OpSize) {
   ENCODING("GR16", ENCODING_REG)
   ENCODING("GR16orGR32orGR64", ENCODING_REG)
   ENCODING("GR32", ENCODING_REG)
@@ -1292,12 +1294,12 @@ RecognizableInstr::roRegisterEncodingFromString(const std::string &s,
   ENCODING("BNDR", ENCODING_REG)
   ENCODING("TILE", ENCODING_REG)
   ENCODING("TILEPair", ENCODING_REG)
-  errs() << "Unhandled reg/opcode register encoding " << s << "\n";
+  errs() << "Unhandled reg/opcode register encoding " << Str << "\n";
   llvm_unreachable("Unhandled reg/opcode register encoding");
 }
 
 OperandEncoding
-RecognizableInstr::vvvvRegisterEncodingFromString(const std::string &s,
+RecognizableInstr::vvvvRegisterEncodingFromString(StringRef Str,
                                                   uint8_t OpSize) {
   ENCODING("GR8", ENCODING_VVVV)
   ENCODING("GR16", ENCODING_VVVV)
@@ -1323,12 +1325,12 @@ RecognizableInstr::vvvvRegisterEncodingFromString(const std::string &s,
   ENCODING("VK64", ENCODING_VVVV)
   ENCODING("TILE", ENCODING_VVVV)
   ENCODING("TILEPair", ENCODING_VVVV)
-  errs() << "Unhandled VEX.vvvv register encoding " << s << "\n";
+  errs() << "Unhandled VEX.vvvv register encoding " << Str << "\n";
   llvm_unreachable("Unhandled VEX.vvvv register encoding");
 }
 
 OperandEncoding
-RecognizableInstr::writemaskRegisterEncodingFromString(const std::string &s,
+RecognizableInstr::writemaskRegisterEncodingFromString(StringRef Str,
                                                        uint8_t OpSize) {
   ENCODING("VK1WM", ENCODING_WRITEMASK)
   ENCODING("VK2WM", ENCODING_WRITEMASK)
@@ -1337,13 +1339,12 @@ RecognizableInstr::writemaskRegisterEncodingFromString(const std::string &s,
   ENCODING("VK16WM", ENCODING_WRITEMASK)
   ENCODING("VK32WM", ENCODING_WRITEMASK)
   ENCODING("VK64WM", ENCODING_WRITEMASK)
-  errs() << "Unhandled mask register encoding " << s << "\n";
+  errs() << "Unhandled mask register encoding " << Str << "\n";
   llvm_unreachable("Unhandled mask register encoding");
 }
 
-OperandEncoding
-RecognizableInstr::memoryEncodingFromString(const std::string &s,
-                                            uint8_t OpSize) {
+OperandEncoding RecognizableInstr::memoryEncodingFromString(StringRef Str,
+                                                            uint8_t OpSize) {
   ENCODING("i16mem", ENCODING_RM)
   ENCODING("i32mem", ENCODING_RM)
   ENCODING("i64mem", ENCODING_RM)
@@ -1364,6 +1365,8 @@ RecognizableInstr::memoryEncodingFromString(const std::string &s,
   ENCODING("i512mem_GR32", ENCODING_RM)
   ENCODING("i512mem_GR64", ENCODING_RM)
   ENCODING("f80mem", ENCODING_RM)
+  ENCODING("lea64_8mem", ENCODING_RM)
+  ENCODING("lea64_16mem", ENCODING_RM)
   ENCODING("lea64_32mem", ENCODING_RM)
   ENCODING("lea64mem", ENCODING_RM)
   ENCODING("anymem", ENCODING_RM)
@@ -1379,13 +1382,12 @@ RecognizableInstr::memoryEncodingFromString(const std::string &s,
   ENCODING("vy64xmem", ENCODING_VSIB)
   ENCODING("vz32mem", ENCODING_VSIB)
   ENCODING("vz64mem", ENCODING_VSIB)
-  errs() << "Unhandled memory encoding " << s << "\n";
+  errs() << "Unhandled memory encoding " << Str << "\n";
   llvm_unreachable("Unhandled memory encoding");
 }
 
 OperandEncoding
-RecognizableInstr::relocationEncodingFromString(const std::string &s,
-                                                uint8_t OpSize) {
+RecognizableInstr::relocationEncodingFromString(StringRef Str, uint8_t OpSize) {
   if (OpSize != X86Local::OpSize16) {
     // For instructions without an OpSize prefix, a declared 16-bit register or
     // immediate encoding is special.
@@ -1405,6 +1407,7 @@ RecognizableInstr::relocationEncodingFromString(const std::string &s,
   ENCODING("i64i32imm_brtarget", ENCODING_ID)
   ENCODING("i16imm_brtarget", ENCODING_IW)
   ENCODING("i32imm_brtarget", ENCODING_ID)
+  ENCODING("i8imm_brtarget", ENCODING_IB)
   ENCODING("brtarget32", ENCODING_ID)
   ENCODING("brtarget16", ENCODING_IW)
   ENCODING("brtarget8", ENCODING_IB)
@@ -1428,19 +1431,19 @@ RecognizableInstr::relocationEncodingFromString(const std::string &s,
   ENCODING("dstidx16", ENCODING_DI)
   ENCODING("dstidx32", ENCODING_DI)
   ENCODING("dstidx64", ENCODING_DI)
-  errs() << "Unhandled relocation encoding " << s << "\n";
+  errs() << "Unhandled relocation encoding " << Str << "\n";
   llvm_unreachable("Unhandled relocation encoding");
 }
 
 OperandEncoding
-RecognizableInstr::opcodeModifierEncodingFromString(const std::string &s,
+RecognizableInstr::opcodeModifierEncodingFromString(StringRef Str,
                                                     uint8_t OpSize) {
   ENCODING("GR32", ENCODING_Rv)
   ENCODING("GR64", ENCODING_RO)
   ENCODING("GR16", ENCODING_Rv)
   ENCODING("GR8", ENCODING_RB)
   ENCODING("ccode", ENCODING_CC)
-  errs() << "Unhandled opcode modifier encoding " << s << "\n";
+  errs() << "Unhandled opcode modifier encoding " << Str << "\n";
   llvm_unreachable("Unhandled opcode modifier encoding");
 }
 #undef ENCODING

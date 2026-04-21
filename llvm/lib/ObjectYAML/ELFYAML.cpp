@@ -358,6 +358,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
   ECase(EM_VE);
   ECase(EM_CSKY);
   ECase(EM_LOONGARCH);
+  ECase(EM_MOS);
 #undef ECase
   IO.enumFallback<Hex16>(Value);
 }
@@ -609,8 +610,6 @@ void ScalarBitSetTraits<ELFYAML::ELF_EF>::bitset(IO &IO,
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX909, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX90A, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX90C, EF_AMDGPU_MACH);
-    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX940, EF_AMDGPU_MACH);
-    BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX941, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX942, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX950, EF_AMDGPU_MACH);
     BCaseMask(EF_AMDGPU_MACH_AMDGCN_GFX1010, EF_AMDGPU_MACH);
@@ -803,6 +802,9 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
     break;
   }
   switch (Object->getMachine()) {
+  case ELF::EM_AARCH64:
+    BCase(SHF_AARCH64_PURECODE);
+    break;
   case ELF::EM_ARM:
     BCase(SHF_ARM_PURECODE);
     break;
@@ -821,6 +823,9 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
     break;
   case ELF::EM_X86_64:
     BCase(SHF_X86_64_LARGE);
+    break;
+  case ELF::EM_MOS:
+    BCase(SHF_MOS_ZEROPAGE);
     break;
   default:
     // Nothing to do.
@@ -952,11 +957,17 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
   case ELF::EM_PPC64:
 #include "llvm/BinaryFormat/ELFRelocs/PowerPC64.def"
     break;
+  case ELF::EM_SPARCV9:
+#include "llvm/BinaryFormat/ELFRelocs/Sparc.def"
+    break;
   case ELF::EM_68K:
 #include "llvm/BinaryFormat/ELFRelocs/M68k.def"
     break;
   case ELF::EM_LOONGARCH:
 #include "llvm/BinaryFormat/ELFRelocs/LoongArch.def"
+    break;
+  case ELF::EM_MOS:
+#include "llvm/BinaryFormat/ELFRelocs/MOS.def"
     break;
   case ELF::EM_XTENSA:
 #include "llvm/BinaryFormat/ELFRelocs/Xtensa.def"
@@ -1027,6 +1038,13 @@ void ScalarEnumerationTraits<ELFYAML::ELF_DYNTAG>::enumeration(
 #include "llvm/BinaryFormat/DynamicTags.def"
 #undef RISCV_DYNAMIC_TAG
 #define RISCV_DYNAMIC_TAG(name, value)
+    break;
+  case ELF::EM_SPARCV9:
+#undef SPARC_DYNAMIC_TAG
+#define SPARC_DYNAMIC_TAG(name, value) DYNAMIC_TAG(name, value)
+#include "llvm/BinaryFormat/DynamicTags.def"
+#undef SPARC_DYNAMIC_TAG
+#define SPARC_DYNAMIC_TAG(name, value)
     break;
   default:
 #include "llvm/BinaryFormat/DynamicTags.def"
@@ -1308,6 +1326,8 @@ struct NormalizedOther {
       Map["STO_AARCH64_VARIANT_PCS"] = ELF::STO_AARCH64_VARIANT_PCS;
     if (EMachine == ELF::EM_RISCV)
       Map["STO_RISCV_VARIANT_CC"] = ELF::STO_RISCV_VARIANT_CC;
+    if (EMachine == ELF::EM_MOS)
+      Map["STO_MOS_ZEROPAGE"] = ELF::STO_MOS_ZEROPAGE;
     return Map;
   }
 

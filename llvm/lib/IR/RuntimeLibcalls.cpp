@@ -82,6 +82,7 @@ void RuntimeLibcallsInfo::initLibcalls(const Triple &TT) {
     setLibcallName(RTLIB::POWI_F128, "__powikf2");
     setLibcallName(RTLIB::FPEXT_F32_F128, "__extendsfkf2");
     setLibcallName(RTLIB::FPEXT_F64_F128, "__extenddfkf2");
+    setLibcallName(RTLIB::FPROUND_F128_F16, "__trunckfhf2");
     setLibcallName(RTLIB::FPROUND_F128_F32, "__trunckfsf2");
     setLibcallName(RTLIB::FPROUND_F128_F64, "__trunckfdf2");
     setLibcallName(RTLIB::FPTOSINT_F128_I32, "__fixkfsi");
@@ -170,9 +171,6 @@ void RuntimeLibcallsInfo::initLibcalls(const Triple &TT) {
     // TODO: BridgeOS should be included in isOSDarwin.
     setLibcallName(RTLIB::EXP10_F32, "__exp10f");
     setLibcallName(RTLIB::EXP10_F64, "__exp10");
-  } else {
-    setLibcallName(RTLIB::FPEXT_F16_F32, "__gnu_h2f_ieee");
-    setLibcallName(RTLIB::FPROUND_F32_F16, "__gnu_f2h_ieee");
   }
 
   if (TT.isGNUEnvironment() || TT.isOSFuchsia() ||
@@ -254,5 +252,24 @@ void RuntimeLibcallsInfo::initLibcalls(const Triple &TT) {
       setLibcallName(RTLIB::MULO_I64, nullptr);
     }
     setLibcallName(RTLIB::MULO_I128, nullptr);
+  }
+
+  if (TT.isMOS()) {
+    // The memset intrinsic takes an char, while the C memset takes an int. These
+    // are different in the MOS calling convention, since arguments are not
+    // automatically promoted to int. "memset" is the C version, and "__memset" is
+    // the intrinsic version.
+    setLibcallName(RTLIB::MEMSET, "__memset");
+
+    setLibcallName(RTLIB::ABORT, "abort");
+
+    setLibcallName(RTLIB::UDIVREM_I8, "__udivmodqi4");
+    setLibcallName(RTLIB::UDIVREM_I16, "__udivmodhi4");
+    setLibcallName(RTLIB::UDIVREM_I32, "__udivmodsi4");
+    setLibcallName(RTLIB::UDIVREM_I64, "__udivmoddi4");
+    setLibcallName(RTLIB::SDIVREM_I8, "__divmodqi4");
+    setLibcallName(RTLIB::SDIVREM_I16, "__divmodhi4");
+    setLibcallName(RTLIB::SDIVREM_I32, "__divmodsi4");
+    setLibcallName(RTLIB::SDIVREM_I64, "__divmoddi4");
   }
 }

@@ -151,8 +151,8 @@ public:
     return *this;
   }
 
-  const MachineInstrBuilder &addFrameIndex(int Idx) const {
-    MI->addOperand(*MF, MachineOperand::CreateFI(Idx));
+  const MachineInstrBuilder &addFrameIndex(int Idx, int64_t Offset = 0) const {
+    MI->addOperand(*MF, MachineOperand::CreateFI(Idx, Offset));
     return *this;
   }
 
@@ -229,9 +229,8 @@ public:
   }
 
   const MachineInstrBuilder &add(ArrayRef<MachineOperand> MOs) const {
-    for (const MachineOperand &MO : MOs) {
+    for (const MachineOperand &MO : MOs)
       MI->addOperand(*MF, MO);
-    }
     return *this;
   }
 

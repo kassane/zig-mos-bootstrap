@@ -27,7 +27,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/MC/MCDwarf.h"
-#include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include <optional>
 
@@ -230,7 +229,7 @@ void MachineOperand::ChangeToMCSymbol(MCSymbol *Sym, unsigned TargetFlags) {
   setTargetFlags(TargetFlags);
 }
 
-void MachineOperand::ChangeToFrameIndex(int Idx, unsigned TargetFlags) {
+void MachineOperand::ChangeToFrameIndex(int Idx, int64_t Offset, unsigned TargetFlags) {
   assert((!isReg() || !isTied()) &&
          "Cannot change a tied operand into a FrameIndex");
 
@@ -238,6 +237,7 @@ void MachineOperand::ChangeToFrameIndex(int Idx, unsigned TargetFlags) {
 
   OpKind = MO_FrameIndex;
   setIndex(Idx);
+  setOffset(Offset);
   setTargetFlags(TargetFlags);
 }
 
@@ -334,7 +334,6 @@ bool MachineOperand::isIdenticalTo(const MachineOperand &Other) const {
   case MachineOperand::MO_MachineBasicBlock:
     return getMBB() == Other.getMBB();
   case MachineOperand::MO_FrameIndex:
-    return getIndex() == Other.getIndex();
   case MachineOperand::MO_ConstantPoolIndex:
   case MachineOperand::MO_TargetIndex:
     return getIndex() == Other.getIndex() && getOffset() == Other.getOffset();
@@ -450,14 +449,11 @@ hash_code llvm::hash_value(const MachineOperand &MO) {
   llvm_unreachable("Invalid machine operand type");
 }
 
-// Try to crawl up to the machine function and get TRI and IntrinsicInfo from
-// it.
+// Try to crawl up to the machine function and get TRI from it.
 static void tryToGetTargetInfo(const MachineOperand &MO,
-                               const TargetRegisterInfo *&TRI,
-                               const TargetIntrinsicInfo *&IntrinsicInfo) {
+                               const TargetRegisterInfo *&TRI) {
   if (const MachineFunction *MF = getMFIfAvailable(MO)) {
     TRI = MF->getSubtarget().getRegisterInfo();
-    IntrinsicInfo = MF->getTarget().getIntrinsicInfo();
   }
 }
 
@@ -781,20 +777,19 @@ static void printCFI(raw_ostream &OS, const MCCFIInstruction &CFI,
   }
 }
 
-void MachineOperand::print(raw_ostream &OS, const TargetRegisterInfo *TRI,
-                           const TargetIntrinsicInfo *IntrinsicInfo) const {
-  print(OS, LLT{}, TRI, IntrinsicInfo);
+void MachineOperand::print(raw_ostream &OS,
+                           const TargetRegisterInfo *TRI) const {
+  print(OS, LLT{}, TRI);
 }
 
 void MachineOperand::print(raw_ostream &OS, LLT TypeToPrint,
-                           const TargetRegisterInfo *TRI,
-                           const TargetIntrinsicInfo *IntrinsicInfo) const {
-  tryToGetTargetInfo(*this, TRI, IntrinsicInfo);
+                           const TargetRegisterInfo *TRI) const {
+  tryToGetTargetInfo(*this, TRI);
   ModuleSlotTracker DummyMST(nullptr);
   print(OS, DummyMST, TypeToPrint, std::nullopt, /*PrintDef=*/false,
         /*IsStandalone=*/true,
         /*ShouldPrintRegisterTies=*/true,
-        /*TiedOperandIdx=*/0, TRI, IntrinsicInfo);
+        /*TiedOperandIdx=*/0, TRI);
 }
 
 void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
@@ -802,8 +797,7 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
                            bool PrintDef, bool IsStandalone,
                            bool ShouldPrintRegisterTies,
                            unsigned TiedOperandIdx,
-                           const TargetRegisterInfo *TRI,
-                           const TargetIntrinsicInfo *IntrinsicInfo) const {
+                           const TargetRegisterInfo *TRI) const {
   printTargetFlags(OS, *this);
   switch (getType()) {
   case MachineOperand::MO_Register: {
@@ -890,6 +884,7 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
     if (const MachineFunction *MF = getMFIfAvailable(*this))
       MFI = &MF->getFrameInfo();
     printFrameIndex(OS, FrameIndex, IsFixed, MFI);
+    printOperandOffset(OS, getOffset());
     break;
   }
   case MachineOperand::MO_ConstantPoolIndex:
@@ -1004,8 +999,6 @@ void MachineOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
     Intrinsic::ID ID = getIntrinsicID();
     if (ID < Intrinsic::num_intrinsics)
       OS << "intrinsic(@" << Intrinsic::getBaseName(ID) << ')';
-    else if (IntrinsicInfo)
-      OS << "intrinsic(@" << IntrinsicInfo->getName(ID) << ')';
     else
       OS << "intrinsic(" << ID << ')';
     break;
@@ -1240,13 +1233,17 @@ void MachineMemOperand::print(raw_ostream &OS, ModuleSlotTracker &MST,
           OS, cast<ExternalSymbolPseudoSourceValue>(PVal)->getSymbol());
       break;
     default: {
-      const MIRFormatter *Formatter = TII->getMIRFormatter();
       // FIXME: This is not necessarily the correct MIR serialization format for
       // a custom pseudo source value, but at least it allows
       // MIR printing to work on a target with custom pseudo source
       // values.
       OS << "custom \"";
-      Formatter->printCustomPseudoSourceValue(OS, MST, *PVal);
+      if (TII) {
+        const MIRFormatter *Formatter = TII->getMIRFormatter();
+        Formatter->printCustomPseudoSourceValue(OS, MST, *PVal);
+      } else {
+        PVal->printCustom(OS);
+      }
       OS << '\"';
       break;
     }

@@ -9,6 +9,7 @@
 #include "Writer.h"
 #include "AArch64ErrataFix.h"
 #include "ARMErrataFix.h"
+#include "BPSectionOrderer.h"
 #include "CallGraphSort.h"
 #include "Config.h"
 #include "InputFiles.h"
@@ -25,12 +26,16 @@
 #include "lld/Common/Filesystem.h"
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/BLAKE3.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/xxhash.h"
+#include <algorithm>
 #include <climits>
 
 #define DEBUG_TYPE "lld"
@@ -63,6 +68,7 @@ private:
   void sortOrphanSections();
   void finalizeSections();
   void checkExecuteOnly();
+  void checkExecuteOnlyReport();
   void setReservedSymbolSections();
 
   SmallVector<std::unique_ptr<PhdrEntry>, 0> createPhdrs(Partition &part);
@@ -78,6 +84,7 @@ private:
   void writeHeader();
   void writeSections();
   void writeSectionsBinary();
+  void writeCustomOutputFormat();
   void writeBuildId();
 
   Ctx &ctx;
@@ -283,7 +290,7 @@ static void demoteDefined(Defined &sym, DenseMap<SectionBase *, size_t> &map) {
 static void demoteSymbolsAndComputeIsPreemptible(Ctx &ctx) {
   llvm::TimeTraceScope timeScope("Demote symbols");
   DenseMap<InputFile *, DenseMap<SectionBase *, size_t>> sectionIndexMap;
-  bool hasDynsym = ctx.hasDynsym;
+  bool maybePreemptible = ctx.sharedFiles.size() || ctx.arg.shared;
   for (Symbol *sym : ctx.symtab->getSymbols()) {
     if (auto *d = dyn_cast<Defined>(sym)) {
       if (d->section && !d->section->isLive())
@@ -296,13 +303,12 @@ static void demoteSymbolsAndComputeIsPreemptible(Ctx &ctx) {
                   sym->type)
             .overwrite(*sym);
         sym->versionId = VER_NDX_GLOBAL;
-        if (hasDynsym && sym->includeInDynsym(ctx))
-          sym->isExported = true;
       }
     }
 
-    if (hasDynsym)
-      sym->isPreemptible = sym->isExported && computeIsPreemptible(ctx, *sym);
+    if (maybePreemptible)
+      sym->isPreemptible = (sym->isUndefined() || sym->isExported) &&
+                           computeIsPreemptible(ctx, *sym);
   }
 }
 
@@ -323,6 +329,7 @@ template <class ELFT> void Writer<ELFT>::run() {
   // finalizeSections does that.
   finalizeSections();
   checkExecuteOnly();
+  checkExecuteOnlyReport();
 
   // If --compressed-debug-sections is specified, compress .debug_* sections.
   // Do it right now because it changes the size of output sections.
@@ -362,8 +369,17 @@ template <class ELFT> void Writer<ELFT>::run() {
   if (errCount(ctx))
     return;
 
+  StringRef customOutputFile = ctx.arg.outputFile;
   {
     llvm::TimeTraceScope timeScope("Write output file");
+    auto restoreOutputFile =
+        llvm::make_scope_exit([&]() { ctx.arg.outputFile = customOutputFile; });
+    SmallString<64> outputFile = customOutputFile;
+    if (!ctx.script->outputFormat.empty()) {
+      outputFile += ".elf";
+      ctx.arg.outputFile = outputFile;
+    }
+
     // Write the result down to a file.
     openFile();
     if (errCount(ctx))
@@ -393,6 +409,11 @@ template <class ELFT> void Writer<ELFT>::run() {
     if (!ctx.arg.cmseOutputLib.empty())
       writeARMCmseImportLib<ELFT>(ctx);
   }
+
+  writeCustomOutputFormat();
+
+  if (ctx.xo65Enclave)
+    ctx.xo65Enclave->postWrite();
 }
 
 template <class ELFT, class RelTy>
@@ -778,6 +799,10 @@ unsigned elf::getSectionRank(Ctx &ctx, OutputSection &osec) {
       rank |= 1;
   }
 
+  if (ctx.arg.emachine == EM_MOS)
+    if (osec.name == ".zp" || osec.name.starts_with(".zp."))
+      rank |= 1;
+
   return rank;
 }
 
@@ -1081,8 +1106,18 @@ static void maybeShuffle(Ctx &ctx,
 // that don't appear in the order file.
 static DenseMap<const InputSectionBase *, int> buildSectionOrder(Ctx &ctx) {
   DenseMap<const InputSectionBase *, int> sectionOrder;
-  if (!ctx.arg.callGraphProfile.empty())
+  if (ctx.arg.bpStartupFunctionSort || ctx.arg.bpFunctionOrderForCompression ||
+      ctx.arg.bpDataOrderForCompression) {
+    TimeTraceScope timeScope("Balanced Partitioning Section Orderer");
+    sectionOrder = runBalancedPartitioning(
+        ctx, ctx.arg.bpStartupFunctionSort ? ctx.arg.irpgoProfilePath : "",
+        ctx.arg.bpFunctionOrderForCompression,
+        ctx.arg.bpDataOrderForCompression,
+        ctx.arg.bpCompressionSortStartupFunctions,
+        ctx.arg.bpVerboseSectionOrderer);
+  } else if (!ctx.arg.callGraphProfile.empty()) {
     sectionOrder = computeCallGraphProfileOrder(ctx);
+  }
 
   if (ctx.arg.symbolOrderingFile.empty())
     return sectionOrder;
@@ -1511,9 +1546,15 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
 
   uint32_t pass = 0, assignPasses = 0;
   for (;;) {
-    bool changed = ctx.target->needsThunks
-                       ? tc.createThunks(pass, ctx.outputSections)
-                       : ctx.target->relaxOnce(pass);
+    bool changed = false;
+    if (ctx.xo65Enclave) {
+      changed |= ctx.xo65Enclave->link();
+      if (changed)
+        ctx.script->assignAddresses();
+    }
+
+    changed |= ctx.target->needsThunks ? tc.createThunks(pass, ctx.outputSections)
+                                   : ctx.target->relaxOnce(pass);
     bool spilled = ctx.script->spillSections();
     changed |= spilled;
     ++pass;
@@ -1521,8 +1562,7 @@ template <class ELFT> void Writer<ELFT>::finalizeAddressDependentContent() {
     // With Thunk Size much smaller than branch range we expect to
     // converge quickly; if we get to 30 something has gone wrong.
     if (changed && pass >= 30) {
-      Err(ctx) << (ctx.target->needsThunks ? "thunk creation not converged"
-                                           : "relaxation not converged");
+      Err(ctx) << "address assignment did not converge";
       break;
     }
 
@@ -1841,9 +1881,10 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
 
   // If the previous code block defines any non-hidden symbols (e.g.
   // __global_pointer$), they may be exported.
-  if (ctx.hasDynsym)
+  if (ctx.arg.exportDynamic)
     for (Symbol *sym : ctx.synthesizedSymbols)
-      sym->isExported = sym->includeInDynsym(ctx);
+      if (sym->computeBinding(ctx) != STB_LOCAL)
+        sym->isExported = true;
 
   demoteSymbolsAndComputeIsPreemptible(ctx);
 
@@ -1929,9 +1970,9 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
       if (ctx.in.symTab)
         ctx.in.symTab->addSymbol(sym);
 
-      // computeBinding might localize a linker-synthesized hidden symbol
-      // (e.g. __global_pointer$) that was considered exported.
-      if (sym->isExported && !sym->isLocal()) {
+      // computeBinding might localize a symbol that was considered exported
+      // but then synthesized as hidden (e.g. _DYNAMIC).
+      if ((sym->isExported || sym->isPreemptible) && !sym->isLocal()) {
         ctx.partitions[sym->partition - 1].dynSymTab->addSymbol(sym);
         if (auto *file = dyn_cast<SharedFile>(sym->file))
           if (file->isNeeded && !sym->isUndefined())
@@ -2166,6 +2207,37 @@ template <class ELFT> void Writer<ELFT>::checkExecuteOnly() {
                             "data and code";
 }
 
+// Check which input sections of RX output sections don't have the
+// SHF_AARCH64_PURECODE or SHF_ARM_PURECODE flag set.
+template <class ELFT> void Writer<ELFT>::checkExecuteOnlyReport() {
+  if (ctx.arg.zExecuteOnlyReport == ReportPolicy::None)
+    return;
+
+  auto reportUnless = [&](bool cond) -> ELFSyncStream {
+    if (cond)
+      return {ctx, DiagLevel::None};
+    return {ctx, toDiagLevel(ctx.arg.zExecuteOnlyReport)};
+  };
+
+  uint64_t purecodeFlag =
+      ctx.arg.emachine == EM_AARCH64 ? SHF_AARCH64_PURECODE : SHF_ARM_PURECODE;
+  StringRef purecodeFlagName = ctx.arg.emachine == EM_AARCH64
+                                   ? "SHF_AARCH64_PURECODE"
+                                   : "SHF_ARM_PURECODE";
+  SmallVector<InputSection *, 0> storage;
+  for (OutputSection *osec : ctx.outputSections) {
+    if (osec->getPhdrFlags() != (PF_R | PF_X))
+      continue;
+    for (InputSection *sec : getInputSections(*osec, storage)) {
+      if (isa<SyntheticSection>(sec))
+        continue;
+      reportUnless(sec->flags & purecodeFlag)
+          << "-z execute-only-report: " << sec << " does not have "
+          << purecodeFlagName << " flag set";
+    }
+  }
+}
+
 // The linker is expected to define SECNAME_start and SECNAME_end
 // symbols for a few sections. This function defines them.
 template <class ELFT> void Writer<ELFT>::addStartEndSymbols() {
@@ -2336,10 +2408,16 @@ Writer<ELFT>::createPhdrs(Partition &part) {
     // so when hasSectionsCommand, since we cannot introduce the extra alignment
     // needed to create a new LOAD)
     uint64_t newFlags = computeFlags(ctx, sec->getPhdrFlags());
-    // When --no-rosegment is specified, RO and RX sections are compatible.
-    uint32_t incompatible = flags ^ newFlags;
-    if (ctx.arg.singleRoRx && !(newFlags & PF_W))
-      incompatible &= ~PF_X;
+    uint64_t incompatible = flags ^ newFlags;
+    if (!(newFlags & PF_W)) {
+      // When --no-rosegment is specified, RO and RX sections are compatible.
+      if (ctx.arg.singleRoRx)
+        incompatible &= ~PF_X;
+      // When --no-xosegment is specified (the default), XO and RX sections are
+      // compatible.
+      if (ctx.arg.singleXoRx)
+        incompatible &= ~PF_R;
+    }
     if (incompatible)
       load = nullptr;
 
@@ -2880,6 +2958,122 @@ template <class ELFT> void Writer<ELFT>::writeSectionsBinary() {
       sec->writeTo<ELFT>(ctx, ctx.bufferStart + sec->offset, tg);
 }
 
+template <class ELFT> void Writer<ELFT>::writeCustomOutputFormat() {
+  if (ctx.script->outputFormat.empty())
+    return;
+
+  llvm::TimeTraceScope timeScope("Write custom output file");
+
+  std::error_code ec;
+  raw_fd_ostream os(ctx.arg.outputFile, ec);
+  if (ec) {
+    error("cannot open " + ctx.arg.outputFile + ": " + ec.message());
+    return;
+  }
+
+  for (SectionCommand *command : ctx.script->outputFormat) {
+    if (ByteCommand *data = dyn_cast<ByteCommand>(command)) {
+      uint64_t value = data->expression().getValue();
+      char buf[8];
+      switch (data->size) {
+      case 1:
+        buf[0] = value;
+        break;
+      case 2:
+        write16(ctx, buf, value);
+        break;
+      case 4:
+        write32(ctx, buf, value);
+        break;
+      case 8:
+        write64(ctx, buf, value);
+        break;
+      default:
+        llvm_unreachable("unsupported Size argument");
+      }
+      os.write(buf, data->size);
+    } else if (MemoryRegionCommand *mem =
+                  dyn_cast<MemoryRegionCommand>(command)) {
+      uint64_t regionBegin = mem->memRegion->origin().getValue();
+      uint64_t regionLength = mem->memRegion->length().getValue();
+      uint64_t regionEnd = regionBegin + regionLength;
+      auto buf = WritableMemoryBuffer::getNewMemBuffer(regionLength);
+
+      // The last LMA to write. This is maintained as the high watermark of all
+      // LMAs collected so far.
+      uint64_t regionAreaEnd = mem->full ? regionEnd : regionBegin;
+
+      {
+        parallel::TaskGroup tg;
+        // Collect each output section that LMA overlaps with the memory region
+        // and write it to the corresponding portion of the buffer.
+        for (OutputSection *sec : ctx.outputSections) {
+          if (!(sec->flags & SHF_ALLOC) || sec->type != SHT_PROGBITS ||
+              !sec->size)
+            continue;
+
+          uint64_t lmaBegin = sec->getLMA();
+          uint64_t lmaEnd = lmaBegin + sec->size;
+
+          // Skip the section if it doesn't LMA overlap with the region.
+          if (lmaEnd <= regionBegin || lmaBegin >= regionEnd)
+            continue;
+
+          // If the section is wholly contained by the region, just write it
+          // directly to the buffer.
+          if (lmaBegin >= regionBegin && lmaEnd <= regionEnd) {
+            regionAreaEnd = std::max(regionAreaEnd, lmaEnd);
+            sec->writeTo<ELFT>(
+                ctx,
+                reinterpret_cast<uint8_t *>(buf->getBufferStart() +
+                                            (lmaBegin - regionBegin)),
+                tg);
+            continue;
+          }
+
+          // Otherwise, collect the whole output section into a separate buffer.
+          auto secBuf = WritableMemoryBuffer::getNewMemBuffer(sec->size);
+          {
+            parallel::TaskGroup tg;
+            sec->writeTo<ELFT>(
+                ctx, reinterpret_cast<uint8_t *>(secBuf->getBufferStart()), tg);
+          }
+
+          // Trim the output section against the memory region.
+          uint64_t copyBegin = 0;
+          if (lmaBegin < regionBegin)
+            copyBegin += regionBegin - lmaBegin;
+          uint64_t copyEnd = sec->size;
+          if (lmaEnd > regionEnd)
+            copyEnd -= lmaEnd - regionEnd;
+
+          // Copy the trimmed portion of the output section into the region
+          // buffer.
+          memcpy(buf->getBufferStart() + (lmaBegin + copyBegin - regionBegin),
+                  secBuf->getBufferStart() + copyBegin, copyEnd - copyBegin);
+        }
+      }
+
+      uint64_t regionWriteStart = 0;
+      uint64_t regionWriteLength = regionAreaEnd - regionBegin;
+      // Apply additional restrictions, if present.
+      if (mem->start != nullptr) {
+        regionWriteStart = std::min(mem->start().getValue(), regionWriteLength);
+        regionWriteLength -= regionWriteStart;
+      }
+      if (mem->length != nullptr)
+        regionWriteLength = std::min(mem->length().getValue(), regionWriteLength);
+
+      if (regionWriteLength > 0) {
+        os.write(buf->getBufferStart() + regionWriteStart, regionWriteLength);
+      }
+    } else {
+      error("unexpected command type");
+      return;
+    }
+  }
+}
+
 static void fillTrap(std::array<uint8_t, 4> trapInstr, uint8_t *i,
                      uint8_t *end) {
   for (; i + 4 <= end; i += 4)
@@ -2911,9 +3105,12 @@ template <class ELFT> void Writer<ELFT>::writeTrapInstr() {
       if (p->p_type == PT_LOAD)
         last = p.get();
 
-    if (last && (last->p_flags & PF_X))
-      last->p_memsz = last->p_filesz =
-          alignToPowerOf2(last->p_filesz, ctx.arg.maxPageSize);
+    if (last && (last->p_flags & PF_X)) {
+      last->p_filesz = alignToPowerOf2(last->p_filesz, ctx.arg.maxPageSize);
+      // p_memsz might be larger than the aligned p_filesz due to trailing BSS
+      // sections. Don't decrease it.
+      last->p_memsz = std::max(last->p_memsz, last->p_filesz);
+    }
   }
 }
 

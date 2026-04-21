@@ -88,6 +88,7 @@ Expected<std::unique_ptr<Binary>> object::createBinary(MemoryBufferRef Buffer,
   case file_magic::cuda_fatbinary:
   case file_magic::coff_cl_gl_object:
   case file_magic::dxcontainer_object:
+  case file_magic::xo65_object:
   case file_magic::offload_bundle:
   case file_magic::offload_bundle_compressed:
   case file_magic::spirv_object:

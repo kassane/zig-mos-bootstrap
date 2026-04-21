@@ -9,12 +9,14 @@
 // Implementation of the default eviction advisor and of the Analysis pass.
 //
 //===----------------------------------------------------------------------===//
-
-#include "RegAllocEvictionAdvisor.h"
+#include "llvm/CodeGen/RegAllocEvictionAdvisor.h"
 #include "AllocationOrder.h"
 #include "RegAllocGreedy.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/RegAllocPriorityAdvisor.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/IR/Module.h"
@@ -26,17 +28,18 @@
 
 using namespace llvm;
 
-static cl::opt<RegAllocEvictionAdvisorAnalysis::AdvisorMode> Mode(
+static cl::opt<RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode> Mode(
     "regalloc-enable-advisor", cl::Hidden,
-    cl::init(RegAllocEvictionAdvisorAnalysis::AdvisorMode::Default),
+    cl::init(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default),
     cl::desc("Enable regalloc advisor mode"),
     cl::values(
-        clEnumValN(RegAllocEvictionAdvisorAnalysis::AdvisorMode::Default,
+        clEnumValN(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default,
                    "default", "Default"),
-        clEnumValN(RegAllocEvictionAdvisorAnalysis::AdvisorMode::Release,
+        clEnumValN(RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release,
                    "release", "precompiled"),
-        clEnumValN(RegAllocEvictionAdvisorAnalysis::AdvisorMode::Development,
-                   "development", "for training")));
+        clEnumValN(
+            RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Development,
+            "development", "for training")));
 
 static cl::opt<bool> EnableLocalReassignment(
     "enable-local-reassign", cl::Hidden,
@@ -59,59 +62,112 @@ cl::opt<unsigned> EvictInterferenceCutoff(
 #define LLVM_HAVE_TF_AOT
 #endif
 
-char RegAllocEvictionAdvisorAnalysis::ID = 0;
-INITIALIZE_PASS(RegAllocEvictionAdvisorAnalysis, "regalloc-evict",
+char RegAllocEvictionAdvisorAnalysisLegacy::ID = 0;
+INITIALIZE_PASS(RegAllocEvictionAdvisorAnalysisLegacy, "regalloc-evict",
                 "Regalloc eviction policy", false, true)
 
 namespace {
-class DefaultEvictionAdvisorAnalysis final
-    : public RegAllocEvictionAdvisorAnalysis {
+class DefaultEvictionAdvisorProvider final
+    : public RegAllocEvictionAdvisorProvider {
 public:
-  DefaultEvictionAdvisorAnalysis(bool NotAsRequested)
-      : RegAllocEvictionAdvisorAnalysis(AdvisorMode::Default),
-        NotAsRequested(NotAsRequested) {}
+  DefaultEvictionAdvisorProvider(bool NotAsRequested, LLVMContext &Ctx)
+      : RegAllocEvictionAdvisorProvider(AdvisorMode::Default, Ctx) {
+    if (NotAsRequested)
+      Ctx.emitError("Requested regalloc eviction advisor analysis "
+                    "could not be created. Using default");
+  }
 
   // support for isa<> and dyn_cast.
-  static bool classof(const RegAllocEvictionAdvisorAnalysis *R) {
+  static bool classof(const RegAllocEvictionAdvisorProvider *R) {
+    return R->getAdvisorMode() == AdvisorMode::Default;
+  }
+
+  std::unique_ptr<RegAllocEvictionAdvisor>
+  getAdvisor(const MachineFunction &MF, const RAGreedy &RA,
+             MachineBlockFrequencyInfo *, MachineLoopInfo *) override {
+    return std::make_unique<DefaultEvictionAdvisor>(MF, RA);
+  }
+};
+
+class DefaultEvictionAdvisorAnalysisLegacy final
+    : public RegAllocEvictionAdvisorAnalysisLegacy {
+public:
+  DefaultEvictionAdvisorAnalysisLegacy(bool NotAsRequested)
+      : RegAllocEvictionAdvisorAnalysisLegacy(AdvisorMode::Default),
+        NotAsRequested(NotAsRequested) {}
+
+  bool doInitialization(Module &M) override {
+    Provider.reset(
+        new DefaultEvictionAdvisorProvider(NotAsRequested, M.getContext()));
+    return false;
+  }
+
+  // support for isa<> and dyn_cast.
+  static bool classof(const RegAllocEvictionAdvisorAnalysisLegacy *R) {
     return R->getAdvisorMode() == AdvisorMode::Default;
   }
 
 private:
-  std::unique_ptr<RegAllocEvictionAdvisor>
-  getAdvisor(const MachineFunction &MF, const RAGreedy &RA) override {
-    return std::make_unique<DefaultEvictionAdvisor>(MF, RA);
-  }
-  bool doInitialization(Module &M) override {
-    if (NotAsRequested)
-      M.getContext().emitError("Requested regalloc eviction advisor analysis "
-                               "could not be created. Using default");
-    return RegAllocEvictionAdvisorAnalysis::doInitialization(M);
-  }
   const bool NotAsRequested;
 };
 } // namespace
 
-template <> Pass *llvm::callDefaultCtor<RegAllocEvictionAdvisorAnalysis>() {
-  Pass *Ret = nullptr;
+AnalysisKey RegAllocEvictionAdvisorAnalysis::Key;
+
+void RegAllocEvictionAdvisorAnalysis::initializeProvider(
+    RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode Mode, LLVMContext &Ctx) {
+  if (Provider)
+    return;
   switch (Mode) {
-  case RegAllocEvictionAdvisorAnalysis::AdvisorMode::Default:
-    Ret = new DefaultEvictionAdvisorAnalysis(/*NotAsRequested*/ false);
-    break;
-  case RegAllocEvictionAdvisorAnalysis::AdvisorMode::Development:
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default:
+    Provider.reset(
+        new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/false, Ctx));
+    return;
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Development:
 #if defined(LLVM_HAVE_TFLITE)
-    Ret = createDevelopmentModeAdvisor();
+    Provider.reset(createDevelopmentModeAdvisorProvider(Ctx));
+#else
+    Provider.reset(
+        new DefaultEvictionAdvisorProvider(/*NotAsRequested=*/true, Ctx));
 #endif
-    break;
-  case RegAllocEvictionAdvisorAnalysis::AdvisorMode::Release:
-    Ret = createReleaseModeAdvisor();
-    break;
+    return;
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release:
+    Provider.reset(createReleaseModeAdvisorProvider(Ctx));
+    return;
   }
-  if (Ret)
-    return Ret;
-  return new DefaultEvictionAdvisorAnalysis(/*NotAsRequested*/ true);
 }
 
-StringRef RegAllocEvictionAdvisorAnalysis::getPassName() const {
+RegAllocEvictionAdvisorAnalysis::Result
+RegAllocEvictionAdvisorAnalysis::run(MachineFunction &MF,
+                                     MachineFunctionAnalysisManager &MFAM) {
+  // Lazy initialization of the provider.
+  initializeProvider(::Mode, MF.getFunction().getContext());
+  return Result{Provider.get()};
+}
+
+template <>
+Pass *llvm::callDefaultCtor<RegAllocEvictionAdvisorAnalysisLegacy>() {
+  switch (Mode) {
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Default:
+    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/false);
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Release: {
+    Pass *Ret = createReleaseModeAdvisorAnalysisLegacy();
+    // release mode advisor may not be supported
+    if (Ret)
+      return Ret;
+    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/true);
+  }
+  case RegAllocEvictionAdvisorAnalysisLegacy::AdvisorMode::Development:
+#if defined(LLVM_HAVE_TFLITE)
+    return createDevelopmentModeAdvisorAnalysisLegacy();
+#else
+    return new DefaultEvictionAdvisorAnalysisLegacy(/*NotAsRequested=*/true);
+#endif
+  }
+  llvm_unreachable("unexpected advisor mode");
+}
+
+StringRef RegAllocEvictionAdvisorAnalysisLegacy::getPassName() const {
   switch (getAdvisorMode()) {
   case AdvisorMode::Default:
     return "Default Regalloc Eviction Advisor";
@@ -127,7 +183,8 @@ RegAllocEvictionAdvisor::RegAllocEvictionAdvisor(const MachineFunction &MF,
                                                  const RAGreedy &RA)
     : MF(MF), RA(RA), Matrix(RA.getInterferenceMatrix()),
       LIS(RA.getLiveIntervals()), VRM(RA.getVirtRegMap()),
-      MRI(&VRM->getRegInfo()), TRI(MF.getSubtarget().getRegisterInfo()),
+      MRI(&VRM->getRegInfo()), TII(MF.getSubtarget().getInstrInfo()),
+      TRI(MF.getSubtarget().getRegisterInfo()),
       RegClassInfo(RA.getRegClassInfo()), RegCosts(TRI->getRegisterCosts(MF)),
       EnableLocalReassign(EnableLocalReassignment ||
                           MF.getSubtarget().enableRALocalReassignment(
@@ -163,6 +220,29 @@ bool DefaultEvictionAdvisor::shouldEvict(const LiveInterval &A, bool IsHint,
   return false;
 }
 
+// Determine if any of the definitions or uses of a VirtReg have constraints
+// that could hypothetically be widened if the register were fully split around
+// instructions. It makes sense to evict unspillable regs where this is true,
+// since splitting them may widen the register classes enough to avoid the
+// conflict with another unspillable reg.
+static bool canWiden(const MachineRegisterInfo *MRI, const TargetInstrInfo *TII,
+                     const TargetRegisterInfo *TRI, Register Reg) {
+  const TargetRegisterClass *RC = MRI->getRegClass(Reg);
+  for (MachineInstr &MI : MRI->use_instructions(Reg)) {
+    for (unsigned OpIdx = 0, OpEnd = MI.getNumOperands(); OpIdx != OpEnd;
+         ++OpIdx) {
+      const MachineOperand &MO = MI.getOperand(OpIdx);
+      if (!MO.isReg() || MO.getReg() != Reg)
+        continue;
+      const TargetRegisterClass *MORC =
+          MI.getRegClassConstraint(OpIdx, TII, TRI);
+      if (!MORC || MORC->hasSubClass(RC))
+        return true;
+    }
+  }
+  return false;
+}
+
 /// canEvictHintInterference - return true if the interference for VirtReg
 /// on the PhysReg, which is VirtReg's hint, can be evicted in favor of VirtReg.
 bool DefaultEvictionAdvisor::canEvictHintInterference(
@@ -190,7 +270,7 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
   if (Matrix->checkInterference(VirtReg, PhysReg) > LiveRegMatrix::IK_VirtReg)
     return false;
 
-  bool IsLocal = VirtReg.empty() || LIS->intervalIsInOneMBB(VirtReg);
+  bool IsLocal = LIS->intervalIsInOneMBB(VirtReg);
 
   // Find VirtReg's cascade number. This will be unassigned if VirtReg was never
   // involved in an eviction before. If a cascade number was assigned, deny
@@ -234,7 +314,11 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
           (Intf->isSpillable() ||
            RegClassInfo.getNumAllocatableRegs(MRI->getRegClass(VirtReg.reg())) <
                RegClassInfo.getNumAllocatableRegs(
-                   MRI->getRegClass(Intf->reg())));
+                   MRI->getRegClass(Intf->reg())) ||
+           (!canWiden(MRI, TII, TRI, VirtReg.reg()) &&
+            canWiden(MRI, TII, TRI, Intf->reg())) ||
+           (VirtReg.isZeroLength(LIS->getSlotIndexes()) &&
+            !Intf->isZeroLength(LIS->getSlotIndexes())));
       // Only evict older cascades or live ranges without a cascade.
       unsigned IntfCascade = RA.getExtraInfo().getCascade(Intf->reg());
       if (Cascade == IntfCascade)
@@ -257,6 +341,17 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
         return false;
       if (Urgent)
         continue;
+
+      // If there's only one option for this assigment, and if splitting and
+      // spilling won't help widen it, then at least one interference will
+      // necessarily be evicted. In such cases, it's better to preemptively
+      // evict the interferences, so long as there's something available to
+      // reassign them to.
+      if (MRI->getRegClass(VirtReg.reg())->getNumRegs() == 1 &&
+          !canWiden(MRI, TII, TRI, VirtReg.reg()) &&
+          canReassign(*Intf, PhysReg))
+        continue;
+
       // Apply the eviction policy for non-urgent evictions.
       if (!shouldEvict(VirtReg, IsHint, *Intf, BreaksHint))
         return false;

@@ -46,9 +46,9 @@ define void @schedule_block(i1 %arg) {
 ; CHECK-NEXT:    br label [[FOR_COND3_I:%.*]]
 ; CHECK:       for.cond3.i:
 ; CHECK-NEXT:    [[INDVARS_IV301_I2691:%.*]] = phi i64 [ [[INDVARS_IV_NEXT302_I:%.*]], [[FOR_BODY5_I:%.*]] ], [ [[TMP1]], [[FOR_COND3_PREHEADER_I]] ]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT302_I]] = add nsw i64 [[INDVARS_IV301_I2691]], 1
 ; CHECK-NEXT:    br label [[FOR_BODY5_I]]
 ; CHECK:       for.body5.i:
+; CHECK-NEXT:    [[INDVARS_IV_NEXT302_I]] = add nsw i64 [[INDVARS_IV301_I2691]], 1
 ; CHECK-NEXT:    br i1 false, label [[FOR_COND3_I]], label [[FOR_BODY5_I_FOR_END_I2475_LOOPEXIT_CRIT_EDGE:%.*]]
 ; CHECK:       for.body5.i.for.end.i2475.loopexit_crit_edge:
 ; CHECK-NEXT:    [[TMP2]] = trunc i64 [[INDVARS_IV_NEXT302_I]] to i32

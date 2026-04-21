@@ -1453,6 +1453,24 @@ private:
   SmallVector<const Symbol *, 0> symbols;
 };
 
+struct XO65Segment;
+class XO65Section final : public SyntheticSection {
+  StringRef segmentName;
+  StringRef contents;
+  size_t size;
+
+public:
+  XO65Section(Ctx &ctx, const XO65Segment &segment);
+
+  StringRef getSegmentName() const { return segmentName; }
+  size_t getSize() const override { return size; }
+  void setContents(StringRef contents) {
+    assert(contents.size() == size);
+    this->contents = contents;
+  }
+  void writeTo(uint8_t *buf) override;
+};
+
 template <class ELFT> void createSyntheticSections(Ctx &);
 InputSection *createInterpSection(Ctx &);
 MergeInputSection *createCommentSection(Ctx &);

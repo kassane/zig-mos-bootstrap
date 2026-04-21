@@ -40,6 +40,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
@@ -406,9 +407,7 @@ bool IndVarSimplify::rewriteNonIntegerIVs(Loop *L) {
   // the SCEV routines.
   BasicBlock *Header = L->getHeader();
 
-  SmallVector<WeakTrackingVH, 8> PHIs;
-  for (PHINode &PN : Header->phis())
-    PHIs.push_back(&PN);
+  SmallVector<WeakTrackingVH, 8> PHIs(llvm::make_pointer_range(Header->phis()));
 
   bool Changed = false;
   for (WeakTrackingVH &PHI : PHIs)
@@ -599,9 +598,8 @@ bool IndVarSimplify::simplifyAndExtend(Loop *L,
       L->getBlocks()[0]->getModule(), Intrinsic::experimental_guard);
   bool HasGuards = GuardDecl && !GuardDecl->use_empty();
 
-  SmallVector<PHINode *, 8> LoopPhis;
-  for (PHINode &PN : L->getHeader()->phis())
-    LoopPhis.push_back(&PN);
+  SmallVector<PHINode *, 8> LoopPhis(
+      llvm::make_pointer_range(L->getHeader()->phis()));
 
   // Each round of simplification iterates through the SimplifyIVUsers worklist
   // for all current phis, then determines whether any IVs can be
@@ -831,14 +829,16 @@ static bool isLoopCounter(PHINode* Phi, Loop *L,
 /// valid count without scaling the address stride, so it remains a pointer
 /// expression as far as SCEV is concerned.
 static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
-                                const SCEV *BECount,
-                                ScalarEvolution *SE, DominatorTree *DT) {
+                                const SCEV *BECount, ScalarEvolution *SE,
+                                DominatorTree *DT,
+                                const TargetTransformInfo *TTI) {
   uint64_t BCWidth = SE->getTypeSizeInBits(BECount->getType());
 
   Value *Cond = cast<BranchInst>(ExitingBB->getTerminator())->getCondition();
 
   // Loop over all of the PHI nodes, looking for a simple counter.
   PHINode *BestPhi = nullptr;
+  bool BestPhiLegal = false;
   const SCEV *BestInit = nullptr;
   BasicBlock *LatchBlock = L->getLoopLatch();
   assert(LatchBlock && "Must be in simplified form");
@@ -855,7 +855,14 @@ static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
     // AR may be wider than BECount. With eq/ne tests overflow is immaterial.
     // AR may not be a narrower type, or we may never exit.
     uint64_t PhiWidth = SE->getTypeSizeInBits(AR->getType());
-    if (PhiWidth < BCWidth || !DL.isLegalInteger(PhiWidth))
+    if (PhiWidth < BCWidth)
+      continue;
+
+    bool Legal = DL.isLegalInteger(PhiWidth);
+
+    // Don't use an illegal integer if a legal integer can be used or if
+    // disallowed.
+    if (!Legal && (!TTI->allowIllegalIntegerIV() || BestPhiLegal))
       continue;
 
     // Avoid reusing a potentially undef value to compute other values that may
@@ -902,6 +909,7 @@ static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
         continue;
     }
     BestPhi = Phi;
+    BestPhiLegal = Legal;
     BestInit = Init;
   }
   return BestPhi;
@@ -1096,10 +1104,12 @@ bool IndVarSimplify::sinkUnusedInvariants(Loop *L) {
   if (!Preheader) return false;
 
   bool MadeAnyChanges = false;
-  BasicBlock::iterator InsertPt = ExitBlock->getFirstInsertionPt();
-  BasicBlock::iterator I(Preheader->getTerminator());
-  while (I != Preheader->begin()) {
-    --I;
+  for (Instruction &I : llvm::make_early_inc_range(llvm::reverse(*Preheader))) {
+
+    // Skip BB Terminator.
+    if (Preheader->getTerminator() == &I)
+      continue;
+
     // New instructions were inserted at the end of the preheader.
     if (isa<PHINode>(I))
       break;
@@ -1110,28 +1120,28 @@ bool IndVarSimplify::sinkUnusedInvariants(Loop *L) {
     // memory. Note that it's okay if the instruction might have undefined
     // behavior: LoopSimplify guarantees that the preheader dominates the exit
     // block.
-    if (I->mayHaveSideEffects() || I->mayReadFromMemory())
+    if (I.mayHaveSideEffects() || I.mayReadFromMemory())
       continue;
 
-    // Skip debug info intrinsics.
-    if (isa<DbgInfoIntrinsic>(I))
+    // Skip debug or pseudo instructions.
+    if (I.isDebugOrPseudoInst())
       continue;
 
     // Skip eh pad instructions.
-    if (I->isEHPad())
+    if (I.isEHPad())
       continue;
 
     // Don't sink alloca: we never want to sink static alloca's out of the
     // entry block, and correctly sinking dynamic alloca's requires
     // checks for stacksave/stackrestore intrinsics.
     // FIXME: Refactor this check somehow?
-    if (isa<AllocaInst>(I))
+    if (isa<AllocaInst>(&I))
       continue;
 
     // Determine if there is a use in or before the loop (direct or
     // otherwise).
     bool UsedInLoop = false;
-    for (Use &U : I->uses()) {
+    for (Use &U : I.uses()) {
       Instruction *User = cast<Instruction>(U.getUser());
       BasicBlock *UseBB = User->getParent();
       if (PHINode *P = dyn_cast<PHINode>(User)) {
@@ -1150,26 +1160,9 @@ bool IndVarSimplify::sinkUnusedInvariants(Loop *L) {
       continue;
 
     // Otherwise, sink it to the exit block.
-    Instruction *ToMove = &*I;
-    bool Done = false;
-
-    if (I != Preheader->begin()) {
-      // Skip debug info intrinsics.
-      do {
-        --I;
-      } while (I->isDebugOrPseudoInst() && I != Preheader->begin());
-
-      if (I->isDebugOrPseudoInst() && I == Preheader->begin())
-        Done = true;
-    } else {
-      Done = true;
-    }
-
+    I.moveBefore(ExitBlock->getFirstInsertionPt());
+    SE->forgetValue(&I);
     MadeAnyChanges = true;
-    ToMove->moveBefore(*ExitBlock, InsertPt);
-    SE->forgetValue(ToMove);
-    if (Done) break;
-    InsertPt = ToMove->getIterator();
   }
 
   return MadeAnyChanges;
@@ -1262,14 +1255,14 @@ static std::optional<Value *>
 createReplacement(ICmpInst *ICmp, const Loop *L, BasicBlock *ExitingBB,
                   const SCEV *MaxIter, bool Inverted, bool SkipLastIter,
                   ScalarEvolution *SE, SCEVExpander &Rewriter) {
-  ICmpInst::Predicate Pred = ICmp->getPredicate();
+  CmpPredicate Pred = ICmp->getCmpPredicate();
   Value *LHS = ICmp->getOperand(0);
   Value *RHS = ICmp->getOperand(1);
 
   // 'LHS pred RHS' should now mean that we stay in loop.
   auto *BI = cast<BranchInst>(ExitingBB->getTerminator());
   if (Inverted)
-    Pred = CmpInst::getInversePredicate(Pred);
+    Pred = ICmpInst::getInverseCmpPredicate(Pred);
 
   const SCEV *LHSS = SE->getSCEVAtScope(LHS, L);
   const SCEV *RHSS = SE->getSCEVAtScope(RHS, L);
@@ -1460,7 +1453,6 @@ bool IndVarSimplify::canonicalizeExitCondition(Loop *L) {
     if (!match(LHS, m_ZExt(m_Value(LHSOp))) || !ICmp->isSigned())
       continue;
 
-    const DataLayout &DL = ExitingBB->getDataLayout();
     const unsigned InnerBitWidth = DL.getTypeSizeInBits(LHSOp->getType());
     const unsigned OuterBitWidth = DL.getTypeSizeInBits(RHS->getType());
     auto FullCR = ConstantRange::getFull(InnerBitWidth);
@@ -1536,8 +1528,6 @@ bool IndVarSimplify::canonicalizeExitCondition(Loop *L) {
         DeadInsts.push_back(LHS);
     };
 
-
-    const DataLayout &DL = ExitingBB->getDataLayout();
     const unsigned InnerBitWidth = DL.getTypeSizeInBits(LHSOp->getType());
     const unsigned OuterBitWidth = DL.getTypeSizeInBits(RHS->getType());
     auto FullCR = ConstantRange::getFull(InnerBitWidth);
@@ -1976,8 +1966,9 @@ bool IndVarSimplify::run(Loop *L) {
     SmallVector<BasicBlock*, 16> ExitingBlocks;
     L->getExitingBlocks(ExitingBlocks);
     for (BasicBlock *ExitingBB : ExitingBlocks) {
+      BranchInst *Term = dyn_cast<BranchInst>(ExitingBB->getTerminator());
       // Can't rewrite non-branch yet.
-      if (!isa<BranchInst>(ExitingBB->getTerminator()))
+      if (!Term)
         continue;
 
       // If our exitting block exits multiple loops, we can only rewrite the
@@ -2000,9 +1991,29 @@ bool IndVarSimplify::run(Loop *L) {
       if (ExitCount->isZero())
         continue;
 
-      PHINode *IndVar = FindLoopCounter(L, ExitingBB, ExitCount, SE, DT);
+      PHINode *IndVar = FindLoopCounter(L, ExitingBB, ExitCount, SE, DT, TTI);
       if (!IndVar)
         continue;
+
+      uint64_t IndVarWidth = SE->getTypeSizeInBits(IndVar->getType());
+      if (!DL.isLegalInteger(IndVarWidth)) {
+        const auto *Cond = dyn_cast<CmpInst>(Term->getCondition());
+        if (!Cond)
+          continue;
+
+        Type *CondTy = Cond->getOperand(0)->getType();
+        if (!SE->isSCEVable(CondTy))
+          continue;
+
+        // Don't replace a legal exit condition with an illegal one.
+        uint64_t CondWidth = SE->getTypeSizeInBits(CondTy);
+        if (DL.isLegalInteger(CondWidth))
+          continue;
+
+        // Don't widen an illegal exit condition.
+        if (IndVarWidth > CondWidth)
+          continue;
+      }
 
       // Avoid high cost expansions.  Note: This heuristic is questionable in
       // that our definition of "high cost" is not exactly principled.

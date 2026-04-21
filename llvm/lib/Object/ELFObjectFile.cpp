@@ -12,6 +12,7 @@
 
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MOSFlags.h"
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELF.h"
@@ -398,6 +399,22 @@ Expected<SubtargetFeatures> ELFObjectFileBase::getRISCVFeatures() const {
   return Features;
 }
 
+SubtargetFeatures ELFObjectFileBase::getMOSFeatures() const {
+  SubtargetFeatures Features;
+  const unsigned PlatformFlags = getPlatformFlags();
+
+  // mos-insns-* features can be directly translated from e_flags.
+  for (const EnumEntry<unsigned> &FlagEntry : MOS::ElfHeaderMOSFlags) {
+    if (PlatformFlags & FlagEntry.Value) {
+      SmallString<32> Str("mos-insns-");
+      Str.append(FlagEntry.AltName.substr(3));
+      Features.AddFeature(Str);
+    }
+  }
+
+  return Features;
+}
+
 SubtargetFeatures ELFObjectFileBase::getLoongArchFeatures() const {
   SubtargetFeatures Features;
 
@@ -424,6 +441,8 @@ Expected<SubtargetFeatures> ELFObjectFileBase::getFeatures() const {
     return getARMFeatures();
   case ELF::EM_RISCV:
     return getRISCVFeatures();
+  case ELF::EM_MOS:
+    return getMOSFeatures();
   case ELF::EM_LOONGARCH:
     return getLoongArchFeatures();
   case ELF::EM_HEXAGON:
@@ -545,10 +564,6 @@ StringRef ELFObjectFileBase::getAMDGPUCPUName() const {
     return "gfx90a";
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX90C:
     return "gfx90c";
-  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX940:
-    return "gfx940";
-  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX941:
-    return "gfx941";
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX942:
     return "gfx942";
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX950:
@@ -782,10 +797,11 @@ void ELFObjectFileBase::setARMSubArch(Triple &TheTriple) const {
   TheTriple.setArchName(Triple);
 }
 
-std::vector<ELFPltEntry> ELFObjectFileBase::getPltEntries() const {
+std::vector<ELFPltEntry>
+ELFObjectFileBase::getPltEntries(const MCSubtargetInfo &STI) const {
   std::string Err;
   const auto Triple = makeTriple();
-  const auto *T = TargetRegistry::lookupTarget(Triple.str(), Err);
+  const auto *T = TargetRegistry::lookupTarget(Triple, Err);
   if (!T)
     return {};
   uint32_t JumpSlotReloc = 0, GlobDatReloc = 0;
@@ -801,6 +817,16 @@ std::vector<ELFPltEntry> ELFObjectFileBase::getPltEntries() const {
     case Triple::aarch64:
     case Triple::aarch64_be:
       JumpSlotReloc = ELF::R_AARCH64_JUMP_SLOT;
+      break;
+    case Triple::arm:
+    case Triple::armeb:
+    case Triple::thumb:
+    case Triple::thumbeb:
+      JumpSlotReloc = ELF::R_ARM_JUMP_SLOT;
+      break;
+    case Triple::hexagon:
+      JumpSlotReloc = ELF::R_HEX_JMP_SLOT;
+      GlobDatReloc = ELF::R_HEX_GLOB_DAT;
       break;
     default:
       return {};
@@ -836,7 +862,7 @@ std::vector<ELFPltEntry> ELFObjectFileBase::getPltEntries() const {
       llvm::append_range(
           PltEntries,
           MIA->findPltEntries(Section.getAddress(),
-                              arrayRefFromStringRef(*PltContents), Triple));
+                              arrayRefFromStringRef(*PltContents), STI));
     }
   }
 

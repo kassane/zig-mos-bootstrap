@@ -55,6 +55,7 @@ struct file_magic {
     tapi_file,                 ///< Text-based Dynamic Library Stub file
     cuda_fatbinary,            ///< CUDA Fatbinary object file
     offload_binary,            ///< LLVM offload object file
+    xo65_object,               ///< XO65 object file
     dxcontainer_object,        ///< DirectX container file
     offload_bundle,            ///< Clang offload bundle file
     offload_bundle_compressed, ///< Compressed clang offload bundle file

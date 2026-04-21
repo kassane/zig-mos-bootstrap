@@ -80,7 +80,8 @@ enum SectionsCommandKind {
   AssignmentKind, // . = expr or <sym> = expr
   OutputSectionKind,
   InputSectionKind,
-  ByteKind,  // BYTE(expr), SHORT(expr), LONG(expr) or QUAD(expr)
+  ByteKind,    // BYTE(expr), SHORT(expr), LONG(expr) or QUAD(expr)
+  MemoryRegionKind,
   ClassKind, // CLASS(class_name)
 };
 
@@ -275,6 +276,28 @@ struct ByteCommand : SectionCommand {
   unsigned size;
 };
 
+// Include a LMA memory region in a custom output format.
+struct MemoryRegionCommand : SectionCommand {
+  MemoryRegionCommand(MemoryRegion *memRegion, bool full,
+    Expr start = nullptr, Expr length = nullptr)
+      : SectionCommand(MemoryRegionKind), memRegion(memRegion), full(full),
+        start(start), length(length) {}
+
+  static bool classof(const SectionCommand *c) {
+    return c->kind == MemoryRegionKind;
+  }
+
+  MemoryRegion *memRegion;
+
+  // Whether the entire memory region or only the portion up to the last byte
+  // covered by an output LMA should be inserted.
+  bool full;
+
+  // The start position and length of the region to be inserted.
+  Expr start;
+  Expr length;
+};
+
 struct InsertCommand {
   SmallVector<StringRef, 0> names;
   bool isAfter;
@@ -311,6 +334,7 @@ class LinkerScript final {
     MemoryRegion *lmaRegion = nullptr;
     uint64_t lmaOffset = 0;
     uint64_t tbssAddr = 0;
+    uint64_t overlaySize;
   };
 
   Ctx &ctx;
@@ -444,6 +468,8 @@ public:
 
   // Sections that will be warned/errored by --orphan-handling.
   SmallVector<const InputSectionBase *, 0> orphanSections;
+
+  SmallVector<SectionCommand *, 0> outputFormat;
 
   // Stores the mapping: PROVIDE symbol -> symbols referred in the PROVIDE
   // expression. For example, if the PROVIDE command is:

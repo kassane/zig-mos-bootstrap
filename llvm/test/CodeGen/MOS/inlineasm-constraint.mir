@@ -1,0 +1,210 @@
+# RUN: llc -run-pass=irtranslator -verify-machineinstrs -o - %s | FileCheck %s
+--- |
+  target triple = "mos"
+
+  define void @constraint_r_i8() {
+  ; CHECK-LABEL: name: constraint_r_i8
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "r"(i8 56)
+    ; CHECK:      %1:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: %0:imag8 = COPY %1
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse:Imag8 */, %0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_r_i16() {
+  ; CHECK-LABEL: name: constraint_r_i16
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "r"(i16 56)
+    ; CHECK:      %1:_(s16) = G_CONSTANT i16 56
+    ; CHECK-NEXT: %0:imag16 = COPY %1
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse:Imag16 */, %0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  @global = global i32 0
+
+  define void @constraint_i_i8() {
+  ; CHECK-LABEL: name: constraint_i_i8
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "i"(i8 42)
+    ; CHECK: INLINEASM &"JSR 1234", {{.*}} /* sideeffect mayload attdialect */, {{.*}} /* imm */, 42
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_i_neg_i8() {
+  ; CHECK-LABEL: name: constraint_i_neg_i8
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "i"(i8 -42)
+    ; CHECK: INLINEASM &"JSR 1234", {{.*}} /* sideeffect mayload attdialect */, {{.*}} /* imm */, 214
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_i_i16() {
+  ; CHECK-LABEL: name: constraint_i_i16
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "i"(i16 42)
+    ; CHECK: INLINEASM &"JSR 1234", {{.*}} /* sideeffect mayload attdialect */, {{.*}} /* imm */, 42
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_i_neg_i16() {
+  ; CHECK-LABEL: name: constraint_i_neg_i16
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "i"(i16 -42)
+    ; CHECK: INLINEASM &"JSR 1234", {{.*}} /* sideeffect mayload attdialect */, {{.*}} /* imm */, 65494
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_i_global() {
+  ; CHECK-LABEL: name: constraint_i_global
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "i"(i32* @global)
+    ; CHECK: INLINEASM &"JSR 1234", {{.*}} /* sideeffect mayload attdialect */, {{.*}} /* imm */, @global
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_R() {
+  ; CHECK-LABEL: name: constraint_R
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "R"(i8 56)
+    ; CHECK:      %1:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: %0:gpr = COPY %1
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse:GPR */, %0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_a() {
+  ; CHECK-LABEL: name: constraint_a
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "a"(i8 56)
+    ; CHECK:      %0:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: $a = COPY %0(s8)
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse */, $a
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_x() {
+  ; CHECK-LABEL: name: constraint_x
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "x"(i8 56)
+    ; CHECK:      %0:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: $x = COPY %0(s8)
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse */, $x
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_y() {
+  ; CHECK-LABEL: name: constraint_y
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "y"(i8 56)
+    ; CHECK:      %0:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: $y = COPY %0(s8)
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse */, $y
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_d() {
+  ; CHECK-LABEL: name: constraint_d
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "JSR 1234", "d"(i8 56)
+    ; CHECK:      %1:_(s8) = G_CONSTANT i8 56
+    ; CHECK-NEXT: %0:xy = COPY %1(s8)
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse:XY */, %0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @clobber_cc() {
+  ; CHECK-LABEL: name: clobber_cc
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "", "~{cc}"()
+    ; CHECK-NEXT: INLINEASM &"", {{.*}} /* sideeffect attdialect */, {{.*}} /* clobber */, implicit-def early-clobber $p
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @clobber_c() {
+  ; CHECK-LABEL: name: clobber_c
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "", "~{c}"()
+    ; CHECK-NEXT: INLINEASM &"", {{.*}} /* sideeffect attdialect */, {{.*}} /* clobber */, implicit-def early-clobber $c
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @clobber_a() {
+  ; CHECK-LABEL: name: clobber_a
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "", "~{a}"()
+    ; CHECK-NEXT: INLINEASM &"", {{.*}} /* sideeffect attdialect */, {{.*}} /* clobber */, implicit-def early-clobber $a
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @clobber_rc0() {
+  ; CHECK-LABEL: name: clobber_rc0
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "", "~{rc0}"()
+    ; CHECK-NEXT: INLINEASM &"", {{.*}} /* sideeffect attdialect */, {{.*}} /* clobber */, implicit-def early-clobber $rc0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @clobber_rs0() {
+  ; CHECK-LABEL: name: clobber_rs0
+  entry:
+  ; CHECK-LABEL: entry:
+    call void asm sideeffect "", "~{rs0}"()
+    ; CHECK-NEXT: INLINEASM &"", {{.*}} /* sideeffect attdialect */, {{.*}} /* clobber */, implicit-def early-clobber $rs0
+    ret void
+    ; CHECK-NEXT: RTS
+  }
+
+  define void @constraint_c() {
+  ; CHECK-LABEL: name: constraint_c
+  entry:
+    ; CHECK:      %0:_(s1) = G_CONSTANT i1 true
+    ; CHECK-NEXT: $c = COPY %0
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse */, $c
+    call void asm sideeffect "JSR 1234", "c"(i1 1)
+    ret void
+  }
+
+  define void @constraint_v() {
+  ; CHECK-LABEL: name: constraint_v
+  entry:
+    ; CHECK:      %0:_(s1) = G_CONSTANT i1 true
+    ; CHECK-NEXT: $v = COPY %0
+    ; CHECK-NEXT: INLINEASM &"JSR 1234", {{.*}} /* sideeffect attdialect */, {{.*}} /* reguse */, $v
+    call void asm sideeffect "JSR 1234", "v"(i1 1)
+    ret void
+  }
+...

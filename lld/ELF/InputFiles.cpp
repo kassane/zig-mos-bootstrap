@@ -26,8 +26,12 @@
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/RISCVAttributeParser.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -326,6 +330,8 @@ template <class ELFT> static void doParseFile(Ctx &ctx, InputFile *file) {
     f->parse<ELFT>();
   } else if (auto *f = dyn_cast<BitcodeFile>(file)) {
     ctx.bitcodeFiles.push_back(f);
+    f->parse();
+  } else if (auto *f = dyn_cast<XO65File>(file)) {
     f->parse();
   } else {
     ctx.binaryFiles.push_back(cast<BinaryFile>(file));
@@ -639,6 +645,13 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
       }
       break;
     case EM_AARCH64:
+      // FIXME: BuildAttributes have been implemented in llvm, but not yet in
+      // lld. Remove the section so that it does not accumulate in the output
+      // file. When support is implemented we expect not to output a build
+      // attributes section in files of type ET_EXEC or ET_SHARED, but ld -r
+      // ouptut will need a single merged attributes section.
+      if (sec.sh_type == SHT_AARCH64_ATTRIBUTES)
+        sections[i] = &InputSection::discarded;
       // Producing a static binary with MTE globals is not currently supported,
       // remove all SHT_AARCH64_MEMTAG_GLOBALS_STATIC sections as they're unused
       // medatada, and we don't want them to end up in the output file for
@@ -911,6 +924,56 @@ void ObjFile<ELFT>::initializeSections(bool ignoreComdats,
     handleSectionGroup<ELFT>(this->sections, entries);
 }
 
+template <typename ELFT>
+static void parseGnuPropertyNote(Ctx &ctx, ELFFileBase &f,
+                                 uint32_t featureAndType,
+                                 ArrayRef<uint8_t> &desc, const uint8_t *base,
+                                 ArrayRef<uint8_t> *data = nullptr) {
+  auto err = [&](const uint8_t *place) -> ELFSyncStream {
+    auto diag = Err(ctx);
+    diag << &f << ":(" << ".note.gnu.property+0x"
+         << Twine::utohexstr(place - base) << "): ";
+    return diag;
+  };
+
+  while (!desc.empty()) {
+    const uint8_t *place = desc.data();
+    if (desc.size() < 8)
+      return void(err(place) << "program property is too short");
+    uint32_t type = read32<ELFT::Endianness>(desc.data());
+    uint32_t size = read32<ELFT::Endianness>(desc.data() + 4);
+    desc = desc.slice(8);
+    if (desc.size() < size)
+      return void(err(place) << "program property is too short");
+
+    if (type == featureAndType) {
+      // We found a FEATURE_1_AND field. There may be more than one of these
+      // in a .note.gnu.property section, for a relocatable object we
+      // accumulate the bits set.
+      if (size < 4)
+        return void(err(place) << "FEATURE_1_AND entry is too short");
+      f.andFeatures |= read32<ELFT::Endianness>(desc.data());
+    } else if (ctx.arg.emachine == EM_AARCH64 &&
+               type == GNU_PROPERTY_AARCH64_FEATURE_PAUTH) {
+      ArrayRef<uint8_t> contents = data ? *data : desc;
+      if (!f.aarch64PauthAbiCoreInfo.empty()) {
+        return void(
+            err(contents.data())
+            << "multiple GNU_PROPERTY_AARCH64_FEATURE_PAUTH entries are "
+               "not supported");
+      } else if (size != 16) {
+        return void(err(contents.data())
+                    << "GNU_PROPERTY_AARCH64_FEATURE_PAUTH entry "
+                       "is invalid: expected 16 bytes, but got "
+                    << size);
+      }
+      f.aarch64PauthAbiCoreInfo = desc;
+    }
+
+    // Padding is present in the note descriptor, if necessary.
+    desc = desc.slice(alignTo<(ELFT::Is64Bits ? 8 : 4)>(size));
+  }
+}
 // Read the following info from the .note.gnu.property section and write it to
 // the corresponding fields in `ObjFile`:
 // - Feature flags (32 bits) representing x86 or AArch64 features for
@@ -948,42 +1011,8 @@ static void readGnuProperty(Ctx &ctx, const InputSection &sec,
 
     // Read a body of a NOTE record, which consists of type-length-value fields.
     ArrayRef<uint8_t> desc = note.getDesc(sec.addralign);
-    while (!desc.empty()) {
-      const uint8_t *place = desc.data();
-      if (desc.size() < 8)
-        return void(err(place) << "program property is too short");
-      uint32_t type = read32<ELFT::Endianness>(desc.data());
-      uint32_t size = read32<ELFT::Endianness>(desc.data() + 4);
-      desc = desc.slice(8);
-      if (desc.size() < size)
-        return void(err(place) << "program property is too short");
-
-      if (type == featureAndType) {
-        // We found a FEATURE_1_AND field. There may be more than one of these
-        // in a .note.gnu.property section, for a relocatable object we
-        // accumulate the bits set.
-        if (size < 4)
-          return void(err(place) << "FEATURE_1_AND entry is too short");
-        f.andFeatures |= read32<ELFT::Endianness>(desc.data());
-      } else if (ctx.arg.emachine == EM_AARCH64 &&
-                 type == GNU_PROPERTY_AARCH64_FEATURE_PAUTH) {
-        if (!f.aarch64PauthAbiCoreInfo.empty()) {
-          return void(
-              err(data.data())
-              << "multiple GNU_PROPERTY_AARCH64_FEATURE_PAUTH entries are "
-                 "not supported");
-        } else if (size != 16) {
-          return void(err(data.data())
-                      << "GNU_PROPERTY_AARCH64_FEATURE_PAUTH entry "
-                         "is invalid: expected 16 bytes, but got "
-                      << size);
-        }
-        f.aarch64PauthAbiCoreInfo = desc;
-      }
-
-      // Padding is present in the note descriptor, if necessary.
-      desc = desc.slice(alignTo<(ELFT::Is64Bits ? 8 : 4)>(size));
-    }
+    const uint8_t *base = sec.content().data();
+    parseGnuPropertyNote<ELFT>(ctx, f, featureAndType, desc, base, &data);
 
     // Go to next NOTE record to look for more FEATURE_1_AND descriptions.
     data = data.slice(nhdr->getSize(sec.addralign));
@@ -1411,6 +1440,28 @@ std::vector<uint32_t> SharedFile::parseVerneed(const ELFFile<ELFT> &obj,
   return verneeds;
 }
 
+// Parse PT_GNU_PROPERTY segments in DSO. The process is similar to
+// readGnuProperty, but we don't have the InputSection information.
+template <typename ELFT>
+void SharedFile::parseGnuAndFeatures(const ELFFile<ELFT> &obj) {
+  if (ctx.arg.emachine != EM_AARCH64)
+    return;
+  const uint8_t *base = obj.base();
+  auto phdrs = CHECK2(obj.program_headers(), this);
+  for (auto phdr : phdrs) {
+    if (phdr.p_type != PT_GNU_PROPERTY)
+      continue;
+    typename ELFT::Note note(
+        *reinterpret_cast<const typename ELFT::Nhdr *>(base + phdr.p_offset));
+    if (note.getType() != NT_GNU_PROPERTY_TYPE_0 || note.getName() != "GNU")
+      continue;
+
+    ArrayRef<uint8_t> desc = note.getDesc(phdr.p_align);
+    parseGnuPropertyNote<ELFT>(ctx, *this, GNU_PROPERTY_AARCH64_FEATURE_1_AND,
+                               desc, base);
+  }
+}
+
 // We do not usually care about alignments of data in shared object
 // files because the loader takes care of it. However, if we promote a
 // DSO symbol to point to .bss due to copy relocation, we need to keep
@@ -1521,6 +1572,7 @@ template <class ELFT> void SharedFile::parse() {
 
   verdefs = parseVerdefs<ELFT>(obj.base(), verdefSec);
   std::vector<uint32_t> verneeds = parseVerneed<ELFT>(obj, verneedSec);
+  parseGnuAndFeatures<ELFT>(obj);
 
   // Parse ".gnu.version" section which is a parallel array for the symbol
   // table. If a given file doesn't have a ".gnu.version" section, we use
@@ -1574,7 +1626,7 @@ template <class ELFT> void SharedFile::parse() {
       }
       Symbol *s = ctx.symtab->addSymbol(
           Undefined{this, name, sym.getBinding(), sym.st_other, sym.getType()});
-      s->exportDynamic = true;
+      s->isExported = true;
       if (sym.getBinding() != STB_WEAK &&
           ctx.arg.unresolvedSymbolsInShlib != UnresolvedPolicy::Ignore)
         requiredSymbols.push_back(s);
@@ -1655,6 +1707,8 @@ static uint16_t getBitcodeMachineKind(Ctx &ctx, StringRef path,
   case Triple::mips64:
   case Triple::mips64el:
     return EM_MIPS;
+  case Triple::mos:
+    return EM_MOS;
   case Triple::msp430:
     return EM_MSP430;
   case Triple::ppc:
@@ -1771,7 +1825,7 @@ static void createBitcodeSymbol(Ctx &ctx, Symbol *&sym,
                    nullptr);
     // The definition can be omitted if all bitcode definitions satisfy
     // `canBeOmittedFromSymbolTable()` and isUsedInRegularObj is false.
-    // The latter condition is tested in Symbol::includeInDynsym.
+    // The latter condition is tested in parseVersionAndComputeIsPreemptible.
     sym->ltoCanOmit = objSym.canBeOmittedFromSymbolTable() &&
                       (!sym->isDefined() || sym->ltoCanOmit);
     sym->resolve(ctx, newSym);
@@ -1860,6 +1914,541 @@ void BinaryFile::parse() {
   ctx.symtab->addAndCheckDuplicate(
       ctx, Defined{ctx, this, ss.save(s + "_size"), STB_GLOBAL, STV_DEFAULT,
                    STT_OBJECT, data.size(), 0, nullptr});
+}
+
+static std::string findProgramByName(StringRef name, StringRef ctx) {
+  ErrorOr<std::string> errorOrPath = sys::findProgramByName(name);
+  if (std::error_code ec = errorOrPath.getError())
+    fatal(ctx + ": could not find " + name + ": " + ec.message());
+  return *errorOrPath;
+}
+
+XO65TempFile::XO65TempFile(Ctx &ctx, StringRef prefix, StringRef suffix,
+                           StringRef ctxStr, StringRef description)
+    : ctx(ctx), ctxStr(ctxStr), description(description) {
+  if (std::error_code ec = createTemporaryFile(prefix, suffix, fd, path))
+    fatal(ctxStr + ": could not create " + description + ": " + ec.message());
+}
+
+XO65TempFile::~XO65TempFile() {
+  buffer.reset();
+  if (ctx.arg.saveTempsArgs.contains("ld65"))
+    return;
+  if (std::error_code ec = remove(path))
+    warn(ctxStr + ": could not remove " + description + ": " + ec.message());
+}
+
+void XO65TempFile::close() {
+  buffer.reset();
+  file_t f = convertFDToNativeFile(fd);
+  if (std::error_code ec = closeFile(f))
+    fatal(ctxStr + ": could not close " + description + ": " + ec.message());
+  fd = -1;
+}
+
+void XO65TempFile::open() {
+  if (std::error_code ec =
+          openFileForReadWrite(path, fd, CD_OpenExisting, OF_None))
+    fatal(ctxStr + ": could not open " + description + ": " + ec.message());
+}
+
+void XO65TempFile::read() {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> bufOrError =
+      MemoryBuffer::getOpenFile(convertFDToNativeFile(fd), path,
+                                /*FileSize=*/-1);
+  if (std::error_code ec = bufOrError.getError())
+    fatal(ctxStr + ": could not read " + description + ": " + ec.message());
+  buffer = std::move(*bufOrError);
+}
+
+void XO65File::parse() {
+  // ELF cannot straightforwardly support xo65's relocation types, so there's no
+  // straightforward way to merge xo65 objects into a relocatable ELF file.
+  if (ctx.arg.relocatable)
+    fatal(toStr(ctx, this) +
+          ": cc65 (xo65) object file cannot be relocatably linked");
+
+  if (ctx.arg.od65Path.empty())
+    ctx.arg.od65Path =
+        saver().save(findProgramByName("od65", toStr(ctx, this)));
+
+  outputFile.emplace(ctx, "od65", "out", toStr(ctx, this), "od65 output file");
+
+  SmallVector<StringRef> args = {ctx.arg.od65Path, "--dump-all", getName()};
+  StringRef executable = args.front();
+  if (!ctx.arg.cc65Launcher.empty()) {
+    args.insert(args.begin(), ctx.arg.cc65Launcher);
+    executable = ctx.arg.cc65Launcher;
+  }
+
+  // On Windows, a specific quirk of LLVM's redirection requires that the output
+  // file first be closed.
+  outputFile->close();
+
+  std::string errMsg;
+  int resultCode = sys::ExecuteAndWait(
+      executable, args,
+      /*Env=*/std::nullopt, {"", outputFile->getPath(), std::nullopt},
+      /*SecondsToWait=*/0, /*MemoryLimit=*/0, &errMsg);
+
+  if (resultCode)
+    fatal(toStr(ctx, this) + ": could not run od65" +
+          (errMsg.empty() ? "" : ": " + errMsg));
+
+  outputFile->open();
+  outputFile->read();
+
+  if (!ctx.xo65Enclave)
+    ctx.xo65Enclave = make<XO65Enclave>(ctx);
+  ctx.xo65Enclave->addFile(this);
+
+  parseOD65Output(outputFile->getBuffer().getBuffer());
+}
+
+void XO65File::postParse() {
+  for (Symbol *sym : exports)
+    if (sym->file && sym->isDefined() && sym->file != this)
+      ctx.duplicates.push_back(
+          {sym, this, /*errSec=*/nullptr, /*errOffset=*/0});
+}
+
+void XO65File::postWrite() { outputFile.reset(); }
+
+void XO65File::parseOD65Output(StringRef od65Output) {
+  const auto od65Lines = llvm::split(od65Output, od65Output.detectEOL());
+  od65Line = od65Lines.begin();
+  od65LinesEnd = od65Lines.end();
+  parseOD65Segments();
+  parseOD65Imports();
+  parseOD65Exports();
+}
+
+static StringRef indexPrefix = "    Index:";
+static StringRef countPrefix = "    Count:";
+
+void XO65File::parseOD65Segments() {
+  advancePast("  Segments:");
+  expectPrefix(countPrefix);
+  while (!isSectionEnd())
+    ctx.xo65Enclave->appendSegment(parseOD65Segment());
+}
+
+XO65Segment XO65File::parseOD65Segment() {
+  expectPrefix(indexPrefix);
+  XO65Segment segment;
+  for (; !isSectionEnd() && !(*od65Line).starts_with(indexPrefix); ++od65Line) {
+    const auto [k, v] = parseKV();
+    if (k == "Name") {
+      segment.name = parseQuotedString(k, v);
+      parseSegmentName(segment);
+    } else if (k == "Size") {
+      parseInt(k, v, segment.size);
+    } else if (k == "Alignment") {
+      parseInt(k, v, segment.alignment);
+    } else if (k == "Address size") {
+      parseInt(k, v, segment.addrSize);
+    }
+  }
+  return segment;
+}
+
+void XO65File::parseOD65Imports() {
+  advancePast("  Imports:");
+  SmallVector<StringRef> names = parseOD65Names();
+  for (const StringRef name : names) {
+    Symbol *sym = ctx.symtab->addSymbol(
+        Undefined{this, name, STB_GLOBAL, STV_DEFAULT, STT_NOTYPE});
+    sym->isUsedInRegularObj = true;
+    sym->referenced = true;
+    ctx.xo65Enclave->addImport(sym);
+  }
+}
+
+void XO65File::parseOD65Exports() {
+  advancePast("  Exports:");
+  SmallVector<StringRef> names = parseOD65Names();
+  exports.reserve(names.size());
+  for (const StringRef name : names) {
+    // Export values aren't yet known; they will be filled in once ld65 is run
+    // on all xo65 sections.
+    Symbol *sym = ctx.symtab->addSymbol(
+        Defined{ctx, this, name, STB_GLOBAL, /*st_other=*/0, STT_NOTYPE,
+                /*value=*/0, /*size=*/0, /*section=*/nullptr});
+    sym->isUsedInRegularObj = true;
+    exports.push_back(sym);
+  }
+}
+
+SmallVector<StringRef> XO65File::parseOD65Names() {
+  SmallVector<StringRef> names;
+  for (; !isSectionEnd(); ++od65Line) {
+    if ((*od65Line).starts_with(indexPrefix))
+      continue;
+    const auto [k, v] = parseKV();
+    if (k == "Name")
+      names.push_back(parseQuotedString(k, v));
+  }
+  return names;
+}
+
+void XO65File::advancePast(StringRef line) {
+  while (od65Line != od65LinesEnd && *od65Line != line)
+    ++od65Line;
+  expect(line);
+}
+
+void XO65File::expect(StringRef line) {
+  if (*od65Line != line)
+    fatal(toStr(ctx, this) + ": could not parse od65 output: expected \"" +
+          line + "\"\n");
+  ++od65Line;
+}
+
+void XO65File::expectPrefix(StringRef prefix) {
+  if (!(*od65Line).starts_with(prefix))
+    fatal(toStr(ctx, this) +
+          ": could not parse od65 output: expected prefix \"" + prefix +
+          "\"\n");
+  ++od65Line;
+}
+
+std::pair<StringRef, StringRef> XO65File::parseKV() {
+  static llvm::Regex kvRegex(" *([^ ].*): *([^ ]+)");
+  SmallVector<StringRef> matches;
+  if (od65Line == od65LinesEnd || !kvRegex.match(*od65Line, &matches))
+    fatal(toStr(ctx, this) + ": could not parse key-value pair: " + *od65Line);
+  return {matches[1], matches[2]};
+}
+
+template <typename T>
+void XO65File::parseInt(StringRef k, StringRef v, T &out, unsigned radix) {
+  if (v.getAsInteger(0, out))
+    fatal(toStr(ctx, this) + ": could not parse int " + k + ": " + v);
+}
+
+StringRef XO65File::parseQuotedString(StringRef k, StringRef v) {
+  if (v.size() < 2 || v.front() != '"' || v.back() != '"')
+    fatal(toStr(ctx, this) + ": could not parse quoted string " + k + ": " + v);
+  return v.drop_front().drop_back();
+}
+
+static bool isKnownCC65SegmentName(StringRef name) {
+  return name == "CODE" || name == "LOWCODE" || name == "ONCE" ||
+         name == "STARTUP" || name == "RODATA" || name == "BSS" ||
+         name == "ZEROPAGE" || name == "INIT" || name == "ZPSAVE";
+}
+
+// ELF sections have a richer name, type, and flag system than XO65 segments.
+// Accordingly, decode this information from an underscore-based escaping system
+// in xo65 segment names.
+//
+// Escape sequences:
+//   __   -> _             (underscore)
+//   _d   -> $             (dollar)
+//   _h   -> -             (hyphen)
+//   _p   -> .             (period)
+//   _xXX -> Byte          (encoded by hex XX)
+//   _tn  -> SHT_NOBITS    (@nobits)
+//   _tp  -> SHT_NOBITS    (@progbits)
+//   _fw  -> SHF_WRITE     (w)
+//   _fx  -> SHF_EXECINSTR (x)
+void XO65File::parseSegmentName(XO65Segment &segment) {
+  if (isKnownCC65SegmentName(segment.name)) {
+    segment.sectionName = segment.name;
+    segment.flags = SHF_ALLOC | SHF_GNU_RETAIN;
+    segment.type = (segment.name == "BSS" || segment.name == "ZEROPAGE" ||
+                    segment.name == "INIT" || segment.name == "ZPSAVE")
+                       ? SHT_NOBITS
+                       : SHT_PROGBITS;
+
+    if (segment.name == "CODE" || segment.name == "LOWCODE" ||
+        segment.name == "ONCE" || segment.name == "STARTUP")
+      segment.flags |= SHF_EXECINSTR;
+    else if (segment.name != "RODATA")
+      segment.flags |= SHF_WRITE;
+
+    return;
+  }
+
+  segment.flags = SHF_ALLOC | SHF_GNU_RETAIN;
+  segment.type = SHT_PROGBITS;
+  SmallString<64> sectionName;
+  StringRef remaining = segment.name;
+  while (!remaining.empty()) {
+    if (remaining.front() != '_') {
+      sectionName.push_back(remaining.front());
+      remaining = remaining.drop_front();
+      continue;
+    }
+
+    remaining = remaining.drop_front();
+    if (remaining.empty() == 1)
+      fatal(toStr(ctx, this) +
+            ": unfinished underscore escape: " + segment.name);
+
+    switch (remaining.front()) {
+    default:
+      fatal(toStr(ctx, this) + ": unknown underscore escape: " + segment.name);
+    case '_':
+      sectionName.push_back('_');
+      break;
+    case 'd':
+      sectionName.push_back('$');
+      break;
+    case 'h':
+      sectionName.push_back('-');
+      break;
+    case 'p':
+      sectionName.push_back('.');
+      break;
+    case 'x': {
+      remaining = remaining.drop_front();
+      if (remaining.size() < 2)
+        fatal(toStr(ctx, this) +
+              ": unfinished underscore hex escape: " + segment.name);
+
+      uint8_t v;
+      bool result = tryGetHexFromNibbles(remaining[0], remaining[1], v);
+      if (!result)
+        fatal(toStr(ctx, this) +
+              ": invalid underscore hex escape: " + segment.name);
+
+      sectionName.push_back((char)v);
+      remaining = remaining.drop_front();
+      break;
+    }
+    case 't':
+      if (remaining.size() < 2)
+        fatal(toStr(ctx, this) +
+              ": unfinished underscore type escape: " + segment.name);
+      switch (remaining[1]) {
+      default:
+        fatal(toStr(ctx, this) +
+              ": unknown underscore type escape: " + segment.name);
+      case 'n':
+        segment.type = SHT_NOBITS;
+        break;
+      case 'p':
+        segment.type = SHT_PROGBITS;
+        break;
+      }
+      remaining = remaining.drop_front();
+      break;
+    case 'f':
+      if (remaining.size() < 2)
+        fatal(toStr(ctx, this) +
+              ": unfinished underscore flag escape: " + segment.name);
+      switch (remaining[1]) {
+      default:
+        fatal(toStr(ctx, this) +
+              ": unknown underscore flag escape: " + segment.name);
+      case 'w':
+        segment.flags |= SHF_WRITE;
+        break;
+      case 'x':
+        segment.flags |= SHF_EXECINSTR;
+        break;
+      }
+      remaining = remaining.drop_front();
+      break;
+    }
+    remaining = remaining.drop_front();
+  }
+  segment.sectionName = saver().save(StringRef(sectionName));
+}
+
+bool XO65File::isSectionEnd() const {
+  if (od65Line == od65LinesEnd)
+    return true;
+  return !(*od65Line).starts_with("   ");
+}
+
+XO65Enclave::XO65Enclave(Ctx &ctx)
+    : InputFile(ctx, XO65EnclaveKind, MemoryBufferRef{"", "xo65-enclave"}) {}
+
+void XO65Enclave::appendSegment(const XO65Segment &segment) {
+  mHasFar |= segment.addrSize > 0x02;
+  auto res = segments.insert({segment.name, segment});
+  if (res.second)
+    return;
+  XO65Segment &s = res.first->second;
+  assert(s.name == segment.name);
+  assert(s.sectionName == segment.sectionName);
+  assert(s.type == segment.type);
+  assert(s.flags == segment.flags);
+  s.size += segment.size;
+  s.alignment = std::max(s.alignment, segment.alignment);
+  s.addrSize = std::max(s.addrSize, segment.addrSize);
+}
+
+void XO65Enclave::postParse() {
+  for (XO65File *file : files)
+    file->postParse();
+}
+
+void XO65Enclave::createSections() {
+  for (const auto &kv : segments) {
+    const XO65Segment &segment = kv.second;
+    sections.push_back(make<XO65Section>(ctx, segment));
+    sections.back()->file = this;
+  }
+}
+
+bool XO65Enclave::link() {
+  if (ctx.arg.ld65Path.empty())
+    ctx.arg.ld65Path =
+        saver().save(findProgramByName("ld65", toStr(ctx, this)));
+
+  if (!cfgFile)
+    cfgFile.emplace(ctx, "ld65", "cfg", toStr(ctx, this), "ld65 cfg file");
+
+  raw_fd_ostream cfgFileOS(cfgFile->getFD(), /*shouldClose=*/false);
+  cfgFileOS.seek(0);
+  if (std::error_code ec = llvm::sys::fs::resize_file(cfgFile->getFD(), 0))
+    fatal(toStr(ctx, this) +
+          ": could not truncate ld65 cfg file: " + ec.message());
+
+  generateCfgFile(cfgFileOS);
+  cfgFileOS.flush();
+
+  // Always nuke the output file; otherwise it will still be open if multiple
+  // calls to ld65 occur (causes issues on Windows).
+  outputFile.emplace(ctx, "ld65", "o", toStr(ctx, this), "ld65 output file");
+  if (!mapFile)
+    mapFile.emplace(ctx, "ld65", "map", toStr(ctx, this), "ld65 map file");
+
+  SmallVector<StringRef> args = {ctx.arg.ld65Path,
+                                 "-C",
+                                 cfgFile->getPath(),
+                                 "-o",
+                                 outputFile->getPath(),
+                                 "-vm",
+                                 "-m",
+                                 mapFile->getPath()};
+  StringRef executable = args.front();
+  if (!ctx.arg.cc65Launcher.empty()) {
+    args.insert(args.begin(), ctx.arg.cc65Launcher);
+    executable = ctx.arg.cc65Launcher;
+  }
+  for (XO65File *f : files)
+    args.push_back(f->getName());
+
+  std::string errMsg;
+  int resultCode =
+      sys::ExecuteAndWait(executable, args,
+                          /*Env=*/std::nullopt, {"", "", std::nullopt},
+                          /*SecondsToWait=*/0, /*MemoryLimit=*/0, &errMsg);
+  if (resultCode)
+    fatal(toStr(ctx, this) + ": could not run ld65" +
+          (errMsg.empty() ? "" : ": " + errMsg));
+
+  outputFile->read();
+  mapFile->read();
+
+  StringRef remainingContents = outputFile->getBuffer().getBuffer();
+  for (InputSectionBase *baseSec : sections) {
+    auto &sec = *cast<XO65Section>(baseSec);
+    sec.setContents(remainingContents.take_front(sec.getSize()));
+    remainingContents = remainingContents.drop_front(sec.getSize());
+  }
+  assert(remainingContents.empty());
+
+  return updateSymbols();
+}
+
+void XO65Enclave::postWrite() {
+  for (XO65File *f : files)
+    f->postWrite();
+  cfgFile.reset();
+  outputFile.reset();
+  mapFile.reset();
+}
+
+void XO65Enclave::generateCfgFile(llvm::raw_fd_ostream &os) const {
+  size_t size = 0;
+  os << "MEMORY {\n";
+  bool isBanked = !ctx.xo65Enclave->hasFar();
+  for (const InputSectionBase *baseSec : sections) {
+    const auto &sec = *cast<XO65Section>(baseSec);
+    uint64_t va = sec.getVA();
+    uint64_t bank = va >> 16 & 0xff;
+    if (isBanked)
+      va &= 0xffff;
+    os << "  " << sec.getSegmentName() << ": start = " << va
+       << ", size = " << sec.getSize() << ", file = \"\"";
+    if (isBanked && bank)
+      os << ", bank = " << bank;
+    os << ";\n";
+    size += sec.getSize();
+  }
+  // Note that then name of this segment include an unfinished escape, so it
+  // cannot conflict with any legal segment name.
+  os << "  CONTENTS_: start = 0, size = " << size << ";\n";
+  os << "}\n"; // end MEMORY
+
+  os << "SEGMENTS {\n";
+  for (const InputSectionBase *baseSec : sections) {
+    const auto &sec = *cast<XO65Section>(baseSec);
+    os << "  " << sec.getSegmentName() << ": "
+       << "load = CONTENTS_, run = " << sec.getSegmentName() << ";\n";
+  }
+  os << "}\n"; // end SEGMENTS
+
+  os << "SYMBOLS {\n";
+  for (const Symbol *sym : imports) {
+    const auto *defSym = dyn_cast<Defined>(sym);
+    if (!defSym || (defSym->file && isa<XO65File>(defSym->file)))
+      continue;
+    os << "  " << defSym->getName() << ": ";
+
+    uint64_t va = defSym->getVA(ctx);
+    if (isBanked)
+      va &= 0xffff;
+    if (va < 0x100)
+      os << "addrsize = zp, ";
+    os << "type = export, value = " << va << ";\n";
+  }
+  os << "}\n"; // end SYMBOLS
+}
+
+bool XO65Enclave::updateSymbols() const {
+  StringRef buf = mapFile->getBuffer().getBuffer();
+  const auto range = llvm::split(buf, buf.detectEOL());
+  auto i = range.begin();
+  for (; i != range.end(); ++i) {
+    if (*i == "Exports list by name:")
+      break;
+  }
+  if (i == range.end())
+    fatal("ld65 map file: expected \"Exports list by name:\"\n");
+  ++i;
+  if (i != range.end())
+    ++i;
+  Regex regex("([_0-9a-zA-Z]+) +([0-9a-zA-Z]+) *[^ ]* *");
+  bool changed = false;
+  for (; !(*i).empty(); ++i) {
+    StringRef remaining = *i;
+    while (!remaining.empty()) {
+      SmallVector<StringRef> matches;
+      if (!regex.match(remaining, &matches))
+        fatal("ld65 map file: expected symbol values line; found: " + *i +
+              "\n");
+      StringRef name = matches[1];
+      uint64_t val;
+      if (matches[2].getAsInteger(16, val))
+        fatal("ld65 map file: expected hex integer; found: " + matches[2]);
+      Defined *sym = dyn_cast_or_null<Defined>(ctx.symtab->find(name));
+      if (!sym)
+        fatal("ld65 map file: could not find symbol definition: " + name);
+      if (sym->file && isa<XO65File>(sym->file)) {
+        if (sym->value != val)
+          changed = true;
+        sym->value = val;
+      }
+      remaining = remaining.drop_front(matches[0].size());
+    }
+  }
+  return changed;
 }
 
 InputFile *elf::createInternalFile(Ctx &ctx, StringRef name) {

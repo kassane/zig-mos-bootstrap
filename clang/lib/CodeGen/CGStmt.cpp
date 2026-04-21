@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+
 #include "CGDebugInfo.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
@@ -220,6 +221,9 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
     break;
   case Stmt::OMPTileDirectiveClass:
     EmitOMPTileDirective(cast<OMPTileDirective>(*S));
+    break;
+  case Stmt::OMPStripeDirectiveClass:
+    EmitOMPStripeDirective(cast<OMPStripeDirective>(*S));
     break;
   case Stmt::OMPUnrollDirectiveClass:
     EmitOMPUnrollDirective(cast<OMPUnrollDirective>(*S));
@@ -488,6 +492,12 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
     break;
   case Stmt::OpenACCUpdateConstructClass:
     EmitOpenACCUpdateConstruct(cast<OpenACCUpdateConstruct>(*S));
+    break;
+  case Stmt::OpenACCAtomicConstructClass:
+    EmitOpenACCAtomicConstruct(cast<OpenACCAtomicConstruct>(*S));
+    break;
+  case Stmt::OpenACCCacheConstructClass:
+    EmitOpenACCCacheConstruct(cast<OpenACCCacheConstruct>(*S));
     break;
   }
 }
@@ -781,6 +791,8 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
   HLSLControlFlowHintAttr::Spelling flattenOrBranch =
       HLSLControlFlowHintAttr::SpellingNotCalculated;
   const CallExpr *musttail = nullptr;
+  bool leaf = false;
+  const AtomicAttr *AA = nullptr;
 
   for (const auto *A : S.getAttrs()) {
     switch (A->getKind()) {
@@ -811,6 +823,12 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
         Builder.CreateAssumption(AssumptionVal);
       }
     } break;
+    case attr::Leaf:
+      leaf = true;
+      break;
+    case attr::Atomic:
+      AA = cast<AtomicAttr>(A);
+      break;
     case attr::HLSLControlFlowHint: {
       flattenOrBranch = cast<HLSLControlFlowHintAttr>(A)->getSemanticSpelling();
     } break;
@@ -821,7 +839,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
   SaveAndRestore save_alwaysinline(InAlwaysInlineAttributedStmt, alwaysinline);
   SaveAndRestore save_noconvergent(InNoConvergentAttributedStmt, noconvergent);
   SaveAndRestore save_musttail(MustTailCall, musttail);
+  SaveAndRestore save_leaf(InLeafAttributedStmt, leaf);
   SaveAndRestore save_flattenOrBranch(HLSLControlFlowAttr, flattenOrBranch);
+  CGAtomicOptionsRAII AORAII(CGM, AA);
   EmitStmt(S.getSubStmt(), S.getAttrs());
 }
 
@@ -899,6 +919,7 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
       if (CondConstant)
         incrementProfileCounter(&S);
       if (Executed) {
+        MaybeEmitDeferredVarDeclInit(S.getConditionVariable());
         RunCleanupsScope ExecutedScope(*this);
         EmitStmt(Executed);
       }
@@ -938,10 +959,13 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
   // there is a 'return' within the body, but this is particularly beneficial
   // when one if-stmt is nested within another if-stmt so that all of the MC/DC
   // updates are kept linear and consistent.
-  if (!CGM.getCodeGenOpts().MCDCCoverage)
-    EmitBranchOnBoolExpr(S.getCond(), ThenBlock, ElseBlock, ThenCount, LH);
-  else {
+  if (!CGM.getCodeGenOpts().MCDCCoverage) {
+    EmitBranchOnBoolExpr(S.getCond(), ThenBlock, ElseBlock, ThenCount, LH,
+                         /*ConditionalOp=*/nullptr,
+                         /*ConditionalDecl=*/S.getConditionVariable());
+  } else {
     llvm::Value *BoolCondVal = EvaluateExprAsBool(S.getCond());
+    MaybeEmitDeferredVarDeclInit(S.getConditionVariable());
     Builder.CreateCondBr(BoolCondVal, ThenBlock, ElseBlock);
   }
 
@@ -1084,6 +1108,8 @@ void CodeGenFunction::EmitWhileStmt(const WhileStmt &S,
   // evaluation of the controlling expression takes place before each
   // execution of the loop body.
   llvm::Value *BoolCondVal = EvaluateExprAsBool(S.getCond());
+
+  MaybeEmitDeferredVarDeclInit(S.getConditionVariable());
 
   // while(1) is common, avoid extra exit blocks.  Be sure
   // to correctly handle break/continue though.
@@ -1318,6 +1344,9 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
     // C99 6.8.5p2/p4: The first substatement is executed if the expression
     // compares unequal to 0.  The condition must be a scalar type.
     llvm::Value *BoolCondVal = EvaluateExprAsBool(S.getCond());
+
+    MaybeEmitDeferredVarDeclInit(S.getConditionVariable());
+
     llvm::MDNode *Weights =
         createProfileWeightsForLoop(S.getCond(), getProfileCount(S.getBody()));
     if (!Weights && CGM.getCodeGenOpts().OptimizationLevel)
@@ -1648,7 +1677,7 @@ void CodeGenFunction::EmitDeclStmt(const DeclStmt &S) {
     EmitStopPoint(&S);
 
   for (const auto *I : S.decls())
-    EmitDecl(*I);
+    EmitDecl(*I, /*EvaluateConditionDecl=*/true);
 }
 
 void CodeGenFunction::EmitBreakStmt(const BreakStmt &S) {
@@ -2213,7 +2242,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
       // Emit the condition variable if needed inside the entire cleanup scope
       // used by this special case for constant folded switches.
       if (S.getConditionVariable())
-        EmitDecl(*S.getConditionVariable());
+        EmitDecl(*S.getConditionVariable(), /*EvaluateConditionDecl=*/true);
 
       // At this point, we are no longer "within" a switch instance, so
       // we can temporarily enforce this to ensure that any embedded case
@@ -2245,6 +2274,7 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
   if (S.getConditionVariable())
     EmitDecl(*S.getConditionVariable());
   llvm::Value *CondV = EmitScalarExpr(S.getCond());
+  MaybeEmitDeferredVarDeclInit(S.getConditionVariable());
 
   // Create basic block to hold stuff that comes after switch
   // statement. We also need to create a default block now so that
@@ -2252,6 +2282,19 @@ void CodeGenFunction::EmitSwitchStmt(const SwitchStmt &S) {
   // failure.
   llvm::BasicBlock *DefaultBlock = createBasicBlock("sw.default");
   SwitchInsn = Builder.CreateSwitch(CondV, DefaultBlock);
+  if (HLSLControlFlowAttr != HLSLControlFlowHintAttr::SpellingNotCalculated) {
+    llvm::MDBuilder MDHelper(CGM.getLLVMContext());
+    llvm::ConstantInt *BranchHintConstant =
+        HLSLControlFlowAttr ==
+                HLSLControlFlowHintAttr::Spelling::Microsoft_branch
+            ? llvm::ConstantInt::get(CGM.Int32Ty, 1)
+            : llvm::ConstantInt::get(CGM.Int32Ty, 2);
+    llvm::Metadata *Vals[] = {MDHelper.createString("hlsl.controlflow.hint"),
+                              MDHelper.createConstant(BranchHintConstant)};
+    SwitchInsn->setMetadata("hlsl.controlflow.hint",
+                            llvm::MDNode::get(CGM.getLLVMContext(), Vals));
+  }
+
   if (PGO.haveRegionCounts()) {
     // Walk the SwitchCase list to find how many there are.
     uint64_t DefaultCount = 0;
@@ -2533,7 +2576,7 @@ static llvm::MDNode *getAsmSrcLocInfo(const StringLiteral *Str,
 static void UpdateAsmCallInst(llvm::CallBase &Result, bool HasSideEffect,
                               bool HasUnwindClobber, bool ReadOnly,
                               bool ReadNone, bool NoMerge, bool NoConvergent,
-                              const AsmStmt &S,
+                              bool Leaf, const AsmStmt &S,
                               const std::vector<llvm::Type *> &ResultRegTypes,
                               const std::vector<llvm::Type *> &ArgElemTypes,
                               CodeGenFunction &CGF,
@@ -2543,6 +2586,8 @@ static void UpdateAsmCallInst(llvm::CallBase &Result, bool HasSideEffect,
 
   if (NoMerge)
     Result.addFnAttr(llvm::Attribute::NoMerge);
+  if (Leaf)
+    Result.addFnAttr(llvm::Attribute::NoCallback);
   // Attach readnone and readonly attributes.
   if (!HasSideEffect) {
     if (ReadNone)
@@ -2562,11 +2607,14 @@ static void UpdateAsmCallInst(llvm::CallBase &Result, bool HasSideEffect,
 
   // Slap the source location of the inline asm into a !srcloc metadata on the
   // call.
-  if (const auto *gccAsmStmt = dyn_cast<GCCAsmStmt>(&S))
-    Result.setMetadata("srcloc",
-                       getAsmSrcLocInfo(gccAsmStmt->getAsmString(), CGF));
-  else {
-    // At least put the line number on MS inline asm blobs.
+  const StringLiteral *SL;
+  if (const auto *gccAsmStmt = dyn_cast<GCCAsmStmt>(&S);
+      gccAsmStmt &&
+      (SL = dyn_cast<StringLiteral>(gccAsmStmt->getAsmStringExpr()))) {
+    Result.setMetadata("srcloc", getAsmSrcLocInfo(SL, CGF));
+  } else {
+    // At least put the line number on MS inline asm blobs and GCC asm constexpr
+    // strings.
     llvm::Constant *Loc =
         llvm::ConstantInt::get(CGF.Int64Ty, S.getAsmLoc().getRawEncoding());
     Result.setMetadata("srcloc",
@@ -2681,9 +2729,9 @@ static void EmitHipStdParUnsupportedAsm(CodeGenFunction *CGF,
                                         const AsmStmt &S) {
   constexpr auto Name = "__ASM__hipstdpar_unsupported";
 
-  StringRef Asm;
+  std::string Asm;
   if (auto GCCAsm = dyn_cast<GCCAsmStmt>(&S))
-    Asm = GCCAsm->getAsmString()->getString();
+    Asm = GCCAsm->getAsmString();
 
   auto &Ctx = CGF->CGM.getLLVMContext();
 
@@ -3026,7 +3074,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
 
   // Clobbers
   for (unsigned i = 0, e = S.getNumClobbers(); i != e; i++) {
-    StringRef Clobber = S.getClobber(i);
+    std::string Clobber = S.getClobber(i);
 
     if (Clobber == "memory")
       ReadOnly = ReadNone = false;
@@ -3047,7 +3095,7 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
         if (Constraints.find("=&A") != std::string::npos)
           continue;
         std::string::size_type position1 =
-            Constraints.find("={" + Clobber.str() + "}");
+            Constraints.find("={" + Clobber + "}");
         if (position1 != std::string::npos) {
           Constraints.insert(position1 + 1, "&");
           continue;
@@ -3110,8 +3158,8 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
     EmitBlock(Fallthrough);
     UpdateAsmCallInst(*CBR, HasSideEffect, /*HasUnwindClobber=*/false, ReadOnly,
                       ReadNone, InNoMergeAttributedStmt,
-                      InNoConvergentAttributedStmt, S, ResultRegTypes,
-                      ArgElemTypes, *this, RegResults);
+                      InNoConvergentAttributedStmt, InLeafAttributedStmt, S,
+                      ResultRegTypes, ArgElemTypes, *this, RegResults);
     // Because we are emitting code top to bottom, we don't have enough
     // information at this point to know precisely whether we have a critical
     // edge. If we have outputs, split all indirect destinations.
@@ -3141,15 +3189,15 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
     llvm::CallBase *Result = EmitCallOrInvoke(IA, Args, "");
     UpdateAsmCallInst(*Result, HasSideEffect, /*HasUnwindClobber=*/true,
                       ReadOnly, ReadNone, InNoMergeAttributedStmt,
-                      InNoConvergentAttributedStmt, S, ResultRegTypes,
-                      ArgElemTypes, *this, RegResults);
+                      InNoConvergentAttributedStmt, InLeafAttributedStmt, S,
+                      ResultRegTypes, ArgElemTypes, *this, RegResults);
   } else {
     llvm::CallInst *Result =
         Builder.CreateCall(IA, Args, getBundlesForFunclet(IA));
     UpdateAsmCallInst(*Result, HasSideEffect, /*HasUnwindClobber=*/false,
                       ReadOnly, ReadNone, InNoMergeAttributedStmt,
-                      InNoConvergentAttributedStmt, S, ResultRegTypes,
-                      ArgElemTypes, *this, RegResults);
+                      InNoConvergentAttributedStmt, InLeafAttributedStmt, S,
+                      ResultRegTypes, ArgElemTypes, *this, RegResults);
   }
 
   EmitAsmStores(*this, S, RegResults, ResultRegTypes, ResultTruncRegTypes,
@@ -3303,18 +3351,9 @@ CodeGenFunction::addConvergenceControlToken(llvm::CallBase *Input) {
 
 llvm::ConvergenceControlInst *
 CodeGenFunction::emitConvergenceLoopToken(llvm::BasicBlock *BB) {
-  CGBuilderTy::InsertPoint IP = Builder.saveIP();
-  if (BB->empty())
-    Builder.SetInsertPoint(BB);
-  else
-    Builder.SetInsertPoint(BB->getFirstInsertionPt());
-
-  llvm::CallBase *CB = Builder.CreateIntrinsic(
-      llvm::Intrinsic::experimental_convergence_loop, {}, {});
-  Builder.restoreIP(IP);
-
-  CB = addConvergenceControlToken(CB);
-  return cast<llvm::ConvergenceControlInst>(CB);
+  llvm::ConvergenceControlInst *ParentToken = ConvergenceTokenStack.back();
+  assert(ParentToken);
+  return llvm::ConvergenceControlInst::CreateLoop(*BB, ParentToken);
 }
 
 llvm::ConvergenceControlInst *
@@ -3327,13 +3366,5 @@ CodeGenFunction::getOrEmitConvergenceEntryToken(llvm::Function *F) {
   // Adding a convergence token requires the function to be marked as
   // convergent.
   F->setConvergent();
-
-  CGBuilderTy::InsertPoint IP = Builder.saveIP();
-  Builder.SetInsertPoint(&BB->front());
-  llvm::CallBase *I = Builder.CreateIntrinsic(
-      llvm::Intrinsic::experimental_convergence_entry, {}, {});
-  assert(isa<llvm::IntrinsicInst>(I));
-  Builder.restoreIP(IP);
-
-  return cast<llvm::ConvergenceControlInst>(I);
+  return llvm::ConvergenceControlInst::CreateEntry(*BB);
 }

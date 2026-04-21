@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+
 #include "llvm/CodeGen/GlobalISel/InlineAsmLowering.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -107,8 +108,8 @@ static void getRegistersForValue(MachineFunction &MF,
   // Initialize NumRegs.
   unsigned NumRegs = 1;
   if (OpInfo.ConstraintVT != MVT::Other)
-    NumRegs =
-        TLI.getNumRegisters(MF.getFunction().getContext(), OpInfo.ConstraintVT);
+    NumRegs = TLI.getNumRegistersForInlineAsm(MF.getFunction().getContext(),
+                                              OpInfo.ConstraintVT);
 
   // If this is a constraint for a specific physical register, but the type of
   // the operand requires more than one register to be passed, we allocate the
@@ -297,7 +298,7 @@ bool InlineAsmLowering::lowerInlineAsm(
   // Create the MachineInstr, but don't insert it yet since input
   // operands still need to insert instructions before this one
   auto Inst = MIRBuilder.buildInstrNoInsert(TargetOpcode::INLINEASM)
-                  .addExternalSymbol(IA->getAsmString().c_str())
+                  .addExternalSymbol(IA->getAsmString().data())
                   .addImm(ExtraInfo.get());
 
   // Starting from this operand: flag followed by register(s) will be added as
@@ -639,8 +640,10 @@ bool InlineAsmLowering::lowerAsmOperandForConstraint(
       bool IsBool = CI->getBitWidth() == 1;
       int64_t ExtVal = IsBool ? CI->getZExtValue() : CI->getSExtValue();
       Ops.push_back(MachineOperand::CreateImm(ExtVal));
-      return true;
-    }
-    return false;
+    } else if (GlobalValue *GV = dyn_cast<GlobalValue>(Val)) {
+      Ops.push_back(MachineOperand::CreateGA(GV, 0));
+    } else
+      return false;
+    return true;
   }
 }

@@ -15,9 +15,11 @@
 #include "lld/Common/LLVM.h"
 #include "lld/Common/Reproduce.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Support/MemoryBufferRef.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/Threading.h"
 
 namespace llvm {
@@ -62,6 +64,8 @@ public:
     SharedKind,
     BitcodeKind,
     BinaryKind,
+    XO65EnclaveKind,
+    XO65Kind,
     InternalKind,
   };
 
@@ -81,7 +85,8 @@ public:
   // Returns sections. It is a runtime error to call this function
   // on files that don't have the notion of sections.
   ArrayRef<InputSectionBase *> getSections() const {
-    assert(fileKind == ObjKind || fileKind == BinaryKind);
+    assert(fileKind == ObjKind || fileKind == BinaryKind ||
+           fileKind == XO65Kind || fileKind == XO65EnclaveKind);
     return sections;
   }
   void cacheDecodedCrel(size_t i, InputSectionBase *s) { sections[i] = s; }
@@ -90,13 +95,15 @@ public:
   // function on files of other types.
   ArrayRef<Symbol *> getSymbols() const {
     assert(fileKind == BinaryKind || fileKind == ObjKind ||
-           fileKind == BitcodeKind);
+           fileKind == BitcodeKind || fileKind == XO65Kind ||
+           fileKind == XO65EnclaveKind);
     return {symbols.get(), numSymbols};
   }
 
   MutableArrayRef<Symbol *> getMutableSymbols() {
     assert(fileKind == BinaryKind || fileKind == ObjKind ||
-           fileKind == BitcodeKind);
+           fileKind == BitcodeKind || fileKind == XO65Kind ||
+           fileKind == XO65EnclaveKind);
     return {symbols.get(), numSymbols};
   }
 
@@ -364,6 +371,8 @@ private:
   template <typename ELFT>
   std::vector<uint32_t> parseVerneed(const llvm::object::ELFFile<ELFT> &obj,
                                      const typename ELFT::Shdr *sec);
+  template <typename ELFT>
+  void parseGnuAndFeatures(const llvm::object::ELFFile<ELFT> &obj);
 };
 
 class BinaryFile : public InputFile {
@@ -372,6 +381,115 @@ public:
       : InputFile(ctx, BinaryKind, m) {}
   static bool classof(const InputFile *f) { return f->kind() == BinaryKind; }
   void parse();
+};
+
+class XO65TempFile {
+  Ctx &ctx;
+  SmallString<64> path;
+  int fd;
+  StringRef ctxStr;
+  StringRef description;
+  std::unique_ptr<MemoryBuffer> buffer;
+
+public:
+  XO65TempFile(Ctx &ctx, StringRef prefix, StringRef suffix, StringRef ctxStr,
+               StringRef description);
+  ~XO65TempFile();
+
+  StringRef getPath() const { return path; }
+  int getFD() const { return fd; }
+  MemoryBufferRef getBuffer() const { return *buffer; }
+  void close();
+  void open();
+
+  void read();
+};
+
+struct XO65Segment {
+  StringRef name;
+  StringRef sectionName;
+  unsigned type;
+  unsigned flags;
+  uint64_t size = 0;
+  uint64_t alignment = 1;
+  unsigned addrSize = 0x02;
+};
+
+class XO65File : public InputFile {
+private:
+  struct Export {
+    StringRef name;
+    uint64_t size = 0;
+  };
+
+  SmallVector<Symbol *> exports;
+
+  std::optional<XO65TempFile> outputFile;
+
+  llvm::SplittingIterator od65Line = {"", ""};
+  llvm::SplittingIterator od65LinesEnd = {"", ""};
+
+public:
+  XO65File(Ctx &ctx, MemoryBufferRef m) : InputFile(ctx, XO65Kind, m) {}
+
+  static bool classof(const InputFile *f) { return f->kind() == XO65Kind; }
+
+  void parse();
+  void postParse();
+  void postWrite();
+
+private:
+  void parseOD65Output(StringRef od65Output);
+  void parseOD65Segments();
+  XO65Segment parseOD65Segment();
+  void parseOD65Imports();
+  void parseOD65Exports();
+  SmallVector<StringRef> parseOD65Names();
+
+  void advancePast(StringRef line);
+  void expect(StringRef line);
+  void expectPrefix(StringRef prefix);
+  bool isSectionEnd() const;
+  std::pair<StringRef, StringRef> parseKV();
+  StringRef parseQuotedString(StringRef k, StringRef v);
+  void parseSegmentName(XO65Segment &segment);
+  template <typename T>
+  void parseInt(StringRef k, StringRef v, T &out, unsigned radix = 0);
+};
+
+class XO65Enclave : public InputFile {
+private:
+  llvm::SmallMapVector<StringRef, XO65Segment, 32> segments;
+  llvm::SetVector<Symbol *> imports;
+  SmallVector<XO65File *> files;
+
+  std::optional<XO65TempFile> cfgFile;
+  std::optional<XO65TempFile> outputFile;
+  std::optional<XO65TempFile> mapFile;
+
+  bool mHasFar = false;
+
+public:
+  explicit XO65Enclave(Ctx &ctx);
+  static bool classof(const InputFile *f) {
+    return f->kind() == XO65EnclaveKind;
+  }
+
+  void addFile(XO65File *file) { files.push_back(file); }
+  void appendSegment(const XO65Segment &segment);
+  void addImport(Symbol *sym) { imports.insert(sym); }
+  const llvm::SetVector<Symbol *> &getImports() const { return imports; }
+  bool hasFar() const { return mHasFar; };
+
+  void postParse();
+
+  void createSections();
+  bool link();
+
+  void postWrite();
+
+  void generateCfgFile(llvm::raw_fd_ostream &os) const;
+  bool updateSymbols() const;
 };
 
 InputFile *createInternalFile(Ctx &, StringRef name);
