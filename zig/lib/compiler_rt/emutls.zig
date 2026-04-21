@@ -5,9 +5,10 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const common = @import("common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 
-const abort = std.posix.abort;
+const abort = std.process.abort;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
@@ -15,16 +16,14 @@ const expect = std.testing.expect;
 /// typedef unsigned int gcc_word __attribute__((mode(word)));
 const gcc_word = usize;
 
-pub const panic = common.panic;
-
 comptime {
-    if (builtin.link_libc and (builtin.abi.isAndroid() or builtin.os.tag == .openbsd)) {
-        @export(&__emutls_get_address, .{ .name = "__emutls_get_address", .linkage = common.linkage, .visibility = common.visibility });
+    if (builtin.link_libc and (builtin.abi.isAndroid() or builtin.abi.isOpenHarmony() or builtin.os.tag == .openbsd)) {
+        symbol(&__emutls_get_address, "__emutls_get_address");
     }
 }
 
 /// public entrypoint for generated code using EmulatedTLS
-pub fn __emutls_get_address(control: *emutls_control) callconv(.C) *anyopaque {
+pub fn __emutls_get_address(control: *emutls_control) callconv(.c) *anyopaque {
     return control.getPointer();
 }
 
@@ -149,7 +148,8 @@ const ObjectArray = struct {
 // It provides thread-safety for on-demand storage of Thread Objects.
 const current_thread_storage = struct {
     var key: std.c.pthread_key_t = undefined;
-    var init_once = std.once(current_thread_storage.init);
+    var init_mutex: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER;
+    var init_done: bool = false;
 
     /// Return a per thread ObjectArray with at least the expected index.
     pub fn getArray(index: usize) *ObjectArray {
@@ -185,13 +185,17 @@ const current_thread_storage = struct {
 
     /// Initialize pthread_key_t.
     fn init() void {
+        if (@atomicLoad(bool, &init_done, .monotonic)) return;
+        _ = std.c.pthread_mutex_lock(&init_mutex);
         if (std.c.pthread_key_create(&current_thread_storage.key, current_thread_storage.deinit) != .SUCCESS) {
             abort();
         }
+        @atomicStore(bool, &init_done, true, .release);
+        _ = std.c.pthread_mutex_unlock(&init_mutex);
     }
 
     /// Invoked by pthread specific destructor. the passed argument is the ObjectArray pointer.
-    fn deinit(arrayPtr: *anyopaque) callconv(.C) void {
+    fn deinit(arrayPtr: *anyopaque) callconv(.c) void {
         var array: *ObjectArray = @ptrCast(@alignCast(arrayPtr));
         array.deinit();
     }
@@ -285,7 +289,7 @@ const emutls_control = extern struct {
     /// Get the pointer on allocated storage for emutls variable.
     pub fn getPointer(self: *emutls_control) *anyopaque {
         // ensure current_thread_storage initialization is done
-        current_thread_storage.init_once.call();
+        current_thread_storage.init();
 
         const index = self.getIndex();
         var array = current_thread_storage.getArray(index);

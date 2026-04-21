@@ -110,7 +110,7 @@ public:
   CodeGenSubRegIndex *addComposite(CodeGenSubRegIndex *A, CodeGenSubRegIndex *B,
                                    const CodeGenHwModes &CGH) {
     assert(A && B);
-    std::pair<CompMap::iterator, bool> Ins = Composed.insert(std::pair(A, B));
+    std::pair<CompMap::iterator, bool> Ins = Composed.try_emplace(A, B);
 
     // Synthetic subreg indices that aren't contiguous (for instance ARM
     // register tuples) don't have a bit range, so it's OK to let
@@ -365,9 +365,6 @@ public:
   /// Generate register pressure set for this register class and any class
   /// synthesized from it.
   bool GeneratePressureSet;
-  // Disable register pressure set pruning for this class and any class
-  // synthesized from it.
-  bool IsPressureFineGrained;
 
   // Return the Record that defined this class, or NULL if the class was
   // created by TableGen.
@@ -572,7 +569,6 @@ struct RegUnitSet {
   std::vector<unsigned> Units;
   unsigned Weight = 0; // Cache the sum of all unit weights.
   unsigned Order = 0;  // Cache the sort key.
-  bool IsFineGrained = false;  // Disable pruning.
 
   RegUnitSet(std::string Name) : Name(std::move(Name)) {}
 };
@@ -733,7 +729,7 @@ public:
   // This function is only for use by CodeGenRegister::computeSuperRegs().
   // Others should simply use Reg->getTopoSig().
   unsigned getTopoSig(const TopoSigId &Id) {
-    return TopoSigs.insert(std::pair(Id, TopoSigs.size())).first->second;
+    return TopoSigs.try_emplace(Id, TopoSigs.size()).first->second;
   }
 
   // Create a native register unit that is associated with one or two root

@@ -1,5 +1,8 @@
 pub const Env = enum {
     /// zig1 features
+    /// - `-ofmt=c` only
+    /// - `-OReleaseFast` or `-OReleaseSmall` only
+    /// - no `@setRuntimeSafety(true)`
     bootstrap,
 
     /// zig2 features
@@ -23,12 +26,31 @@ pub const Env = enum {
     sema,
 
     /// - sema
-    /// - `zig build-* -fno-llvm -fno-lld -target x86_64-linux`
-    @"x86_64-linux",
+    /// - `zig build-* -fincremental -fno-llvm -fno-lld -target aarch64-linux --listen=-`
+    @"aarch64-linux",
+
+    /// - `zig build-* -ofmt=c`
+    cbe,
+
+    /// - sema
+    /// - `zig build-* -fincremental -fno-llvm -fno-lld -target powerpc(64)(le)-linux --listen=-`
+    @"powerpc-linux",
 
     /// - sema
     /// - `zig build-* -fno-llvm -fno-lld -target riscv64-linux`
     @"riscv64-linux",
+
+    /// - sema
+    /// - `zig build-* -fno-llvm -fno-lld -target spirv(32/64)-* --listen=-`
+    spirv,
+
+    /// - sema
+    /// - `zig build-* -fno-llvm -fno-lld -target wasm32-* --listen=-`
+    wasm,
+
+    /// - sema
+    /// - `zig build-* -fincremental -fno-llvm -fno-lld -target x86_64-linux --listen=-`
+    @"x86_64-linux",
 
     pub inline fn supports(comptime dev_env: Env, comptime feature: Feature) bool {
         return switch (dev_env) {
@@ -59,6 +81,8 @@ pub const Env = enum {
                 .incremental,
                 .ast_gen,
                 .sema,
+                .legalize,
+                .c_compiler,
                 .llvm_backend,
                 .c_backend,
                 .wasm_backend,
@@ -66,21 +90,24 @@ pub const Env = enum {
                 .x86_64_backend,
                 .aarch64_backend,
                 .x86_backend,
+                .powerpc_backend,
                 .riscv64_backend,
                 .sparc64_backend,
-                .spirv64_backend,
+                .spirv_backend,
                 .lld_linker,
                 .coff_linker,
+                .coff2_linker,
                 .elf_linker,
+                .elf2_linker,
                 .macho_linker,
                 .c_linker,
                 .wasm_linker,
                 .spirv_linker,
                 .plan9_linker,
-                .nvptx_linker,
                 => true,
                 .cc_command,
                 .translate_c_command,
+                .fmt_command,
                 .jit_command,
                 .fetch_command,
                 .init_command,
@@ -105,6 +132,7 @@ pub const Env = enum {
                 .clang_command,
                 .cc_command,
                 .translate_c_command,
+                .c_compiler,
                 => true,
                 else => false,
             },
@@ -129,7 +157,27 @@ pub const Env = enum {
                 => true,
                 else => Env.ast_gen.supports(feature),
             },
-            .@"x86_64-linux" => switch (feature) {
+            .@"aarch64-linux" => switch (feature) {
+                .build_command,
+                .stdio_listen,
+                .incremental,
+                .aarch64_backend,
+                .elf_linker,
+                .elf2_linker,
+                => true,
+                else => Env.sema.supports(feature),
+            },
+            .cbe => switch (feature) {
+                .legalize,
+                .c_backend,
+                .c_linker,
+                => true,
+                else => Env.sema.supports(feature),
+            },
+            .@"powerpc-linux" => switch (feature) {
+                .build_command,
+                .stdio_listen,
+                .incremental,
                 .x86_64_backend,
                 .elf_linker,
                 => true,
@@ -138,6 +186,33 @@ pub const Env = enum {
             .@"riscv64-linux" => switch (feature) {
                 .riscv64_backend,
                 .elf_linker,
+                => true,
+                else => Env.sema.supports(feature),
+            },
+            .spirv => switch (feature) {
+                .spirv_backend,
+                .spirv_linker,
+                .legalize,
+                => true,
+                else => Env.sema.supports(feature),
+            },
+            .wasm => switch (feature) {
+                .incremental,
+                .legalize,
+                .stdio_listen,
+                .wasm_backend,
+                .wasm_linker,
+                => true,
+                else => Env.sema.supports(feature),
+            },
+            .@"x86_64-linux" => switch (feature) {
+                .build_command,
+                .stdio_listen,
+                .incremental,
+                .legalize,
+                .x86_64_backend,
+                .elf_linker,
+                .elf2_linker,
                 => true,
                 else => Env.sema.supports(feature),
             },
@@ -166,6 +241,7 @@ pub const Feature = enum {
     clang_command,
     cc_command,
     translate_c_command,
+    fmt_command,
     jit_command,
     fetch_command,
     init_command,
@@ -190,6 +266,9 @@ pub const Feature = enum {
     incremental,
     ast_gen,
     sema,
+    legalize,
+
+    c_compiler,
 
     llvm_backend,
     c_backend,
@@ -198,19 +277,21 @@ pub const Feature = enum {
     x86_64_backend,
     aarch64_backend,
     x86_backend,
+    powerpc_backend,
     riscv64_backend,
     sparc64_backend,
-    spirv64_backend,
+    spirv_backend,
 
     lld_linker,
     coff_linker,
+    coff2_linker,
     elf_linker,
+    elf2_linker,
     macho_linker,
     c_linker,
     wasm_linker,
     spirv_linker,
     plan9_linker,
-    nvptx_linker,
 };
 
 /// Makes the code following the call to this function unreachable if `feature` is disabled.

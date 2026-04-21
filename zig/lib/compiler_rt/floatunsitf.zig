@@ -1,21 +1,20 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
 const floatFromInt = @import("./float_from_int.zig").floatFromInt;
-
-pub const panic = common.panic;
+const symbol = @import("../compiler_rt.zig").symbol;
 
 comptime {
-    if (common.want_ppc_abi) {
-        @export(&__floatunsitf, .{ .name = "__floatunsikf", .linkage = common.linkage, .visibility = common.visibility });
-    } else if (common.want_sparc_abi) {
-        @export(&_Qp_uitoq, .{ .name = "_Qp_uitoq", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_ppc_abi) {
+        symbol(&__floatunsitf, "__floatunsikf");
+    } else if (compiler_rt.want_sparc_abi) {
+        symbol(&_Qp_uitoq, "_Qp_uitoq");
     }
-    @export(&__floatunsitf, .{ .name = "__floatunsitf", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&__floatunsitf, "__floatunsitf");
 }
 
-pub fn __floatunsitf(a: u32) callconv(.C) f128 {
+pub fn __floatunsitf(a: u32) callconv(.c) f128 {
     return floatFromInt(f128, a);
 }
 
-fn _Qp_uitoq(c: *f128, a: u32) callconv(.C) void {
+fn _Qp_uitoq(c: *f128, a: u32) callconv(.c) void {
     c.* = floatFromInt(f128, a);
 }

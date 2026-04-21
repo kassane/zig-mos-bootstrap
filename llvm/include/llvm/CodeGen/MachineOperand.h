@@ -628,7 +628,7 @@ public:
   /// for ExternalSymbol operands.
   int64_t getOffset() const {
     assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
-            isTargetIndex() || isBlockAddress() || isFI()) &&
+            isTargetIndex() || isBlockAddress()) &&
            "Wrong MachineOperand accessor");
     return int64_t(uint64_t(Contents.OffsetedInfo.OffsetHi) << 32) |
            SmallContents.OffsetLo;
@@ -645,8 +645,9 @@ public:
   /// mask pointers.
   static bool clobbersPhysReg(const uint32_t *RegMask, MCRegister PhysReg) {
     // See TargetRegisterInfo.h.
-    assert(PhysReg < (1u << 30) && "Not a physical register");
-    return !(RegMask[PhysReg / 32] & (1u << PhysReg % 32));
+    assert((!PhysReg.isValid() || PhysReg.isPhysical()) &&
+           "Not a physical register");
+    return !(RegMask[PhysReg.id() / 32] & (1u << PhysReg.id() % 32));
   }
 
   /// clobbersPhysReg - Returns true if this RegMask operand clobbers PhysReg.
@@ -698,7 +699,7 @@ public:
 
   void setOffset(int64_t Offset) {
     assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
-            isTargetIndex() || isBlockAddress() || isFI()) &&
+            isTargetIndex() || isBlockAddress()) &&
            "Wrong MachineOperand mutator");
     SmallContents.OffsetLo = unsigned(Offset);
     Contents.OffsetedInfo.OffsetHi = int(Offset >> 32);
@@ -790,8 +791,7 @@ public:
   void ChangeToMCSymbol(MCSymbol *Sym, unsigned TargetFlags = 0);
 
   /// Replace this operand with a frame index.
-  void ChangeToFrameIndex(int Idx, int64_t Offset = 0,
-                          unsigned TargetFlags = 0);
+  void ChangeToFrameIndex(int Idx, unsigned TargetFlags = 0);
 
   /// Replace this operand with a target index.
   void ChangeToTargetIndex(unsigned Idx, int64_t Offset,
@@ -854,7 +854,7 @@ public:
     Op.IsEarlyClobber = isEarlyClobber;
     Op.TiedTo = 0;
     Op.IsDebug = isDebug;
-    Op.SmallContents.RegNo = Reg;
+    Op.SmallContents.RegNo = Reg.id();
     Op.Contents.Reg.Prev = nullptr;
     Op.Contents.Reg.Next = nullptr;
     Op.setSubReg(SubReg);
@@ -867,10 +867,9 @@ public:
     Op.setTargetFlags(TargetFlags);
     return Op;
   }
-  static MachineOperand CreateFI(int Idx, int64_t Offset = 0) {
+  static MachineOperand CreateFI(int Idx) {
     MachineOperand Op(MachineOperand::MO_FrameIndex);
     Op.setIndex(Idx);
-    Op.setOffset(Offset);
     return Op;
   }
   static MachineOperand CreateCPI(unsigned Idx, int Offset,

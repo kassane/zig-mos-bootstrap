@@ -3,29 +3,25 @@
 //! https://github.com/llvm/llvm-project/commit/d674d96bc56c0f377879d01c9d8dfdaaa7859cdb/compiler-rt/lib/builtins/divdf3.c
 
 const std = @import("std");
-const builtin = @import("builtin");
-const arch = builtin.cpu.arch;
-const is_test = builtin.is_test;
-const common = @import("common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = @import("../compiler_rt.zig").symbol;
 
-const normalize = common.normalize;
-const wideMultiply = common.wideMultiply;
-
-pub const panic = common.panic;
+const normalize = compiler_rt.normalize;
+const wideMultiply = compiler_rt.wideMultiply;
 
 comptime {
-    if (common.want_aeabi) {
-        @export(&__aeabi_ddiv, .{ .name = "__aeabi_ddiv", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_ddiv, "__aeabi_ddiv");
     } else {
-        @export(&__divdf3, .{ .name = "__divdf3", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&__divdf3, "__divdf3");
     }
 }
 
-pub fn __divdf3(a: f64, b: f64) callconv(.C) f64 {
+pub fn __divdf3(a: f64, b: f64) callconv(.c) f64 {
     return div(a, b);
 }
 
-fn __aeabi_ddiv(a: f64, b: f64) callconv(.AAPCS) f64 {
+fn __aeabi_ddiv(a: f64, b: f64) callconv(.{ .arm_aapcs = .{} }) f64 {
     return div(a, b);
 }
 

@@ -74,13 +74,17 @@ public:
   unsigned getInliningCostBenefitAnalysisProfitableMultiplier() const {
     return 8;
   }
+  int getInliningLastCallToStaticBonus() const {
+    // This is the value of InlineConstants::LastCallToStaticBonus before it was
+    // removed along with the introduction of this function.
+    return 15000;
+  }
   unsigned adjustInliningThreshold(const CallBase *CB) const { return 0; }
   unsigned getCallerAllocaCost(const CallBase *CB, const AllocaInst *AI) const {
     return 0;
   };
 
   int getInlinerVectorBonusPercent() const { return 150; }
-  bool strictInliningCosts() const { return false; }
 
   InstructionCost getMemcpyCost(const Instruction *I) const {
     return TTI::TCC_Expensive;
@@ -170,10 +174,12 @@ public:
         Name == "asin"  || Name == "asinf"  || Name == "asinl" ||
         Name == "acos"  || Name == "acosf"  || Name == "acosl" ||
         Name == "atan"  || Name == "atanf"  || Name == "atanl" ||
+        Name == "atan2" || Name == "atan2f" || Name == "atan2l"||
         Name == "sinh"  || Name == "sinhf"  || Name == "sinhl" ||
         Name == "cosh"  || Name == "coshf"  || Name == "coshl" ||
         Name == "tanh"  || Name == "tanhf"  || Name == "tanhl" ||
-        Name == "sqrt" || Name == "sqrtf" || Name == "sqrtl")
+        Name == "sqrt"  || Name == "sqrtf"  || Name == "sqrtl" ||
+        Name == "exp10"  || Name == "exp10l"  || Name == "exp10f")
       return false;
     // clang-format on
     // These are all likely to be optimized into something smaller.
@@ -192,6 +198,8 @@ public:
                                 HardwareLoopInfo &HWLoopInfo) const {
     return false;
   }
+
+  unsigned getEpilogueVectorizationMinVF() const { return 16; }
 
   bool preferPredicateOverEpilogue(TailFoldingInfo *TFI) const { return false; }
 
@@ -240,15 +248,6 @@ public:
     // Guess that only reg and reg+reg addressing is allowed. This heuristic is
     // taken from the implementation of LSR.
     return !BaseGV && BaseOffset == 0 && (Scale == 0 || Scale == 1);
-  }
-
-  bool isLegalAddressingMode(Type *Ty, GlobalValue *BaseGV, int64_t BaseOffset,
-                             bool HasBaseReg, Type *BaseType, int64_t Scale,
-                             Type *ScaleType, unsigned AddrSpace,
-                             Instruction *I = nullptr,
-                             int64_t ScalableOffset = 0) const {
-    return isLegalAddressingMode(Ty, BaseGV, BaseOffset, HasBaseReg, Scale,
-                                 AddrSpace, I, ScalableOffset);
   }
 
   bool isLSRCostLess(const TTI::LSRCost &C1, const TTI::LSRCost &C2) const {
@@ -337,6 +336,11 @@ public:
     return false;
   }
 
+  bool isLegalInterleavedAccessType(VectorType *VTy, unsigned Factor,
+                                    Align Alignment, unsigned AddrSpace) {
+    return false;
+  }
+
   bool isLegalMaskedVectorHistogram(Type *AddrType, Type *DataType) const {
     return false;
   }
@@ -353,13 +357,12 @@ public:
 
   InstructionCost getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
                                        StackOffset BaseOffset, bool HasBaseReg,
-                                       Type *BaseType, int64_t Scale,
-                                       Type *ScaleType,
+                                       int64_t Scale,
                                        unsigned AddrSpace) const {
     // Guess that all legal addressing mode are free.
     if (isLegalAddressingMode(Ty, BaseGV, BaseOffset.getFixed(), HasBaseReg,
-                              BaseType, Scale, ScaleType, AddrSpace,
-                              /*I=*/nullptr, BaseOffset.getScalable()))
+                              Scale, AddrSpace, /*I=*/nullptr,
+                              BaseOffset.getScalable()))
       return 0;
     return -1;
   }
@@ -367,10 +370,6 @@ public:
   bool LSRWithInstrQueries() const { return false; }
 
   bool isTruncateFree(Type *Ty1, Type *Ty2) const { return false; }
-
-  bool isZExtFree(Type *Ty1, Type *Ty2) const { return false; }
-
-  bool preferNarrowTypes() const { return false; }
 
   bool isProfitableToHoist(Instruction *I) const { return true; }
 
@@ -392,10 +391,26 @@ public:
     return false;
   }
 
+  bool isTargetIntrinsicWithScalarOpAtArg(Intrinsic::ID ID,
+                                          unsigned ScalarOpdIdx) const {
+    return false;
+  }
+
+  bool isTargetIntrinsicWithOverloadTypeAtArg(Intrinsic::ID ID,
+                                              int OpdIdx) const {
+    return OpdIdx == -1;
+  }
+
+  bool isTargetIntrinsicWithStructReturnOverloadAtField(Intrinsic::ID ID,
+                                                        int RetIdx) const {
+    return RetIdx == 0;
+  }
+
   InstructionCost getScalarizationOverhead(VectorType *Ty,
                                            const APInt &DemandedElts,
                                            bool Insert, bool Extract,
-                                           TTI::TargetCostKind CostKind) const {
+                                           TTI::TargetCostKind CostKind,
+                                           ArrayRef<Value *> VL = {}) const {
     return 0;
   }
 
@@ -422,9 +437,13 @@ public:
   bool enableSelectOptimize() const { return true; }
 
   bool shouldTreatInstructionLikeSelect(const Instruction *I) {
+    // A select with two constant operands will usually be better left as a
+    // select.
+    using namespace llvm::PatternMatch;
+    if (match(I, m_Select(m_Value(), m_Constant(), m_Constant())))
+      return false;
     // If the select is a logical-and/logical-or then it is better treated as a
     // and/or by the backend.
-    using namespace llvm::PatternMatch;
     return isa<SelectInst>(I) &&
            !match(I, m_CombineOr(m_LogicalAnd(m_Value(), m_Value()),
                                  m_LogicalOr(m_Value(), m_Value())));
@@ -566,6 +585,15 @@ public:
   bool enableWritePrefetching() const { return false; }
   bool shouldPrefetchAddressSpace(unsigned AS) const { return !AS; }
 
+  InstructionCost
+  getPartialReductionCost(unsigned Opcode, Type *InputTypeA, Type *InputTypeB,
+                          Type *AccumType, ElementCount VF,
+                          TTI::PartialReductionExtendKind OpAExtend,
+                          TTI::PartialReductionExtendKind OpBExtend,
+                          std::optional<unsigned> BinOp = std::nullopt) const {
+    return InstructionCost::getInvalid();
+  }
+
   unsigned getMaxInterleaveFactor(ElementCount VF) const { return 1; }
 
   InstructionCost getArithmeticInstrCost(
@@ -694,6 +722,17 @@ public:
     return 1;
   }
 
+  /// \param ScalarUserAndIdx encodes the information about extracts from a
+  /// vector with 'Scalar' being the value being extracted,'User' being the user
+  /// of the extract(nullptr if user is not known before vectorization) and
+  /// 'Idx' being the extract lane.
+  InstructionCost getVectorInstrCost(
+      unsigned Opcode, Type *Val, TTI::TargetCostKind CostKind, unsigned Index,
+      Value *Scalar,
+      ArrayRef<std::tuple<Value *, User *, int>> ScalarUserAndIdx) const {
+    return 1;
+  }
+
   InstructionCost getVectorInstrCost(const Instruction &I, Type *Val,
                                      TTI::TargetCostKind CostKind,
                                      unsigned Index) const {
@@ -784,6 +823,7 @@ public:
     case Intrinsic::experimental_gc_relocate:
     case Intrinsic::coro_alloc:
     case Intrinsic::coro_begin:
+    case Intrinsic::coro_begin_custom_abi:
     case Intrinsic::coro_free:
     case Intrinsic::coro_end:
     case Intrinsic::coro_frame:
@@ -983,6 +1023,13 @@ public:
     return false;
   }
 
+  bool isProfitableToSinkOperands(Instruction *I,
+                                  SmallVectorImpl<Use *> &Ops) const {
+    return false;
+  }
+
+  bool isVectorShiftByScalarCheap(Type *Ty) const { return false; }
+
   TargetTransformInfo::VPLegalization
   getVPLegalizationStrategy(const VPIntrinsic &PI) const {
     return TargetTransformInfo::VPLegalization(
@@ -990,11 +1037,17 @@ public:
         /* OperatorStrategy */ TargetTransformInfo::VPLegalization::Convert);
   }
 
-  bool allowIllegalIntegerIV() const { return false; }
-
   bool hasArmWideBranch(bool) const { return false; }
 
+  uint64_t getFeatureMask(const Function &F) const { return 0; }
+
+  bool isMultiversionedFunction(const Function &F) const { return false; }
+
   unsigned getMaxNumArgs() const { return UINT_MAX; }
+
+  unsigned getNumBytesToPadGlobalArray(unsigned Size, Type *ArrayType) const {
+    return 0;
+  }
 
 protected:
   // Obtain the minimum required size to hold the value (without the sign)

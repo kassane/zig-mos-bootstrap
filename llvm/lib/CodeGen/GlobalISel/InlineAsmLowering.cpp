@@ -11,7 +11,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-
 #include "llvm/CodeGen/GlobalISel/InlineAsmLowering.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -108,8 +107,8 @@ static void getRegistersForValue(MachineFunction &MF,
   // Initialize NumRegs.
   unsigned NumRegs = 1;
   if (OpInfo.ConstraintVT != MVT::Other)
-    NumRegs = TLI.getNumRegistersForInlineAsm(MF.getFunction().getContext(),
-                                              OpInfo.ConstraintVT);
+    NumRegs =
+        TLI.getNumRegisters(MF.getFunction().getContext(), OpInfo.ConstraintVT);
 
   // If this is a constraint for a specific physical register, but the type of
   // the operand requires more than one register to be passed, we allocate the
@@ -640,10 +639,8 @@ bool InlineAsmLowering::lowerAsmOperandForConstraint(
       bool IsBool = CI->getBitWidth() == 1;
       int64_t ExtVal = IsBool ? CI->getZExtValue() : CI->getSExtValue();
       Ops.push_back(MachineOperand::CreateImm(ExtVal));
-    } else if (GlobalValue *GV = dyn_cast<GlobalValue>(Val)) {
-      Ops.push_back(MachineOperand::CreateGA(GV, 0));
-    } else
-      return false;
-    return true;
+      return true;
+    }
+    return false;
   }
 }

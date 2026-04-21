@@ -29,7 +29,6 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/AMDGPUMetadataVerifier.h"
 #include "llvm/BinaryFormat/ELF.h"
-#include "llvm/BinaryFormat/MOSFlags.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/Object/Archive.h"
@@ -1285,7 +1284,6 @@ const EnumEntry<unsigned> ElfMachineType[] = {
   ENUM_ENT(EM_BPF,           "EM_BPF"),
   ENUM_ENT(EM_VE,            "NEC SX-Aurora Vector Engine"),
   ENUM_ENT(EM_LOONGARCH,     "LoongArch"),
-  ENUM_ENT(EM_MOS,           "MOS Technologies"),
 };
 
 const EnumEntry<unsigned> ElfSymbolBindings[] = {
@@ -1358,10 +1356,6 @@ const EnumEntry<unsigned> ElfMipsSectionFlags[] = {
   ENUM_ENT(SHF_MIPS_STRING,  "")
 };
 
-const EnumEntry<unsigned> ElfMOSSectionFlags[] = {
-  ENUM_ENT(SHF_MOS_ZEROPAGE, "z")
-};
-
 const EnumEntry<unsigned> ElfX86_64SectionFlags[] = {
   ENUM_ENT(SHF_X86_64_LARGE, "l")
 };
@@ -1400,10 +1394,6 @@ getSectionFlagsForTarget(unsigned EOSAbi, unsigned EMachine) {
   case EM_XCORE:
     Ret.insert(Ret.end(), std::begin(ElfXCoreSectionFlags),
                std::end(ElfXCoreSectionFlags));
-    break;
-  case EM_MOS:
-    Ret.insert(Ret.end(), std::begin(ElfMOSSectionFlags),
-               std::end(ElfMOSSectionFlags));
     break;
   default:
     break;
@@ -1629,6 +1619,7 @@ const EnumEntry<unsigned> ElfHeaderMipsFlags[] = {
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX940, "gfx940"),                            \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX941, "gfx941"),                            \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX942, "gfx942"),                            \
+  ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX950, "gfx950"),                            \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1010, "gfx1010"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1011, "gfx1011"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1012, "gfx1012"),                          \
@@ -1647,9 +1638,11 @@ const EnumEntry<unsigned> ElfHeaderMipsFlags[] = {
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1150, "gfx1150"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1151, "gfx1151"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1152, "gfx1152"),                          \
+  ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1153, "gfx1153"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1200, "gfx1200"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX1201, "gfx1201"),                          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX9_GENERIC, "gfx9-generic"),                \
+  ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX9_4_GENERIC, "gfx9-4-generic"),            \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX10_1_GENERIC, "gfx10-1-generic"),          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX10_3_GENERIC, "gfx10-3-generic"),          \
   ENUM_ENT(EF_AMDGPU_MACH_AMDGCN_GFX11_GENERIC, "gfx11-generic"),              \
@@ -1765,10 +1758,6 @@ const EnumEntry<unsigned> ElfMips16SymOtherFlags[] = {
 
 const EnumEntry<unsigned> ElfRISCVSymOtherFlags[] = {
     LLVM_READOBJ_ENUM_ENT(ELF, STO_RISCV_VARIANT_CC)};
-
-const EnumEntry<unsigned> ElfMOSSymOtherFlags[] = {
-  LLVM_READOBJ_ENUM_ENT(ELF, STO_MOS_ZEROPAGE)
-};
 
 static const char *getElfMipsOptionsOdkType(unsigned Odk) {
   switch (Odk) {
@@ -3509,9 +3498,6 @@ ELFDumper<ELFT>::getOtherFlagsFromSymbol(const Elf_Ehdr &Header,
   } else if (Header.e_machine == EM_RISCV) {
     SymOtherFlags.insert(SymOtherFlags.end(), std::begin(ElfRISCVSymOtherFlags),
                          std::end(ElfRISCVSymOtherFlags));
-  } else if (Header.e_machine == EM_MOS) {
-    SymOtherFlags.insert(SymOtherFlags.end(), std::begin(ElfMOSSymOtherFlags),
-                         std::end(ElfMOSSymOtherFlags));
   }
   return SymOtherFlags;
 }
@@ -3652,8 +3638,6 @@ template <class ELFT> void GNUELFDumper<ELFT>::printFileHeaders() {
         unsigned(ELF::EF_MIPS_ABI), unsigned(ELF::EF_MIPS_MACH));
   else if (e.e_machine == EM_RISCV)
     ElfFlags = printFlags(e.e_flags, ArrayRef(ElfHeaderRISCVFlags));
-  else if (e.e_machine == EM_MOS)
-    ElfFlags = printFlags(e.e_flags, MOS::ElfHeaderMOSFlags);
   else if (e.e_machine == EM_SPARC32PLUS || e.e_machine == EM_SPARCV9)
     ElfFlags = printFlags(e.e_flags, ArrayRef(ElfHeaderSPARCFlags),
                           unsigned(ELF::EF_SPARCV9_MM));
@@ -4122,8 +4106,6 @@ static void printSectionDescription(formatted_raw_ostream &OS,
     OS << ", l (large)";
   else if (EMachine == EM_ARM)
     OS << ", y (purecode)";
-  else if (EMachine == EM_MOS)
-    OS << ", z (zeropage)";
 
   OS << ", p (processor specific)\n";
 }
@@ -4329,15 +4311,6 @@ void GNUELFDumper<ELFT>::printSymbol(const Elf_Sym &Symbol, unsigned SymIndex,
       if (Other & STO_RISCV_VARIANT_CC) {
         Other &= ~STO_RISCV_VARIANT_CC;
         Fields[5].Str += " [VARIANT_CC";
-        if (Other != 0)
-          Fields[5].Str.append(" | " + utohexstr(Other, /*LowerCase=*/true));
-        Fields[5].Str.append("]");
-      }
-    } else if (this->Obj.getHeader().e_machine == ELF::EM_MOS) {
-      uint8_t Other = Symbol.st_other & ~0x3;
-      if (Other & STO_MOS_ZEROPAGE) {
-        Other &= ~STO_MOS_ZEROPAGE;
-        Fields[5].Str += " [ZEROPAGE";
         if (Other != 0)
           Fields[5].Str.append(" | " + utohexstr(Other, /*LowerCase=*/true));
         Fields[5].Str.append("]");
@@ -6084,6 +6057,7 @@ const NoteType CoreNoteTypes[] = {
     {ELF::NT_ARM_ZA, "NT_ARM_ZA (AArch64 SME ZA registers)"},
     {ELF::NT_ARM_ZT, "NT_ARM_ZT (AArch64 SME ZT registers)"},
     {ELF::NT_ARM_FPMR, "NT_ARM_FPMR (AArch64 Floating Point Mode Register)"},
+    {ELF::NT_ARM_GCS, "NT_ARM_GCS (AArch64 Guarded Control Stack state)"},
 
     {ELF::NT_FILE, "NT_FILE (mapped files)"},
     {ELF::NT_PRXFPREG, "NT_PRXFPREG (user_xfpregs structure)"},
@@ -7166,8 +7140,6 @@ template <class ELFT> void LLVMELFDumper<ELFT>::printFileHeaders() {
       }
     } else if (E.e_machine == EM_RISCV)
       W.printFlags("Flags", E.e_flags, ArrayRef(ElfHeaderRISCVFlags));
-    else if (E.e_machine == EM_MOS)
-      W.printFlags("Flags", E.e_flags, MOS::ElfHeaderMOSFlags);
     else if (E.e_machine == EM_SPARC32PLUS || E.e_machine == EM_SPARCV9)
       W.printFlags("Flags", E.e_flags, ArrayRef(ElfHeaderSPARCFlags),
                    unsigned(ELF::EF_SPARCV9_MM));

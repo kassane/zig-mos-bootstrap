@@ -1,20 +1,19 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 const mulf3 = @import("./mulf3.zig").mulf3;
 
-pub const panic = common.panic;
-
 comptime {
-    if (common.want_aeabi) {
-        @export(&__aeabi_fmul, .{ .name = "__aeabi_fmul", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_fmul, "__aeabi_fmul");
     } else {
-        @export(&__mulsf3, .{ .name = "__mulsf3", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&__mulsf3, "__mulsf3");
     }
 }
 
-pub fn __mulsf3(a: f32, b: f32) callconv(.C) f32 {
+pub fn __mulsf3(a: f32, b: f32) callconv(.c) f32 {
     return mulf3(f32, a, b);
 }
 
-fn __aeabi_fmul(a: f32, b: f32) callconv(.AAPCS) f32 {
+fn __aeabi_fmul(a: f32, b: f32) callconv(.{ .arm_aapcs = .{} }) f32 {
     return mulf3(f32, a, b);
 }

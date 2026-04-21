@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("../std.zig");
 const math = std.math;
 const expect = std.testing.expect;
@@ -5,10 +6,10 @@ const isNan = math.isNan;
 const isInf = math.isInf;
 const inf = math.inf;
 const nan = math.nan;
-const floatEpsAt = math.floatEpsAt;
 const floatEps = math.floatEps;
 const floatMin = math.floatMin;
 const floatMax = math.floatMax;
+const floatTrueMin = math.floatTrueMin;
 
 /// Returns sqrt(x * x + y * y), avoiding unnecessary overflow and underflow.
 ///
@@ -29,8 +30,7 @@ pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
     }
     const lower = @sqrt(floatMin(T));
     const upper = @sqrt(floatMax(T) / 2);
-    const incre = @sqrt(floatEps(T) / 2);
-    const scale = floatEpsAt(T, incre);
+    const scale = floatTrueMin(T) * upper;
     const hypfn = if (emulateFma(T)) hypotUnfused else hypotFused;
     var major: T = x;
     var minor: T = y;
@@ -45,7 +45,8 @@ pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
         major = minor;
         minor = tempo;
     }
-    if (major * incre >= minor) return major;
+    if (minor == 0.0) return major;
+    if (major - minor == major) return major;
     if (major > upper) return hypfn(T, major * scale, minor * scale) / scale;
     if (minor < lower) return hypfn(T, major / scale, minor / scale) * scale;
     return hypfn(T, major, minor);
@@ -92,10 +93,12 @@ const hypot_test_cases = .{
 };
 
 test hypot {
+    if (builtin.cpu.arch.isPowerPC() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/171869
     try expect(hypot(0.3, 0.4) == 0.5);
 }
 
 test "hypot.correct" {
+    if (builtin.cpu.arch.isPowerPC() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/171869
     inline for (.{ f16, f32, f64, f128 }) |T| {
         inline for (hypot_test_cases) |v| {
             const a: T, const b: T, const c: T = v;
@@ -105,6 +108,7 @@ test "hypot.correct" {
 }
 
 test "hypot.precise" {
+    if (builtin.cpu.arch.isPowerPC() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/171869
     inline for (.{ f16, f32, f64 }) |T| { // f128 seems to be 5 ulp
         inline for (hypot_test_cases) |v| {
             const a: T, const b: T, const c: T = v;
@@ -114,6 +118,7 @@ test "hypot.precise" {
 }
 
 test "hypot.special" {
+    if (builtin.cpu.arch.isPowerPC() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/171869
     @setEvalBranchQuota(2000);
     inline for (.{ f16, f32, f64, f128 }) |T| {
         try expect(math.isNan(hypot(nan(T), 0.0)));

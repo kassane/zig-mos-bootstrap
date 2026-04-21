@@ -1,21 +1,19 @@
-const builtin = @import("builtin");
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
 const floatFromInt = @import("./float_from_int.zig").floatFromInt;
-
-pub const panic = common.panic;
+const symbol = @import("../compiler_rt.zig").symbol;
 
 comptime {
-    if (common.want_windows_v2u64_abi) {
-        @export(&__floatuntidf_windows_x86_64, .{ .name = "__floatuntidf", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_windows_v2u64_abi) {
+        symbol(&__floatuntidf_windows_x86_64, "__floatuntidf");
     } else {
-        @export(&__floatuntidf, .{ .name = "__floatuntidf", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&__floatuntidf, "__floatuntidf");
     }
 }
 
-pub fn __floatuntidf(a: u128) callconv(.C) f64 {
+pub fn __floatuntidf(a: u128) callconv(.c) f64 {
     return floatFromInt(f64, a);
 }
 
-fn __floatuntidf_windows_x86_64(a: @Vector(2, u64)) callconv(.C) f64 {
+fn __floatuntidf_windows_x86_64(a: @Vector(2, u64)) callconv(.c) f64 {
     return floatFromInt(f64, @as(u128, @bitCast(a)));
 }

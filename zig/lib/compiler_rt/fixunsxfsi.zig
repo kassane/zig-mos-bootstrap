@@ -1,12 +1,11 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 const intFromFloat = @import("./int_from_float.zig").intFromFloat;
 
-pub const panic = common.panic;
-
 comptime {
-    @export(&__fixunsxfsi, .{ .name = "__fixunsxfsi", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&__fixunsxfsi, "__fixunsxfsi");
 }
 
-fn __fixunsxfsi(a: f80) callconv(.C) u32 {
+fn __fixunsxfsi(a: f80) callconv(.c) u32 {
     return intFromFloat(u32, a);
 }

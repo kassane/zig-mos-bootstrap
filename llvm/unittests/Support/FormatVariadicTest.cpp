@@ -150,7 +150,7 @@ TEST(FormatVariadicTest, ValidReplacementSequence) {
   EXPECT_EQ(0u, Replacements[0].Index);
   EXPECT_EQ(3u, Replacements[0].Width);
   EXPECT_EQ(AlignStyle::Left, Replacements[0].Where);
-  EXPECT_EQ("foo", Replacements[0].Options);
+  EXPECT_EQ(" foo ", Replacements[0].Options);
 
   // 8. Everything after the first option specifier is part of the style, even
   // if it contains another option specifier.
@@ -561,7 +561,6 @@ struct format_tuple {
   }
 };
 
-#if 0
 TEST(FormatVariadicTest, BigTest) {
   using Tuple =
       std::tuple<char, int, const char *, StringRef, std::string, double, float,
@@ -604,7 +603,6 @@ TEST(FormatVariadicTest, BigTest) {
 
   EXPECT_EQ(Expected, S);
 }
-#endif
 
 TEST(FormatVariadicTest, Range) {
   std::vector<int> IntRange = {1, 1, 2, 3, 5, 8, 13};

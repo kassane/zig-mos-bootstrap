@@ -43,11 +43,13 @@ export fn entry7() void {
 }
 
 // error
-// backend=llvm
-// target=native
 //
-// :2:31: error: backing integer type 'u32' has bit size 32 but the struct fields have a total bit size of 29
-// :9:31: error: backing integer type 'i31' has bit size 31 but the struct fields have a total bit size of 32
+// :2:24: error: backing integer bit width does not match total bit width of fields
+// :2:31: note: backing integer 'u32' has bit width '32'
+// :2:24: note: struct fields have total bit width '29'
+// :9:24: error: backing integer bit width does not match total bit width of fields
+// :9:31: note: backing integer 'i31' has bit width '31'
+// :9:24: note: struct fields have total bit width '32'
 // :17:31: error: expected backing integer type, found 'void'
 // :23:31: error: expected backing integer type, found 'void'
 // :27:31: error: expected backing integer type, found 'noreturn'

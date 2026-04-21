@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #ifndef LLVM_CODEGEN_MIRYAMLMAPPING_H
 #define LLVM_CODEGEN_MIRYAMLMAPPING_H
 
@@ -192,6 +191,7 @@ struct VirtualRegisterDefinition {
   UnsignedValue ID;
   StringValue Class;
   StringValue PreferredRegister;
+  std::vector<FlowStringValue> RegisterFlags;
 
   // TODO: Serialize the target specific register hints.
 
@@ -207,6 +207,8 @@ template <> struct MappingTraits<VirtualRegisterDefinition> {
     YamlIO.mapRequired("class", Reg.Class);
     YamlIO.mapOptional("preferred-register", Reg.PreferredRegister,
                        StringValue()); // Don't print out when it's empty.
+    YamlIO.mapOptional("flags", Reg.RegisterFlags,
+                       std::vector<FlowStringValue>());
   }
 
   static const bool flow = true;
@@ -377,8 +379,6 @@ struct ScalarEnumerationTraits<TargetStackID::Value> {
     IO.enumCase(ID, "sgpr-spill", TargetStackID::SGPRSpill);
     IO.enumCase(ID, "scalable-vector", TargetStackID::ScalableVector);
     IO.enumCase(ID, "wasm-local", TargetStackID::WasmLocal);
-    IO.enumCase(ID, "mos-static", TargetStackID::MosStatic);
-    IO.enumCase(ID, "mos-zero-page", TargetStackID::MosZeroPage);
     IO.enumCase(ID, "noalloc", TargetStackID::NoAlloc);
   }
 };
@@ -457,6 +457,16 @@ template <> struct ScalarTraits<FrameIndex> {
   static QuotingType mustQuote(StringRef S) { return needsQuotes(S); }
 };
 
+/// Identifies call instruction location in machine function.
+struct MachineInstrLoc {
+  unsigned BlockNum;
+  unsigned Offset;
+
+  bool operator==(const MachineInstrLoc &Other) const {
+    return BlockNum == Other.BlockNum && Offset == Other.Offset;
+  }
+};
+
 /// Serializable representation of CallSiteInfo.
 struct CallSiteInfo {
   // Representation of call argument and register which is used to
@@ -467,16 +477,6 @@ struct CallSiteInfo {
 
     bool operator==(const ArgRegPair &Other) const {
       return Reg == Other.Reg && ArgNo == Other.ArgNo;
-    }
-  };
-
-  /// Identifies call instruction location in machine function.
-  struct MachineInstrLoc {
-    unsigned BlockNum;
-    unsigned Offset;
-
-    bool operator==(const MachineInstrLoc &Other) const {
-      return BlockNum == Other.BlockNum && Offset == Other.Offset;
     }
   };
 
@@ -595,6 +595,26 @@ template <> struct MappingTraits<MachineJumpTable::Entry> {
   }
 };
 
+struct CalledGlobal {
+  MachineInstrLoc CallSite;
+  StringValue Callee;
+  unsigned Flags;
+
+  bool operator==(const CalledGlobal &Other) const {
+    return CallSite == Other.CallSite && Callee == Other.Callee &&
+           Flags == Other.Flags;
+  }
+};
+
+template <> struct MappingTraits<CalledGlobal> {
+  static void mapping(IO &YamlIO, CalledGlobal &CG) {
+    YamlIO.mapRequired("bb", CG.CallSite.BlockNum);
+    YamlIO.mapRequired("offset", CG.CallSite.Offset);
+    YamlIO.mapRequired("callee", CG.Callee);
+    YamlIO.mapRequired("flags", CG.Flags);
+  }
+};
+
 } // end namespace yaml
 } // end namespace llvm
 
@@ -606,6 +626,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::FixedMachineStackObject)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::CallSiteInfo)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineConstantPoolValue)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineJumpTable::Entry)
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::CalledGlobal)
 
 namespace llvm {
 namespace yaml {
@@ -737,6 +758,7 @@ struct MachineFunction {
   std::optional<bool> NoPHIs;
   std::optional<bool> IsSSA;
   std::optional<bool> NoVRegs;
+  std::optional<bool> HasFakeUses;
 
   bool CallsEHReturn = false;
   bool CallsUnwindInit = false;
@@ -763,6 +785,7 @@ struct MachineFunction {
   std::vector<DebugValueSubstitution> DebugValueSubstitutions;
   MachineJumpTable JumpTableInfo;
   std::vector<StringValue> MachineMetadataNodes;
+  std::vector<CalledGlobal> CalledGlobals;
   BlockStringValue Body;
 };
 
@@ -783,6 +806,7 @@ template <> struct MappingTraits<MachineFunction> {
     YamlIO.mapOptional("noPhis", MF.NoPHIs, std::optional<bool>());
     YamlIO.mapOptional("isSSA", MF.IsSSA, std::optional<bool>());
     YamlIO.mapOptional("noVRegs", MF.NoVRegs, std::optional<bool>());
+    YamlIO.mapOptional("hasFakeUses", MF.HasFakeUses, std::optional<bool>());
 
     YamlIO.mapOptional("callsEHReturn", MF.CallsEHReturn, false);
     YamlIO.mapOptional("callsUnwindInit", MF.CallsUnwindInit, false);
@@ -820,6 +844,9 @@ template <> struct MappingTraits<MachineFunction> {
     if (!YamlIO.outputting() || !MF.MachineMetadataNodes.empty())
       YamlIO.mapOptional("machineMetadataNodes", MF.MachineMetadataNodes,
                          std::vector<StringValue>());
+    if (!YamlIO.outputting() || !MF.CalledGlobals.empty())
+      YamlIO.mapOptional("calledGlobals", MF.CalledGlobals,
+                         std::vector<CalledGlobal>());
     YamlIO.mapOptional("body", MF.Body, BlockStringValue());
   }
 };

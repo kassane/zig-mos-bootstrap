@@ -17,8 +17,6 @@ pub const Token = struct {
         .{ "anyframe", .keyword_anyframe },
         .{ "anytype", .keyword_anytype },
         .{ "asm", .keyword_asm },
-        .{ "async", .keyword_async },
-        .{ "await", .keyword_await },
         .{ "break", .keyword_break },
         .{ "callconv", .keyword_callconv },
         .{ "catch", .keyword_catch },
@@ -55,7 +53,6 @@ pub const Token = struct {
         .{ "try", .keyword_try },
         .{ "union", .keyword_union },
         .{ "unreachable", .keyword_unreachable },
-        .{ "usingnamespace", .keyword_usingnamespace },
         .{ "var", .keyword_var },
         .{ "volatile", .keyword_volatile },
         .{ "while", .keyword_while },
@@ -146,8 +143,6 @@ pub const Token = struct {
         keyword_anyframe,
         keyword_anytype,
         keyword_asm,
-        keyword_async,
-        keyword_await,
         keyword_break,
         keyword_callconv,
         keyword_catch,
@@ -184,7 +179,6 @@ pub const Token = struct {
         keyword_try,
         keyword_union,
         keyword_unreachable,
-        keyword_usingnamespace,
         keyword_var,
         keyword_volatile,
         keyword_while,
@@ -273,8 +267,6 @@ pub const Token = struct {
                 .keyword_anyframe => "anyframe",
                 .keyword_anytype => "anytype",
                 .keyword_asm => "asm",
-                .keyword_async => "async",
-                .keyword_await => "await",
                 .keyword_break => "break",
                 .keyword_callconv => "callconv",
                 .keyword_catch => "catch",
@@ -311,7 +303,6 @@ pub const Token = struct {
                 .keyword_try => "try",
                 .keyword_union => "union",
                 .keyword_unreachable => "unreachable",
-                .keyword_usingnamespace => "usingnamespace",
                 .keyword_var => "var",
                 .keyword_volatile => "volatile",
                 .keyword_while => "while",
@@ -322,7 +313,8 @@ pub const Token = struct {
             return tag.lexeme() orelse switch (tag) {
                 .invalid => "invalid token",
                 .identifier => "an identifier",
-                .string_literal, .multiline_string_literal_line => "a string literal",
+                .string_literal => "a string literal",
+                .multiline_string_literal_line => "a multiline string literal",
                 .char_literal => "a character literal",
                 .eof => "EOF",
                 .builtin => "a builtin function",
@@ -722,6 +714,9 @@ pub const Tokenizer = struct {
                 self.index += 1;
                 switch (self.buffer[self.index]) {
                     0, '\n' => result.tag = .invalid,
+                    0x01...0x09, 0x0b...0x1f, 0x7f => {
+                        continue :state .invalid;
+                    },
                     else => continue :state .string_literal,
                 }
             },
@@ -1712,7 +1707,7 @@ test "invalid tabs and carriage returns" {
 }
 
 test "fuzzable properties upheld" {
-    return std.testing.fuzz(testPropertiesUpheld, .{});
+    return std.testing.fuzz({}, testPropertiesUpheld, .{});
 }
 
 fn testTokenize(source: [:0]const u8, expected_token_tags: []const Token.Tag) !void {
@@ -1730,10 +1725,22 @@ fn testTokenize(source: [:0]const u8, expected_token_tags: []const Token.Tag) !v
     try std.testing.expectEqual(source.len, last_token.loc.end);
 }
 
-fn testPropertiesUpheld(source: []const u8) anyerror!void {
-    const source0 = try std.testing.allocator.dupeZ(u8, source);
-    defer std.testing.allocator.free(source0);
-    var tokenizer = Tokenizer.init(source0);
+fn testPropertiesUpheld(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var source_buf: [512]u8 = undefined;
+    const len = smith.sliceWeightedBytes(source_buf[0 .. source_buf.len - 1], &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .rangeAtMost(u8, 0x20, 0x7e, 4),
+        .rangeAtMost(u8, 0x00, 0x1f, 1),
+        .value(u8, 0, 6),
+        .value(u8, ' ', 6),
+        .rangeAtMost(u8, '\t', '\n', 6), // \t, \n
+        .value(u8, '\r', 3),
+    });
+    source_buf[len] = 0;
+    const source = source_buf[0..len :0];
+
+    var tokenizer = Tokenizer.init(source);
     var tokenization_failed = false;
     while (true) {
         const token = tokenizer.next();
@@ -1746,30 +1753,27 @@ fn testPropertiesUpheld(source: []const u8) anyerror!void {
                 tokenization_failed = true;
 
                 // Property: invalid token always ends at newline or eof
-                try std.testing.expect(source0[token.loc.end] == '\n' or source0[token.loc.end] == 0);
+                try std.testing.expect(source[token.loc.end] == '\n' or source[token.loc.end] == 0);
             },
             .eof => {
                 // Property: EOF token is always 0-length at end of source.
-                try std.testing.expectEqual(source0.len, token.loc.start);
-                try std.testing.expectEqual(source0.len, token.loc.end);
+                try std.testing.expectEqual(source.len, token.loc.start);
+                try std.testing.expectEqual(source.len, token.loc.end);
                 break;
             },
             else => continue,
         }
     }
 
-    if (source0.len > 0) for (source0, source0[1..][0..source0.len]) |cur, next| {
+    if (tokenization_failed) return;
+    for (source) |cur| {
         // Property: No null byte allowed except at end.
         if (cur == 0) {
-            try std.testing.expect(tokenization_failed);
+            return error.TestUnexpectedResult;
         }
-        // Property: No ASCII control characters other than \n and \t are allowed.
-        if (std.ascii.isControl(cur) and cur != '\n' and cur != '\t') {
-            try std.testing.expect(tokenization_failed);
+        // Property: No ASCII control characters other than \n, \t, and \r are allowed.
+        if (std.ascii.isControl(cur) and cur != '\n' and cur != '\t' and cur != '\r') {
+            return error.TestUnexpectedResult;
         }
-        // Property: All '\r' must be followed by '\n'.
-        if (cur == '\r' and next != '\n') {
-            try std.testing.expect(tokenization_failed);
-        }
-    };
+    }
 }

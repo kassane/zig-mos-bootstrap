@@ -1,10 +1,11 @@
+const Coverage = @This();
+
 const std = @import("../std.zig");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Hash = std.hash.Wyhash;
 const Dwarf = std.debug.Dwarf;
 const assert = std.debug.assert;
-
-const Coverage = @This();
 
 /// Provides a globally-scoped integer index for directories.
 ///
@@ -21,15 +22,15 @@ directories: std.ArrayHashMapUnmanaged(String, void, String.MapContext, false),
 ///
 /// Protected by `mutex`.
 files: std.ArrayHashMapUnmanaged(File, void, File.MapContext, false),
-string_bytes: std.ArrayListUnmanaged(u8),
+string_bytes: std.ArrayList(u8),
 /// Protects the other fields.
-mutex: std.Thread.Mutex,
+mutex: Io.Mutex,
 
 pub const init: Coverage = .{
-    .directories = .{},
-    .files = .{},
-    .mutex = .{},
-    .string_bytes = .{},
+    .directories = .empty,
+    .files = .empty,
+    .mutex = .init,
+    .string_bytes = .empty,
 };
 
 pub const String = enum(u32) {
@@ -140,11 +141,13 @@ pub fn stringAt(cov: *Coverage, index: String) [:0]const u8 {
     return span(cov.string_bytes.items[@intFromEnum(index)..]);
 }
 
-pub const ResolveAddressesDwarfError = Dwarf.ScanError;
+pub const ResolveAddressesDwarfError = Dwarf.ScanError || Io.Cancelable;
 
 pub fn resolveAddressesDwarf(
     cov: *Coverage,
     gpa: Allocator,
+    io: Io,
+    endian: std.builtin.Endian,
     /// Asserts the addresses are in ascending order.
     sorted_pc_addrs: []const u64,
     /// Asserts its length equals length of `sorted_pc_addrs`.
@@ -160,8 +163,8 @@ pub fn resolveAddressesDwarf(
     var prev_pc: u64 = 0;
     var prev_cu: ?*std.debug.Dwarf.CompileUnit = null;
     // Protects directories and files tables from other threads.
-    cov.mutex.lock();
-    defer cov.mutex.unlock();
+    try cov.mutex.lock(io);
+    defer cov.mutex.unlock(io);
     next_pc: for (sorted_pc_addrs, output) |pc, *out| {
         assert(pc >= prev_pc);
         prev_pc = pc;
@@ -182,9 +185,9 @@ pub fn resolveAddressesDwarf(
         if (cu != prev_cu) {
             prev_cu = cu;
             if (cu.src_loc_cache == null) {
-                cov.mutex.unlock();
-                defer cov.mutex.lock();
-                d.populateSrcLocCache(gpa, cu) catch |err| switch (err) {
+                cov.mutex.unlock(io);
+                defer cov.mutex.lockUncancelable(io);
+                d.populateSrcLocCache(gpa, endian, cu) catch |err| switch (err) {
                     error.MissingDebugInfo, error.InvalidDebugInfo => {
                         out.* = SourceLocation.invalid;
                         continue :next_pc;

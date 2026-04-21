@@ -21,7 +21,6 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
@@ -259,7 +258,7 @@ void CallLowering::setArgFlags(CallLowering::ArgInfo &Arg, unsigned OpIdx,
     else if ((ParamAlign = FuncInfo.getParamAlign(ParamIdx)))
       MemAlign = *ParamAlign;
     else
-      MemAlign = Align(getTLI()->getByValTypeAlignment(ElementTy, DL));
+      MemAlign = getTLI()->getByValTypeAlignment(ElementTy, DL);
   } else if (OpIdx >= AttributeList::FirstArgIndex) {
     if (auto ParamAlign =
             FuncInfo.getParamStackAlign(OpIdx - AttributeList::FirstArgIndex))
@@ -679,15 +678,14 @@ bool CallLowering::determineAssignments(ValueAssigner &Assigner,
 
   unsigned NumArgs = Args.size();
   for (unsigned i = 0; i != NumArgs; ++i) {
-    ISD::ArgFlagsTy OrigFlags = Args[i].Flags[0];
     EVT CurVT = EVT::getEVT(Args[i].Ty);
 
-    MVT NewVT = TLI->getRegisterTypeForCallingConv(Ctx, CallConv, CurVT, OrigFlags);
+    MVT NewVT = TLI->getRegisterTypeForCallingConv(Ctx, CallConv, CurVT);
 
     // If we need to split the type over multiple regs, check it's a scenario
     // we currently support.
     unsigned NumParts =
-        TLI->getNumRegistersForCallingConv(Ctx, CallConv, CurVT, OrigFlags);
+        TLI->getNumRegistersForCallingConv(Ctx, CallConv, CurVT);
 
     if (NumParts == 1) {
       // Try to use the register type if we couldn't assign the VT.
@@ -708,6 +706,7 @@ bool CallLowering::determineAssignments(ValueAssigner &Assigner,
 
     // We're handling an incoming arg which is split over multiple regs.
     // E.g. passing an s128 on AArch64.
+    ISD::ArgFlagsTy OrigFlags = Args[i].Flags[0];
     Args[i].Flags.clear();
 
     for (unsigned Part = 0; Part < NumParts; ++Part) {
@@ -1055,7 +1054,7 @@ void CallLowering::insertSRetIncomingArgument(
   DemoteReg = MRI.createGenericVirtualRegister(
       LLT::pointer(AS, DL.getPointerSizeInBits(AS)));
 
-  Type *PtrTy = PointerType::get(F.getReturnType(), AS);
+  Type *PtrTy = PointerType::get(F.getContext(), AS);
 
   SmallVector<EVT, 1> ValueVTs;
   ComputeValueVTs(*TLI, DL, PtrTy, ValueVTs);
@@ -1082,7 +1081,7 @@ void CallLowering::insertSRetOutgoingArgument(MachineIRBuilder &MIRBuilder,
       DL.getTypeAllocSize(RetTy), DL.getPrefTypeAlign(RetTy), false);
 
   Register DemoteReg = MIRBuilder.buildFrameIndex(FramePtrTy, FI).getReg(0);
-  ArgInfo DemoteArg(DemoteReg, PointerType::get(RetTy, AS),
+  ArgInfo DemoteArg(DemoteReg, PointerType::get(RetTy->getContext(), AS),
                     ArgInfo::NoArgIndex);
   setArgFlags(DemoteArg, AttributeList::ReturnIndex, DL, CB);
   DemoteArg.Flags[0].setSRet();
@@ -1116,8 +1115,8 @@ void CallLowering::getReturnInfo(CallingConv::ID CallConv, Type *RetTy,
 
   for (EVT VT : SplitVTs) {
     unsigned NumParts =
-        TLI->getNumRegistersForCallingConv(Context, CallConv, VT, Flags);
-    MVT RegVT = TLI->getRegisterTypeForCallingConv(Context, CallConv, VT, Flags);
+        TLI->getNumRegistersForCallingConv(Context, CallConv, VT);
+    MVT RegVT = TLI->getRegisterTypeForCallingConv(Context, CallConv, VT);
     Type *PartTy = EVT(RegVT).getTypeForEVT(Context);
 
     for (unsigned I = 0; I < NumParts; ++I) {

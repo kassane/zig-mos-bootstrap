@@ -1,12 +1,9 @@
-const std = @import("std");
-
 pub const Tag = enum {
     add_with_overflow,
     addrspace_cast,
     align_cast,
     align_of,
     as,
-    async_call,
     atomic_load,
     atomic_rmw,
     atomic_store,
@@ -17,14 +14,12 @@ pub const Tag = enum {
     branch_hint,
     breakpoint,
     disable_instrumentation,
+    disable_intrinsics,
     mul_add,
     byte_swap,
     bit_reverse,
     offset_of,
     call,
-    c_define,
-    c_import,
-    c_include,
     clz,
     cmpxchg_strong,
     cmpxchg_weak,
@@ -32,7 +27,6 @@ pub const Tag = enum {
     compile_log,
     const_cast,
     ctz,
-    c_undef,
     c_va_arg,
     c_va_copy,
     c_va_end,
@@ -56,7 +50,6 @@ pub const Tag = enum {
     frame,
     Frame,
     frame_address,
-    frame_size,
     has_decl,
     has_field,
     import,
@@ -69,6 +62,7 @@ pub const Tag = enum {
     max,
     memcpy,
     memset,
+    memmove,
     min,
     wasm_memory_size,
     wasm_memory_grow,
@@ -112,7 +106,14 @@ pub const Tag = enum {
     This,
     trap,
     truncate,
-    Type,
+    EnumLiteral,
+    Int,
+    Tuple,
+    Pointer,
+    Fn,
+    Struct,
+    Union,
+    Enum,
     type_info,
     type_name,
     TypeOf,
@@ -147,7 +148,7 @@ param_count: ?u8,
 
 pub const list = list: {
     @setEvalBranchQuota(3000);
-    break :list std.StaticStringMap(@This()).initComptime(.{
+    break :list std.StaticStringMap(BuiltinFn).initComptime([_]struct { []const u8, BuiltinFn }{
         .{
             "@addWithOverflow",
             .{
@@ -182,13 +183,6 @@ pub const list = list: {
                 .tag = .as,
                 .eval_to_error = .maybe,
                 .param_count = 2,
-            },
-        },
-        .{
-            "@asyncCall",
-            .{
-                .tag = .async_call,
-                .param_count = 4,
             },
         },
         .{
@@ -265,6 +259,14 @@ pub const list = list: {
             },
         },
         .{
+            "@disableIntrinsics",
+            .{
+                .tag = .disable_intrinsics,
+                .param_count = 0,
+                .illegal_outside_function = true,
+            },
+        },
+        .{
             "@mulAdd",
             .{
                 .tag = .mul_add,
@@ -298,27 +300,6 @@ pub const list = list: {
                 .tag = .call,
                 .eval_to_error = .maybe,
                 .param_count = 3,
-            },
-        },
-        .{
-            "@cDefine",
-            .{
-                .tag = .c_define,
-                .param_count = 2,
-            },
-        },
-        .{
-            "@cImport",
-            .{
-                .tag = .c_import,
-                .param_count = 1,
-            },
-        },
-        .{
-            "@cInclude",
-            .{
-                .tag = .c_include,
-                .param_count = 1,
             },
         },
         .{
@@ -371,35 +352,32 @@ pub const list = list: {
             },
         },
         .{
-            "@cUndef",
+            "@cVaArg",
             .{
-                .tag = .c_undef,
-                .param_count = 1,
-            },
-        },
-        .{
-            "@cVaArg", .{
                 .tag = .c_va_arg,
                 .param_count = 2,
                 .illegal_outside_function = true,
             },
         },
         .{
-            "@cVaCopy", .{
+            "@cVaCopy",
+            .{
                 .tag = .c_va_copy,
                 .param_count = 1,
                 .illegal_outside_function = true,
             },
         },
         .{
-            "@cVaEnd", .{
+            "@cVaEnd",
+            .{
                 .tag = .c_va_end,
                 .param_count = 1,
                 .illegal_outside_function = true,
             },
         },
         .{
-            "@cVaStart", .{
+            "@cVaStart",
+            .{
                 .tag = .c_va_start,
                 .param_count = 0,
                 .illegal_outside_function = true,
@@ -543,13 +521,6 @@ pub const list = list: {
             },
         },
         .{
-            "@frameSize",
-            .{
-                .tag = .frame_size,
-                .param_count = 1,
-            },
-        },
-        .{
             "@hasDecl",
             .{
                 .tag = .has_decl,
@@ -631,6 +602,13 @@ pub const list = list: {
             "@memset",
             .{
                 .tag = .memset,
+                .param_count = 2,
+            },
+        },
+        .{
+            "@memmove",
+            .{
+                .tag = .memmove,
                 .param_count = 2,
             },
         },
@@ -938,10 +916,59 @@ pub const list = list: {
             },
         },
         .{
-            "@Type",
+            "@EnumLiteral",
             .{
-                .tag = .Type,
+                .tag = .EnumLiteral,
+                .param_count = 0,
+            },
+        },
+        .{
+            "@Int",
+            .{
+                .tag = .Int,
+                .param_count = 2,
+            },
+        },
+        .{
+            "@Tuple",
+            .{
+                .tag = .Tuple,
                 .param_count = 1,
+            },
+        },
+        .{
+            "@Pointer",
+            .{
+                .tag = .Pointer,
+                .param_count = 4,
+            },
+        },
+        .{
+            "@Fn",
+            .{
+                .tag = .Fn,
+                .param_count = 4,
+            },
+        },
+        .{
+            "@Struct",
+            .{
+                .tag = .Struct,
+                .param_count = 5,
+            },
+        },
+        .{
+            "@Union",
+            .{
+                .tag = .Union,
+                .param_count = 5,
+            },
+        },
+        .{
+            "@Enum",
+            .{
+                .tag = .Enum,
+                .param_count = 4,
             },
         },
         .{
@@ -987,7 +1014,8 @@ pub const list = list: {
             },
         },
         .{
-            "@workItemId", .{
+            "@workItemId",
+            .{
                 .tag = .work_item_id,
                 .param_count = 1,
                 .illegal_outside_function = true,
@@ -1011,3 +1039,6 @@ pub const list = list: {
         },
     });
 };
+
+const std = @import("std");
+const BuiltinFn = @This();

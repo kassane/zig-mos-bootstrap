@@ -1,7 +1,7 @@
 //! wasi_snapshot_preview1 spec available (in witx format) here:
 //! * typenames -- https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/witx/typenames.witx
 //! * module -- https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/witx/wasi_snapshot_preview1.witx
-//! Note that libc API does *not* go in this file. wasi libc API goes into std/c/wasi.zig instead.
+//! Note that libc API does *not* go in this file. wasi libc API goes into std/c.zig instead.
 const builtin = @import("builtin");
 const std = @import("std");
 const assert = std.debug.assert;
@@ -288,8 +288,9 @@ pub const oflags_t = packed struct(u16) {
     _: u12 = 0,
 };
 
-pub const preopentype_t = u8;
-pub const PREOPENTYPE_DIR: preopentype_t = 0;
+pub const preopentype_t = enum(u8) {
+    DIR = 0,
+};
 
 pub const prestat_t = extern struct {
     pr_type: preopentype_t,

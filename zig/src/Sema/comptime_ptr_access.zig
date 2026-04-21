@@ -24,7 +24,6 @@ pub fn loadComptimePtr(sema: *Sema, block: *Block, src: LazySrcLoc, ptr: Value) 
         const child_bits = Type.fromInterned(ptr_info.child).bitSize(zcu);
         const bit_offset = ptr_info.packed_offset.bit_offset + switch (ptr_info.flags.vector_index) {
             .none => 0,
-            .runtime => return .runtime_load,
             else => |idx| switch (pt.zcu.getTarget().cpu.arch.endian()) {
                 .little => child_bits * @intFromEnum(idx),
                 .big => host_bits - child_bits * (@intFromEnum(idx) + 1), // element order reversed on big endian
@@ -65,6 +64,15 @@ pub fn storeComptimePtr(
     const zcu = pt.zcu;
     const ptr_info = ptr.typeOf(zcu).ptrInfo(zcu);
     assert(store_val.typeOf(zcu).toIntern() == ptr_info.child);
+
+    {
+        const store_ty: Type = .fromInterned(ptr_info.child);
+        if (!store_ty.comptimeOnly(zcu) and !store_ty.hasRuntimeBits(zcu)) {
+            // zero-bit store; nothing to do
+            return .success;
+        }
+    }
+
     // TODO: host size for vectors is terrible
     const host_bits = switch (ptr_info.flags.vector_index) {
         .none => ptr_info.packed_offset.host_size * 8,
@@ -72,7 +80,6 @@ pub fn storeComptimePtr(
     };
     const bit_offset = ptr_info.packed_offset.bit_offset + switch (ptr_info.flags.vector_index) {
         .none => 0,
-        .runtime => return .runtime_store,
         else => |idx| switch (zcu.getTarget().cpu.arch.endian()) {
             .little => Type.fromInterned(ptr_info.child).bitSize(zcu) * @intFromEnum(idx),
             .big => host_bits - Type.fromInterned(ptr_info.child).bitSize(zcu) * (@intFromEnum(idx) + 1), // element order reversed on big endian
@@ -218,20 +225,17 @@ fn loadComptimePtrInner(
     };
 
     const base_val: MutableValue = switch (ptr.base_addr) {
-        .nav => |nav| val: {
-            try sema.declareDependency(.{ .nav_val = nav });
-            try sema.ensureNavResolved(src, nav);
-            const val = ip.getNav(nav).status.resolved.val;
-            switch (ip.indexToKey(val)) {
-                .variable => return .runtime_load,
-                // We let `.@"extern"` through here if it's a function.
-                // This allows you to alias `extern fn`s.
-                .@"extern" => |e| if (Type.fromInterned(e.ty).zigTypeTag(zcu) == .@"fn")
-                    break :val .{ .interned = val }
-                else
-                    return .runtime_load,
-                else => break :val .{ .interned = val },
+        .nav => |nav_id| val: {
+            try sema.ensureNavResolved(block, src, nav_id, .fully);
+            const nav = ip.getNav(nav_id);
+            if (!nav.resolved.?.@"const") return .runtime_load;
+            // We let `.@"extern"` through here if it's a fn. This allows aliasing `extern fn`s.
+            if (ip.indexToKey(nav.resolved.?.value) == .@"extern" and
+                Type.fromInterned(nav.resolved.?.type).zigTypeTag(zcu) != .@"fn")
+            {
+                return .runtime_load;
             }
+            break :val .{ .interned = nav.resolved.?.value };
         },
         .comptime_alloc => |alloc_index| sema.getComptimeAlloc(alloc_index).val,
         .uav => |uav| .{ .interned = uav.val },
@@ -348,8 +352,8 @@ fn loadComptimePtrInner(
         const load_one_ty, const load_count = load_ty.arrayBase(zcu);
 
         const extra_base_index: u64 = if (ptr.byte_offset == 0) 0 else idx: {
-            if (try load_one_ty.comptimeOnlySema(pt)) break :restructure_array;
-            const elem_len = try load_one_ty.abiSizeSema(pt);
+            if (load_one_ty.comptimeOnly(zcu)) break :restructure_array;
+            const elem_len = load_one_ty.abiSize(zcu);
             if (ptr.byte_offset % elem_len != 0) break :restructure_array;
             break :idx @divExact(ptr.byte_offset, elem_len);
         };
@@ -395,12 +399,12 @@ fn loadComptimePtrInner(
     var cur_offset = ptr.byte_offset;
 
     if (load_ty.zigTypeTag(zcu) == .array and array_offset > 0) {
-        cur_offset += try load_ty.childType(zcu).abiSizeSema(pt) * array_offset;
+        cur_offset += load_ty.childType(zcu).abiSize(zcu) * array_offset;
     }
 
-    const need_bytes = if (host_bits > 0) (host_bits + 7) / 8 else try load_ty.abiSizeSema(pt);
+    const need_bytes = if (host_bits > 0) (host_bits + 7) / 8 else load_ty.abiSize(zcu);
 
-    if (cur_offset + need_bytes > try cur_val.typeOf(zcu).abiSizeSema(pt)) {
+    if (cur_offset + need_bytes > cur_val.typeOf(zcu).abiSize(zcu)) {
         return .{ .out_of_bounds = cur_val.typeOf(zcu) };
     }
 
@@ -435,7 +439,7 @@ fn loadComptimePtrInner(
             .optional => break, // this can only be a pointer-like optional so is terminal
             .array => {
                 const elem_ty = cur_ty.childType(zcu);
-                const elem_size = try elem_ty.abiSizeSema(pt);
+                const elem_size = elem_ty.abiSize(zcu);
                 const elem_idx = cur_offset / elem_size;
                 const next_elem_off = elem_size * (elem_idx + 1);
                 if (cur_offset + need_bytes <= next_elem_off) {
@@ -451,7 +455,7 @@ fn loadComptimePtrInner(
                 .@"packed" => break, // let the bitcast logic handle this
                 .@"extern" => for (0..cur_ty.structFieldCount(zcu)) |field_idx| {
                     const start_off = cur_ty.structFieldOffset(field_idx, zcu);
-                    const end_off = start_off + try cur_ty.fieldType(field_idx, zcu).abiSizeSema(pt);
+                    const end_off = start_off + cur_ty.fieldType(field_idx, zcu).abiSize(zcu);
                     if (cur_offset >= start_off and cur_offset + need_bytes <= end_off) {
                         cur_val = try cur_val.getElem(sema.pt, field_idx);
                         cur_offset -= start_off;
@@ -478,7 +482,7 @@ fn loadComptimePtrInner(
                     };
                     // The payload always has offset 0. If it's big enough
                     // to represent the whole load type, we can use it.
-                    if (try payload.typeOf(zcu).abiSizeSema(pt) >= need_bytes) {
+                    if (payload.typeOf(zcu).abiSize(zcu) >= need_bytes) {
                         cur_val = payload;
                     } else {
                         break;
@@ -494,8 +498,18 @@ fn loadComptimePtrInner(
         return .{ .success = cur_val };
     }
 
+    var bitcast_src_val = try cur_val.intern(sema.pt, sema.arena);
+
+    if (host_bits != 0) {
+        const src_bit_size = bitcast_src_val.typeOf(zcu).bitSize(zcu);
+        if (src_bit_size > host_bits) {
+            const truncate_ty = try pt.intType(.unsigned, @intCast(host_bits));
+            bitcast_src_val = try pt.getCoerced(bitcast_src_val, truncate_ty);
+        }
+    }
+
     const result_val = try sema.bitCastVal(
-        try cur_val.intern(sema.pt, sema.arena),
+        bitcast_src_val,
         load_ty,
         cur_offset,
         host_bits,
@@ -747,8 +761,8 @@ fn prepareComptimePtrStore(
 
         const store_one_ty, const store_count = store_ty.arrayBase(zcu);
         const extra_base_index: u64 = if (ptr.byte_offset == 0) 0 else idx: {
-            if (try store_one_ty.comptimeOnlySema(pt)) break :restructure_array;
-            const elem_len = try store_one_ty.abiSizeSema(pt);
+            if (store_one_ty.comptimeOnly(zcu)) break :restructure_array;
+            const elem_len = store_one_ty.abiSize(zcu);
             if (ptr.byte_offset % elem_len != 0) break :restructure_array;
             break :idx @divExact(ptr.byte_offset, elem_len);
         };
@@ -801,11 +815,11 @@ fn prepareComptimePtrStore(
     var cur_val: *MutableValue, var cur_offset: u64 = switch (base_strat) {
         .direct => |direct| .{ direct.val, 0 },
         // It's okay to do `abiSize` - the comptime-only case will be caught below.
-        .index => |index| .{ index.val, index.elem_index * try index.val.typeOf(zcu).childType(zcu).abiSizeSema(pt) },
+        .index => |index| .{ index.val, index.elem_index * index.val.typeOf(zcu).childType(zcu).abiSize(zcu) },
         .flat_index => |flat_index| .{
             flat_index.val,
             // It's okay to do `abiSize` - the comptime-only case will be caught below.
-            flat_index.flat_elem_index * try flat_index.val.typeOf(zcu).arrayBase(zcu)[0].abiSizeSema(pt),
+            flat_index.flat_elem_index * flat_index.val.typeOf(zcu).arrayBase(zcu)[0].abiSize(zcu),
         },
         .reinterpret => |r| .{ r.val, r.byte_offset },
         else => unreachable,
@@ -817,12 +831,12 @@ fn prepareComptimePtrStore(
     }
 
     if (store_ty.zigTypeTag(zcu) == .array and array_offset > 0) {
-        cur_offset += try store_ty.childType(zcu).abiSizeSema(pt) * array_offset;
+        cur_offset += store_ty.childType(zcu).abiSize(zcu) * array_offset;
     }
 
-    const need_bytes = try store_ty.abiSizeSema(pt);
+    const need_bytes = store_ty.abiSize(zcu);
 
-    if (cur_offset + need_bytes > try cur_val.typeOf(zcu).abiSizeSema(pt)) {
+    if (cur_offset + need_bytes > cur_val.typeOf(zcu).abiSize(zcu)) {
         return .{ .out_of_bounds = cur_val.typeOf(zcu) };
     }
 
@@ -857,7 +871,7 @@ fn prepareComptimePtrStore(
             .optional => break, // this can only be a pointer-like optional so is terminal
             .array => {
                 const elem_ty = cur_ty.childType(zcu);
-                const elem_size = try elem_ty.abiSizeSema(pt);
+                const elem_size = elem_ty.abiSize(zcu);
                 const elem_idx = cur_offset / elem_size;
                 const next_elem_off = elem_size * (elem_idx + 1);
                 if (cur_offset + need_bytes <= next_elem_off) {
@@ -873,7 +887,7 @@ fn prepareComptimePtrStore(
                 .@"packed" => break, // let the bitcast logic handle this
                 .@"extern" => for (0..cur_ty.structFieldCount(zcu)) |field_idx| {
                     const start_off = cur_ty.structFieldOffset(field_idx, zcu);
-                    const end_off = start_off + try cur_ty.fieldType(field_idx, zcu).abiSizeSema(pt);
+                    const end_off = start_off + cur_ty.fieldType(field_idx, zcu).abiSize(zcu);
                     if (cur_offset >= start_off and cur_offset + need_bytes <= end_off) {
                         cur_val = try cur_val.elem(pt, sema.arena, field_idx);
                         cur_offset -= start_off;
@@ -896,7 +910,7 @@ fn prepareComptimePtrStore(
                     };
                     // The payload always has offset 0. If it's big enough
                     // to represent the whole load type, we can use it.
-                    if (try payload.typeOf(zcu).abiSizeSema(pt) >= need_bytes) {
+                    if (payload.typeOf(zcu).abiSize(zcu) >= need_bytes) {
                         cur_val = payload;
                     } else {
                         break;
@@ -972,13 +986,14 @@ fn unflattenArray(
     elems: []const InternPool.Index,
     next_idx: *u64,
 ) Allocator.Error!Value {
-    const zcu = sema.pt.zcu;
+    const pt = sema.pt;
+    const zcu = pt.zcu;
     const arena = sema.arena;
 
     if (ty.zigTypeTag(zcu) != .array) {
         const val = Value.fromInterned(elems[@intCast(next_idx.*)]);
         next_idx.* += 1;
-        return sema.pt.getCoerced(val, ty);
+        return pt.getCoerced(val, ty);
     }
 
     const elem_ty = ty.childType(zcu);
@@ -990,10 +1005,7 @@ fn unflattenArray(
         // TODO: validate sentinel
         _ = try unflattenArray(sema, elem_ty, elems, next_idx);
     }
-    return Value.fromInterned(try sema.pt.intern(.{ .aggregate = .{
-        .ty = ty.toIntern(),
-        .storage = .{ .elems = buf },
-    } }));
+    return pt.aggregateValue(ty, buf);
 }
 
 /// Given a `MutableValue` representing a potentially-nested array, treats `index` as an index into

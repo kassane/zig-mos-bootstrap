@@ -1,5 +1,5 @@
 const std = @import("std");
-const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 
 const ComplexTypeTag = enum {
     ok,
@@ -12,16 +12,24 @@ const ComplexType = union(ComplexTypeTag) {
 
 test "switch on tagged union" {
     const c = ComplexType{ .ok = 42 };
-    try expect(@as(ComplexTypeTag, c) == ComplexTypeTag.ok);
+    try expectEqual(ComplexTypeTag.ok, @as(ComplexTypeTag, c));
 
     switch (c) {
-        .ok => |value| try expect(value == 42),
+        .ok => |value| try expectEqual(42, value),
+        .not_ok => unreachable,
+    }
+
+    switch (c) {
+        .ok => |_, tag| {
+            // Because we're in the '.ok' prong, 'tag' is compile-time known to be '.ok':
+            comptime std.debug.assert(tag == .ok);
+        },
         .not_ok => unreachable,
     }
 }
 
 test "get tag type" {
-    try expect(std.meta.Tag(ComplexType) == ComplexTypeTag);
+    try expectEqual(ComplexTypeTag, std.meta.Tag(ComplexType));
 }
 
 // test

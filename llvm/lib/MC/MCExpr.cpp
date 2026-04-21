@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "llvm/MC/MCExpr.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -177,6 +176,35 @@ LLVM_DUMP_METHOD void MCExpr::dump() const {
   dbgs() << '\n';
 }
 #endif
+
+bool MCExpr::isSymbolUsedInExpression(const MCSymbol *Sym) const {
+  switch (getKind()) {
+  case MCExpr::Binary: {
+    const MCBinaryExpr *BE = static_cast<const MCBinaryExpr *>(this);
+    return BE->getLHS()->isSymbolUsedInExpression(Sym) ||
+           BE->getRHS()->isSymbolUsedInExpression(Sym);
+  }
+  case MCExpr::Target: {
+    const MCTargetExpr *TE = static_cast<const MCTargetExpr *>(this);
+    return TE->isSymbolUsedInExpression(Sym);
+  }
+  case MCExpr::Constant:
+    return false;
+  case MCExpr::SymbolRef: {
+    const MCSymbol &S = static_cast<const MCSymbolRefExpr *>(this)->getSymbol();
+    if (S.isVariable() && !S.isWeakExternal())
+      return S.getVariableValue()->isSymbolUsedInExpression(Sym);
+    return &S == Sym;
+  }
+  case MCExpr::Unary: {
+    const MCExpr *SubExpr =
+        static_cast<const MCUnaryExpr *>(this)->getSubExpr();
+    return SubExpr->isSymbolUsedInExpression(Sym);
+  }
+  }
+
+  llvm_unreachable("Unknown expr kind!");
+}
 
 /* *** */
 
@@ -398,15 +426,6 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_VE_TLS_GD_LO32: return "tls_gd_lo";
   case VK_VE_TPOFF_HI32: return "tpoff_hi";
   case VK_VE_TPOFF_LO32: return "tpoff_lo";
-  case VK_MOS_ADDR8: return "mos8";
-  case VK_MOS_ADDR16: return "mos16";
-  case VK_MOS_ADDR16_LO: return "mos16lo";
-  case VK_MOS_ADDR16_HI: return "mos16hi";
-  case VK_MOS_ADDR24_BANK: return "mos24bank";
-  case VK_MOS_ADDR24_SEGMENT: return "mos24segment";
-  case VK_MOS_ADDR24_SEGMENT_LO: return "mos24segmentlo";
-  case VK_MOS_ADDR24_SEGMENT_HI: return "mos24segmenthi";
-  case VK_MOS_ADDR13: return "mos13";
     // clang-format on
   }
   llvm_unreachable("Invalid variant kind");
@@ -546,15 +565,6 @@ MCSymbolRefExpr::getVariantKindForName(StringRef Name) {
       .Case("tls_gd_lo", VK_VE_TLS_GD_LO32)
       .Case("tpoff_hi", VK_VE_TPOFF_HI32)
       .Case("tpoff_lo", VK_VE_TPOFF_LO32)
-      .Case("mos8", VK_MOS_ADDR8)
-      .Case("mos16", VK_MOS_ADDR16)
-      .Case("mos16lo", VK_MOS_ADDR16_LO)
-      .Case("mos16hi", VK_MOS_ADDR16_HI)
-      .Case("mos24bank", VK_MOS_ADDR24_BANK)
-      .Case("mos24segment", VK_MOS_ADDR24_SEGMENT)
-      .Case("mos24segmentlo", VK_MOS_ADDR24_SEGMENT_LO)
-      .Case("mos24segmenthi", VK_MOS_ADDR24_SEGMENT_HI)
-      .Case("mos13", VK_MOS_ADDR13)
       .Default(VK_Invalid);
 }
 

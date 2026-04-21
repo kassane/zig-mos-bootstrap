@@ -14,7 +14,6 @@
 #include "SplitKit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -569,7 +568,7 @@ SlotIndex SplitEditor::buildCopy(Register FromReg, Register ToReg,
   SmallVector<unsigned, 8> SubIndexes;
 
   // Abort if we cannot possibly implement the COPY with the given indexes.
-  if (!TRI.getCoveringSubRegIndexes(MRI, RC, LaneMask, SubIndexes))
+  if (!TRI.getCoveringSubRegIndexes(RC, LaneMask, SubIndexes))
     report_fatal_error("Impossible to implement partial COPY");
 
   SlotIndex Def;
@@ -1616,10 +1615,7 @@ void SplitEditor::splitSingleBlock(const SplitAnalysis::BlockInfo &BI) {
       // The last use is after the last valid split point.
     SlotIndex SegStop = leaveIntvBefore(LastSplitPoint);
     useIntv(SegStart, SegStop);
-    // No need to increase the register pressure if the use is already at a
-    // most general register class.
-    if (TII.shouldOverlapInterval(*LIS.getInstructionFromIndex(BI.LastInstr)))
-      overlapIntv(SegStop, BI.LastInstr);
+    overlapIntv(SegStop, BI.LastInstr);
   }
 }
 

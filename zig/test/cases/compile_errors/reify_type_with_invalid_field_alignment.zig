@@ -1,50 +1,19 @@
 comptime {
-    _ = @Type(.{
-        .@"union" = .{
-            .layout = .auto,
-            .tag_type = null,
-            .fields = &.{
-                .{ .name = "foo", .type = usize, .alignment = 3 },
-            },
-            .decls = &.{},
-        },
-    });
+    _ = @Union(.auto, null, &.{"foo"}, &.{usize}, &.{.{ .@"align" = 3 }});
 }
 comptime {
-    _ = @Type(.{
-        .@"struct" = .{
-            .layout = .auto,
-            .fields = &.{.{
-                .name = "0",
-                .type = u32,
-                .default_value = null,
-                .is_comptime = true,
-                .alignment = 5,
-            }},
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    _ = @Struct(.auto, null, &.{"a"}, &.{u32}, &.{.{
+        .@"comptime" = true,
+        .@"align" = 5,
+        .default_value_ptr = &@as(u32, 0),
+    }});
 }
 comptime {
-    _ = @Type(.{
-        .pointer = .{
-            .size = .Many,
-            .is_const = true,
-            .is_volatile = false,
-            .alignment = 7,
-            .address_space = .generic,
-            .child = u8,
-            .is_allowzero = false,
-            .sentinel = null,
-        },
-    });
+    _ = @Pointer(.many, .{ .@"align" = 7 }, u8, null);
 }
 
 // error
-// backend=stage2
-// target=native
 //
-// :2:9: error: alignment value '3' is not a power of two or zero
-// :14:9: error: alignment value '5' is not a power of two or zero
-// :30:9: error: alignment value '7' is not a power of two or zero
+// :2:51: error: alignment value '3' is not a power of two
+// :5:48: error: alignment value '5' is not a power of two
+// :12:26: error: alignment value '7' is not a power of two

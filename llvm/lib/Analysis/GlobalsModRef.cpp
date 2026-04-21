@@ -21,7 +21,6 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -601,12 +600,8 @@ void GlobalsAAResult::AnalyzeCallGraph(CallGraph &CG, Module &M) {
 
         // We handle calls specially because the graph-relevant aspects are
         // handled above.
-        if (const auto *C = dyn_cast<CallBase>(&I)) {
-          if (const auto *IA = dyn_cast<InlineAsm>(C->getCalledOperand()))
-            if (IA->hasSideEffects())
-              FI.addModRefInfo(ModRefInfo::ModRef);
+        if (isa<CallBase>(&I))
           continue;
-        }
 
         // All non-call instructions we use the primary predicates for whether
         // they read or write memory.

@@ -31,13 +31,13 @@ pub const Poly1305 = struct {
         };
     }
 
-    inline fn add(a: u64, b: u64, c: u1) struct { u64, u1 } {
+    fn add(a: u64, b: u64, c: u1) struct { u64, u1 } {
         const v1 = @addWithOverflow(a, b);
         const v2 = @addWithOverflow(v1[0], c);
         return .{ v2[0], v1[1] | v2[1] };
     }
 
-    inline fn sub(a: u64, b: u64, c: u1) struct { u64, u1 } {
+    fn sub(a: u64, b: u64, c: u1) struct { u64, u1 } {
         const v1 = @subWithOverflow(a, b);
         const v2 = @subWithOverflow(v1[0], c);
         return .{ v2[0], v1[1] | v2[1] };
@@ -184,7 +184,7 @@ pub const Poly1305 = struct {
         mem.writeInt(u64, out[0..8], st.h[0], .little);
         mem.writeInt(u64, out[8..16], st.h[1], .little);
 
-        std.crypto.secureZero(u8, @as([*]u8, @ptrCast(st))[0..@sizeOf(Poly1305)]);
+        std.crypto.secureZero(Poly1305, st[0..1]);
     }
 
     pub fn create(out: *[mac_length]u8, msg: []const u8, key: *const [key_length]u8) void {

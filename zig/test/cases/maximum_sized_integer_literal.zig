@@ -18,5 +18,4 @@ pub fn main() !void {
 }
 
 // run
-// backend=llvm
-// target=native
+// backend=selfhosted,llvm

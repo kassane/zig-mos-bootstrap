@@ -1,6 +1,6 @@
 /* Support macros for making weak and strong aliases for symbols,
    and for using symbol sets and linker warnings with GNU ld.
-   Copyright (C) 1995-2024 Free Software Foundation, Inc.
+   Copyright (C) 1995-2026 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -59,6 +59,8 @@
 # define IN_MODULE (-1)
 #endif
 
+#include <libc-misc.h>
+
 #ifndef _ISOMAC
 
 /* This is defined for the compilation of all C library code.  features.h
@@ -82,10 +84,9 @@
 # error "glibc must not be compiled with -ffast-math"
 #endif
 
-#include <config.h>
-
 /* Obtain the definition of symbol_version_reference.  */
 #include <libc-symver.h>
+#include <libc-diag.h>
 
 /* When PIC is defined and SHARED isn't defined, we are building PIE
    by default.  */
@@ -155,7 +156,7 @@
   extern __typeof (name) aliasname __attribute__ ((weak, alias (#name))) \
     __attribute_copy__ (name);
 
-/* Zig patch.  weak_hidden_alias was removed from glibc v2.36 (v2.37?), Zig
+/* zig patch: weak_hidden_alias was removed from glibc v2.36 (v2.37?), Zig
    needs it for the v2.32 and earlier {f,l,}stat wrappers, so only include
    in this header for 2.32 and earlier. */
 #if (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 32) || __GLIBC__ < 2
@@ -166,6 +167,16 @@
     __attribute__ ((weak, alias (#name), __visibility__ ("hidden"))) \
     __attribute_copy__ (name);
 #endif
+
+/* Define a strong_alias for SHARED, or weak_alias otherwise.  It is used to
+   avoid potential compiler warnings for weak alias indirection (when a weak
+   alias is always resolved to a symbol even if a weak definition also
+   exists).  */
+# ifdef SHARED
+#  define static_weak_alias(name, aliasname) strong_alias (name, aliasname)
+# else
+#  define static_weak_alias(name, aliasname) weak_alias (name, aliasname)
+# endif
 
 /* Declare SYMBOL as weak undefined symbol (resolved to 0 if not defined).  */
 # define weak_extern(symbol) _weak_extern (weak symbol)
@@ -220,7 +231,7 @@
 #define __make_section_unallocated(section_string)	\
   asm (".section " section_string "\n\t.previous");
 
-/* Tacking on "\n\t#" to the section name makes gcc put it's bogus
+/* Tacking on "\n\t#" to the section name makes gcc put its bogus
    section attributes on what looks like a comment to the assembler.  */
 #ifdef HAVE_SECTION_QUOTES
 # define __sec_comment "\"\n\t#\""
@@ -373,15 +384,6 @@ for linking")
 
 #define attribute_relro __attribute__ ((section (".data.rel.ro")))
 
-
-/* Used to disable stack protection in sensitive places, like ifunc
-   resolvers and early static TLS init.  */
-#ifdef HAVE_CC_NO_STACK_PROTECTOR
-# define inhibit_stack_protector \
-    __attribute__ ((__optimize__ ("-fno-stack-protector")))
-#else
-# define inhibit_stack_protector
-#endif
 
 /* The following macros are used for PLT bypassing within libc.so
    (and if needed other libraries similarly).
@@ -692,7 +694,10 @@ for linking")
 # define __ifunc_args(type_name, name, expr, init, ...)			\
   extern __typeof (type_name) name __attribute__			\
 			      ((ifunc (#name "_ifunc")));		\
-  __ifunc_resolver (type_name, name, expr, init, static, __VA_ARGS__)
+  DIAG_PUSH_NEEDS_COMMENT_CLANG;					\
+  DIAG_IGNORE_NEEDS_COMMENT_CLANG (13, "-Wunused-function");		\
+  __ifunc_resolver (type_name, name, expr, init, static, __VA_ARGS__);	\
+  DIAG_POP_NEEDS_COMMENT_CLANG;
 
 # define __ifunc_args_hidden(type_name, name, expr, init, ...)		\
   __ifunc_args (type_name, name, expr, init, __VA_ARGS__)
@@ -816,16 +821,6 @@ for linking")
 #define libm_ifunc_init()
 #define libm_ifunc(name, expr)				\
   __ifunc (name, name, expr, void, libm_ifunc_init)
-
-/* Add the compiler optimization to inhibit loop transformation to library
-   calls.  This is used to avoid recursive calls in memset and memmove
-   default implementations.  */
-#ifdef HAVE_CC_INHIBIT_LOOP_TO_LIBCALL
-# define inhibit_loop_to_libcall \
-    __attribute__ ((__optimize__ ("-fno-tree-loop-distribute-patterns")))
-#else
-# define inhibit_loop_to_libcall
-#endif
 
 /* These macros facilitate sharing source files with gnulib.
 

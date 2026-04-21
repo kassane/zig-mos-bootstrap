@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const native_arch = builtin.cpu.arch;
-const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 
 // Functions are declared like this
 fn add(a: i8, b: i8) i8 {
@@ -23,8 +23,7 @@ export fn sub(a: i8, b: i8) i8 {
 // dynamically. The quoted identifier after the extern keyword specifies
 // the library that has the function. (e.g. "c" -> libc.so)
 // The callconv specifier changes the calling convention of the function.
-const WINAPI: std.builtin.CallingConvention = if (native_arch == .x86) .Stdcall else .C;
-extern "kernel32" fn ExitProcess(exit_code: u32) callconv(WINAPI) noreturn;
+extern "kernel32" fn ExitProcess(exit_code: u32) callconv(.winapi) noreturn;
 extern "c" fn atan2(a: f64, b: f64) f64;
 
 // The @branchHint builtin can be used to tell the optimizer that a function is rarely called ("cold").
@@ -35,7 +34,7 @@ fn abort() noreturn {
 
 // The naked calling convention makes a function not have any function prologue or epilogue.
 // This can be useful when integrating with assembly.
-fn _start() callconv(.Naked) noreturn {
+fn _start() callconv(.naked) noreturn {
     abort();
 }
 
@@ -58,8 +57,8 @@ fn doOp(fnCall: Call2Op, op1: i8, op2: i8) i8 {
 }
 
 test "function" {
-    try expect(doOp(add, 5, 6) == 11);
-    try expect(doOp(sub2, 5, 6) == -1);
+    try expectEqual(11, doOp(add, 5, 6));
+    try expectEqual(-1, doOp(sub2, 5, 6));
 }
 
 // test

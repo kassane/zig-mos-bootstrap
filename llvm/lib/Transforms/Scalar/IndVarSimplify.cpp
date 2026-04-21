@@ -40,7 +40,6 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
@@ -56,8 +55,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Type.h"
@@ -67,7 +64,6 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -599,8 +595,8 @@ bool IndVarSimplify::simplifyAndExtend(Loop *L,
                                        LoopInfo *LI) {
   SmallVector<WideIVInfo, 8> WideIVs;
 
-  auto *GuardDecl = L->getBlocks()[0]->getModule()->getFunction(
-          Intrinsic::getName(Intrinsic::experimental_guard));
+  auto *GuardDecl = Intrinsic::getDeclarationIfExists(
+      L->getBlocks()[0]->getModule(), Intrinsic::experimental_guard);
   bool HasGuards = GuardDecl && !GuardDecl->use_empty();
 
   SmallVector<PHINode *, 8> LoopPhis;
@@ -835,16 +831,14 @@ static bool isLoopCounter(PHINode* Phi, Loop *L,
 /// valid count without scaling the address stride, so it remains a pointer
 /// expression as far as SCEV is concerned.
 static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
-                                const SCEV *BECount, ScalarEvolution *SE,
-                                DominatorTree *DT,
-                                const TargetTransformInfo *TTI) {
+                                const SCEV *BECount,
+                                ScalarEvolution *SE, DominatorTree *DT) {
   uint64_t BCWidth = SE->getTypeSizeInBits(BECount->getType());
 
   Value *Cond = cast<BranchInst>(ExitingBB->getTerminator())->getCondition();
 
   // Loop over all of the PHI nodes, looking for a simple counter.
   PHINode *BestPhi = nullptr;
-  bool BestPhiLegal = false;
   const SCEV *BestInit = nullptr;
   BasicBlock *LatchBlock = L->getLoopLatch();
   assert(LatchBlock && "Must be in simplified form");
@@ -861,14 +855,7 @@ static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
     // AR may be wider than BECount. With eq/ne tests overflow is immaterial.
     // AR may not be a narrower type, or we may never exit.
     uint64_t PhiWidth = SE->getTypeSizeInBits(AR->getType());
-    if (PhiWidth < BCWidth)
-      continue;
-
-    bool Legal = DL.isLegalInteger(PhiWidth);
-
-    // Don't use an illegal integer if a legal integer can be used or if
-    // disallowed.
-    if (!Legal && (!TTI->allowIllegalIntegerIV() || BestPhiLegal))
+    if (PhiWidth < BCWidth || !DL.isLegalInteger(PhiWidth))
       continue;
 
     // Avoid reusing a potentially undef value to compute other values that may
@@ -915,7 +902,6 @@ static PHINode *FindLoopCounter(Loop *L, BasicBlock *ExitingBB,
         continue;
     }
     BestPhi = Phi;
-    BestPhiLegal = Legal;
     BestInit = Init;
   }
   return BestPhi;
@@ -1544,6 +1530,8 @@ bool IndVarSimplify::canonicalizeExitCondition(Loop *L) {
           L->getLoopPreheader()->getTerminator()->getIterator());
       ICmp->setOperand(Swapped ? 1 : 0, LHSOp);
       ICmp->setOperand(Swapped ? 0 : 1, NewRHS);
+      // Samesign flag cannot be preserved after narrowing the compare.
+      ICmp->setSameSign(false);
       if (LHS->use_empty())
         DeadInsts.push_back(LHS);
     };
@@ -1931,7 +1919,7 @@ bool IndVarSimplify::run(Loop *L) {
 
   // Create a rewriter object which we'll use to transform the code with.
   SCEVExpander Rewriter(*SE, DL, "indvars");
-#ifndef NDEBUG
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
   Rewriter.setDebugType(DEBUG_TYPE);
 #endif
 
@@ -1988,9 +1976,8 @@ bool IndVarSimplify::run(Loop *L) {
     SmallVector<BasicBlock*, 16> ExitingBlocks;
     L->getExitingBlocks(ExitingBlocks);
     for (BasicBlock *ExitingBB : ExitingBlocks) {
-      BranchInst *Term = dyn_cast<BranchInst>(ExitingBB->getTerminator());
       // Can't rewrite non-branch yet.
-      if (!Term)
+      if (!isa<BranchInst>(ExitingBB->getTerminator()))
         continue;
 
       // If our exitting block exits multiple loops, we can only rewrite the
@@ -2013,29 +2000,9 @@ bool IndVarSimplify::run(Loop *L) {
       if (ExitCount->isZero())
         continue;
 
-      PHINode *IndVar = FindLoopCounter(L, ExitingBB, ExitCount, SE, DT, TTI);
+      PHINode *IndVar = FindLoopCounter(L, ExitingBB, ExitCount, SE, DT);
       if (!IndVar)
         continue;
-
-      uint64_t IndVarWidth = SE->getTypeSizeInBits(IndVar->getType());
-      if (!DL.isLegalInteger(IndVarWidth)) {
-        const auto *Cond = dyn_cast<CmpInst>(Term->getCondition());
-        if (!Cond)
-          continue;
-
-        Type *CondTy = Cond->getOperand(0)->getType();
-        if (!SE->isSCEVable(CondTy))
-          continue;
-
-        // Don't replace a legal exit condition with an illegal one.
-        uint64_t CondWidth = SE->getTypeSizeInBits(CondTy);
-        if (DL.isLegalInteger(CondWidth))
-          continue;
-
-        // Don't widen an illegal exit condition.
-        if (IndVarWidth > CondWidth)
-          continue;
-      }
 
       // Avoid high cost expansions.  Note: This heuristic is questionable in
       // that our definition of "high cost" is not exactly principled.

@@ -10,7 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -151,12 +150,12 @@ TargetInstrInfo::ReplaceTailWithBranchTo(MachineBasicBlock::iterator Tail,
   // Save off the debug loc before erasing the instruction.
   DebugLoc DL = Tail->getDebugLoc();
 
-  // Update call site info and remove all the dead instructions
+  // Update call info and remove all the dead instructions
   // from the end of MBB.
   while (Tail != MBB->end()) {
     auto MI = Tail++;
-    if (MI->shouldUpdateCallSiteInfo())
-      MBB->getParent()->eraseCallSiteInfo(&*MI);
+    if (MI->shouldUpdateAdditionalCallInfo())
+      MBB->getParent()->eraseAdditionalCallInfo(&*MI);
     MBB->erase(MI);
   }
 
@@ -449,9 +448,9 @@ TargetInstrInfo::duplicate(MachineBasicBlock &MBB,
 
 // If the COPY instruction in MI can be folded to a stack operation, return
 // the register class to use.
-const TargetRegisterClass *
-TargetInstrInfo::canFoldCopy(const MachineInstr &MI, const TargetInstrInfo &TII,
-                             unsigned FoldIdx) const {
+static const TargetRegisterClass *canFoldCopy(const MachineInstr &MI,
+                                              const TargetInstrInfo &TII,
+                                              unsigned FoldIdx) {
   assert(TII.isCopyInstr(MI) && "MI must be a COPY instruction");
   if (MI.getNumOperands() != 2)
     return nullptr;
@@ -1917,4 +1916,9 @@ bool TargetInstrInfo::isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
       return false;
   }
   return true;
+}
+
+bool TargetInstrInfo::isGlobalMemoryObject(const MachineInstr *MI) const {
+  return MI->isCall() || MI->hasUnmodeledSideEffects() ||
+         (MI->hasOrderedMemoryRef() && !MI->isDereferenceableInvariantLoad());
 }

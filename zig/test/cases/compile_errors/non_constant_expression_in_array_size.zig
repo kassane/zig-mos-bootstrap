@@ -11,9 +11,7 @@ export fn entry() usize {
 }
 
 // error
-// backend=stage2
-// target=native
 //
 // :6:12: error: unable to resolve comptime value
-// :6:12: note: value being returned at comptime must be comptime-known
-// :2:12: note: called from here
+// :2:12: note: called at comptime from here
+// :2:8: note: struct field types must be comptime-known

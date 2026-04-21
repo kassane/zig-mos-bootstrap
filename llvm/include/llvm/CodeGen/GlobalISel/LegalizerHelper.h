@@ -17,12 +17,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #ifndef LLVM_CODEGEN_GLOBALISEL_LEGALIZERHELPER_H
 #define LLVM_CODEGEN_GLOBALISEL_LEGALIZERHELPER_H
 
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
+#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/RuntimeLibcallUtil.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
 
@@ -298,6 +298,13 @@ public:
   MachineInstrBuilder createStackTemporary(TypeSize Bytes, Align Alignment,
                                            MachinePointerInfo &PtrInfo);
 
+  /// Create a store of \p Val to a stack temporary and return a load as the
+  /// same type as \p Res.
+  MachineInstrBuilder createStackStoreLoad(const DstOp &Res, const SrcOp &Val);
+
+  /// Given a store of a boolean vector, scalarize it.
+  LegalizeResult scalarizeVectorBooleanStore(GStore &MI);
+
   /// Get a pointer to vector element \p Index located in memory for a vector of
   /// type \p VecTy starting at a base address of \p VecPtr. If \p Index is out
   /// of bounds the returned pointer is unspecified, but will be within the
@@ -379,6 +386,12 @@ public:
                                         LLT CastTy);
   LegalizeResult bitcastConcatVector(MachineInstr &MI, unsigned TypeIdx,
                                      LLT CastTy);
+  LegalizeResult bitcastShuffleVector(MachineInstr &MI, unsigned TypeIdx,
+                                      LLT CastTy);
+  LegalizeResult bitcastExtractSubvector(MachineInstr &MI, unsigned TypeIdx,
+                                         LLT CastTy);
+  LegalizeResult bitcastInsertSubvector(MachineInstr &MI, unsigned TypeIdx,
+                                        LLT CastTy);
 
   LegalizeResult lowerConstant(MachineInstr &MI);
   LegalizeResult lowerFConstant(MachineInstr &MI);
@@ -468,8 +481,6 @@ LegalizerHelper::LegalizeResult
 createMemLibcall(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
                  MachineInstr &MI, LostDebugLocObserver &LocObserver);
 
-/// Return the libcall corresponding to a given opcode and size.
-RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size);
 
 } // End namespace llvm.
 

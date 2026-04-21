@@ -6,7 +6,5 @@ export fn entry() void {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :2:5: error: cannot assign to constant

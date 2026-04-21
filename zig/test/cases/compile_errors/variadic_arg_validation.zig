@@ -19,12 +19,10 @@ pub export fn entry3() void {
 }
 
 // error
-// backend=stage2
-// target=native
 //
 // :4:33: error: integer and float literals passed to variadic function must be casted to a fixed-size number type
 // :9:24: error: arrays must be passed by reference to variadic function
 // :14:24: error: cannot pass 'u48' to variadic function
 // :14:24: note: only integers with 0 or power of two bits are extern compatible
 // :18:24: error: cannot pass 'void' to variadic function
-// :18:24: note: 'void' is a zero bit type; for C 'void' use 'anyopaque'
+// :18:24: note: 'void' is a zero bit type

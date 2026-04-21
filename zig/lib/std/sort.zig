@@ -678,18 +678,23 @@ pub fn partitionPoint(
     context: anytype,
     comptime predicate: fn (@TypeOf(context), T) bool,
 ) usize {
-    var low: usize = 0;
-    var high: usize = items.len;
+    var it: usize = 0;
+    var len: usize = items.len;
 
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        if (predicate(context, items[mid])) {
-            low = mid + 1;
-        } else {
-            high = mid;
+    while (len > 1) {
+        const half: usize = len / 2;
+        len -= half;
+        if (predicate(context, items[it + half - 1])) {
+            @branchHint(.unpredictable);
+            it += half;
         }
     }
-    return low;
+
+    if (it < items.len) {
+        it += @intFromBool(predicate(context, items[it]));
+    }
+
+    return it;
 }
 
 test partitionPoint {
@@ -744,9 +749,9 @@ test partitionPoint {
 
 /// Returns a tuple of the lower and upper indices in `items` between which all
 /// elements return `.eq` when given to `compareFn`.
-/// - If no element in `items` returns `.eq`, both indices are the
-/// index of the first element in `items` returning `.gt`.
-/// - If no element in `items` returns `.gt`, both indices equal `items.len`.
+/// If no element in `items` returns `.eq`, both indices are the index of the
+/// first element in `items` which returns `.gt`, or if no element returns `.gt`,
+/// both indices are `items.len`.
 ///
 /// `items` must be sorted in ascending order with respect to `compareFn`:
 /// ```

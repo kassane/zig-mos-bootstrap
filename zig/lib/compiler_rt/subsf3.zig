@@ -1,21 +1,20 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 const addf3 = @import("./addf3.zig").addf3;
 
-pub const panic = common.panic;
-
 comptime {
-    if (common.want_aeabi) {
-        @export(&__aeabi_fsub, .{ .name = "__aeabi_fsub", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_fsub, "__aeabi_fsub");
     } else {
-        @export(&__subsf3, .{ .name = "__subsf3", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&__subsf3, "__subsf3");
     }
 }
 
-fn __subsf3(a: f32, b: f32) callconv(.C) f32 {
+fn __subsf3(a: f32, b: f32) callconv(.c) f32 {
     return sub(a, b);
 }
 
-fn __aeabi_fsub(a: f32, b: f32) callconv(.AAPCS) f32 {
+fn __aeabi_fsub(a: f32, b: f32) callconv(.{ .arm_aapcs = .{} }) f32 {
     return sub(a, b);
 }
 

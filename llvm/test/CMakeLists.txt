@@ -1,6 +1,7 @@
 llvm_canonicalize_cmake_booleans(
   BUILD_SHARED_LIBS
   HAVE_OCAMLOPT
+  ENABLE_BACKTRACES
   LLVM_ENABLE_DIA_SDK
   LLVM_ENABLE_FFI
   LLVM_ENABLE_THREADS
@@ -108,7 +109,6 @@ set(LLVM_TEST_DEPENDS
           llvm-mc
           llvm-mca
           llvm-ml
-          llvm-mlb
           llvm-modextract
           llvm-mt
           llvm-nm

@@ -12,20 +12,25 @@ pub fn build(b: *std.Build) void {
 
     const hello = b.addExecutable(.{
         .name = "hello",
-        .root_source_file = b.path("hello.zig"),
-        .optimize = optimize,
-        .target = target,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("hello.zig"),
+            .optimize = optimize,
+            .target = target,
+        }),
     });
 
     const main = b.addExecutable(.{
         .name = "main",
-        .root_source_file = b.path("main.zig"),
-        .optimize = optimize,
-        .target = target,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .optimize = optimize,
+            .target = target,
+        }),
     });
 
     const run = b.addRunArtifact(main);
     run.addArtifactArg(hello);
+    run.addDirectoryArg(b.tmpPath());
     run.expectExitCode(0);
     run.skip_foreign_checks = true;
 

@@ -1,15 +1,16 @@
 const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
-const linkage: std.builtin.GlobalLinkage = if (builtin.is_test) .internal else .weak;
-const panic = @import("common.zig").panic;
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
+const panic = @import("../compiler_rt.zig").panic;
 
 const have_availability_version_check = builtin.os.tag.isDarwin() and
     builtin.os.version_range.semver.min.order(.{ .major = 10, .minor = 15, .patch = 0 }).compare(.gte);
 
 comptime {
     if (have_availability_version_check) {
-        @export(&__isPlatformVersionAtLeast, .{ .name = "__isPlatformVersionAtLeast", .linkage = linkage });
+        symbol(&__isPlatformVersionAtLeast, "__isPlatformVersionAtLeast");
     }
 }
 
@@ -34,7 +35,7 @@ const __isPlatformVersionAtLeast = if (have_availability_version_check) struct {
     }
 
     // Darwin-only
-    fn __isPlatformVersionAtLeast(platform: u32, major: u32, minor: u32, subminor: u32) callconv(.C) i32 {
+    fn __isPlatformVersionAtLeast(platform: u32, major: u32, minor: u32, subminor: u32) callconv(.c) i32 {
         const build_version = dyld_build_version_t{
             .platform = platform,
             .version = constructVersion(major, minor, subminor),

@@ -4,7 +4,5 @@ comptime {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :2:15: error: exact shift shifted out 1 bits

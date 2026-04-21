@@ -15,8 +15,6 @@ fn foo(x: i32) !void {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :5:9: error: duplicate switch value
 // :3:9: note: previous value here

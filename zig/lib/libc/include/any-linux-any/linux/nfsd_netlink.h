@@ -2,6 +2,7 @@
 /* Do not edit directly, auto-generated from: */
 /*	Documentation/netlink/specs/nfsd.yaml */
 /* YNL-GEN uapi header */
+/* To regenerate run: tools/net/ynl/ynl-regen.sh */
 
 #ifndef _LINUX_NFSD_NETLINK_H
 #define _LINUX_NFSD_NETLINK_H
@@ -71,6 +72,14 @@ enum {
 };
 
 enum {
+	NFSD_A_POOL_MODE_MODE = 1,
+	NFSD_A_POOL_MODE_NPOOLS,
+
+	__NFSD_A_POOL_MODE_MAX,
+	NFSD_A_POOL_MODE_MAX = (__NFSD_A_POOL_MODE_MAX - 1)
+};
+
+enum {
 	NFSD_CMD_RPC_STATUS_GET = 1,
 	NFSD_CMD_THREADS_SET,
 	NFSD_CMD_THREADS_GET,
@@ -78,6 +87,8 @@ enum {
 	NFSD_CMD_VERSION_GET,
 	NFSD_CMD_LISTENER_SET,
 	NFSD_CMD_LISTENER_GET,
+	NFSD_CMD_POOL_MODE_SET,
+	NFSD_CMD_POOL_MODE_GET,
 
 	__NFSD_CMD_MAX,
 	NFSD_CMD_MAX = (__NFSD_CMD_MAX - 1)

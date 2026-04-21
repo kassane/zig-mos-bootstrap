@@ -28,7 +28,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 
-#ifdef LLVM_ENABLE_ABI_BREAKING_CHECKS
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
 #define SCEV_DEBUG_WITH_TYPE(TYPE, X) DEBUG_WITH_TYPE(TYPE, X)
 #else
 #define SCEV_DEBUG_WITH_TYPE(TYPE, X)
@@ -49,6 +49,8 @@ PoisonFlags::PoisonFlags(const Instruction *I) {
   Exact = false;
   Disjoint = false;
   NNeg = false;
+  SameSign = false;
+  GEPNW = GEPNoWrapFlags::none();
   if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(I)) {
     NUW = OBO->hasNoUnsignedWrap();
     NSW = OBO->hasNoSignedWrap();
@@ -63,6 +65,10 @@ PoisonFlags::PoisonFlags(const Instruction *I) {
     NUW = TI->hasNoUnsignedWrap();
     NSW = TI->hasNoSignedWrap();
   }
+  if (auto *GEP = dyn_cast<GetElementPtrInst>(I))
+    GEPNW = GEP->getNoWrapFlags();
+  if (auto *ICmp = dyn_cast<ICmpInst>(I))
+    SameSign = ICmp->hasSameSign();
 }
 
 void PoisonFlags::apply(Instruction *I) {
@@ -80,6 +86,10 @@ void PoisonFlags::apply(Instruction *I) {
     I->setHasNoUnsignedWrap(NUW);
     I->setHasNoSignedWrap(NSW);
   }
+  if (auto *GEP = dyn_cast<GetElementPtrInst>(I))
+    GEP->setNoWrapFlags(GEPNW);
+  if (auto *ICmp = dyn_cast<ICmpInst>(I))
+    ICmp->setSameSign(SameSign);
 }
 
 /// ReuseOrCreateCast - Arrange for there to be a cast of V to Ty at IP,
@@ -347,16 +357,19 @@ Value *SCEVExpander::InsertBinop(Instruction::BinaryOps Opcode,
 /// loop-invariant portions of expressions, after considering what
 /// can be folded using target addressing modes.
 ///
-Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V) {
+Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V,
+                                    SCEV::NoWrapFlags Flags) {
   assert(!isa<Instruction>(V) ||
          SE.DT.dominates(cast<Instruction>(V), &*Builder.GetInsertPoint()));
 
   Value *Idx = expand(Offset);
+  GEPNoWrapFlags NW = (Flags & SCEV::FlagNUW) ? GEPNoWrapFlags::noUnsignedWrap()
+                                              : GEPNoWrapFlags::none();
 
   // Fold a GEP with constant operands.
   if (Constant *CLHS = dyn_cast<Constant>(V))
     if (Constant *CRHS = dyn_cast<Constant>(Idx))
-      return Builder.CreatePtrAdd(CLHS, CRHS);
+      return Builder.CreatePtrAdd(CLHS, CRHS, "", NW);
 
   // Do a quick scan to see if we have this GEP nearby.  If so, reuse it.
   unsigned ScanLimit = 6;
@@ -370,11 +383,15 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V) {
       // generated code.
       if (isa<DbgInfoIntrinsic>(IP))
         ScanLimit++;
-      if (IP->getOpcode() == Instruction::GetElementPtr &&
-          IP->getOperand(0) == V && IP->getOperand(1) == Idx &&
-          cast<GEPOperator>(&*IP)->getSourceElementType() ==
-              Builder.getInt8Ty())
-        return &*IP;
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(IP)) {
+        if (GEP->getPointerOperand() == V &&
+            GEP->getSourceElementType() == Builder.getInt8Ty() &&
+            GEP->getOperand(1) == Idx) {
+          rememberFlags(GEP);
+          GEP->setNoWrapFlags(GEP->getNoWrapFlags() & NW);
+          return &*IP;
+        }
+      }
       if (IP == BlockBegin) break;
     }
   }
@@ -393,7 +410,7 @@ Value *SCEVExpander::expandAddToGEP(const SCEV *Offset, Value *V) {
   }
 
   // Emit a GEP.
-  return Builder.CreatePtrAdd(V, Idx, "scevgep");
+  return Builder.CreatePtrAdd(V, Idx, "scevgep", NW);
 }
 
 /// PickMostRelevantLoop - Given two loops pick the one that's most relevant for
@@ -540,7 +557,7 @@ Value *SCEVExpander::visitAddExpr(const SCEVAddExpr *S) {
             X = SE.getSCEV(U->getValue());
         NewOps.push_back(X);
       }
-      Sum = expandAddToGEP(SE.getAddExpr(NewOps), Sum);
+      Sum = expandAddToGEP(SE.getAddExpr(NewOps), Sum, S->getNoWrapFlags());
     } else if (Op->isNonConstantNegative()) {
       // Instead of doing a negate and add, just do a subtract.
       Value *W = expand(SE.getNegativeSCEV(Op));
@@ -664,7 +681,21 @@ Value *SCEVExpander::visitUDivExpr(const SCEVUDivExpr *S) {
                          SCEV::FlagAnyWrap, /*IsSafeToHoist*/ true);
   }
 
-  Value *RHS = expand(S->getRHS());
+  const SCEV *RHSExpr = S->getRHS();
+  Value *RHS = expand(RHSExpr);
+  if (SafeUDivMode) {
+    bool GuaranteedNotPoison =
+        ScalarEvolution::isGuaranteedNotToBePoison(RHSExpr);
+    if (!GuaranteedNotPoison)
+      RHS = Builder.CreateFreeze(RHS);
+
+    // We need an umax if either RHSExpr is not known to be zero, or if it is
+    // not guaranteed to be non-poison. In the later case, the frozen poison may
+    // be 0.
+    if (!SE.isKnownNonZero(RHSExpr) || !GuaranteedNotPoison)
+      RHS = Builder.CreateIntrinsic(RHS->getType(), Intrinsic::umax,
+                                    {RHS, ConstantInt::get(RHS->getType(), 1)});
+  }
   return InsertBinop(Instruction::UDiv, LHS, RHS, SCEV::FlagAnyWrap,
                      /*IsSafeToHoist*/ SE.isKnownNonZero(S->getRHS()));
 }
@@ -814,7 +845,7 @@ bool SCEVExpander::hoistIVInc(Instruction *IncV, Instruction *InsertPos,
   }
   for (Instruction *I : llvm::reverse(IVIncs)) {
     fixupInsertPoints(I);
-    I->moveBefore(InsertPos);
+    I->moveBefore(InsertPos->getIterator());
     if (RecomputePoisonFlags)
       FixupPoisonFlags(I);
   }
@@ -1242,7 +1273,8 @@ Value *SCEVExpander::visitAddRecExpr(const SCEVAddRecExpr *S) {
   if (!S->getStart()->isZero()) {
     if (isa<PointerType>(S->getType())) {
       Value *StartV = expand(SE.getPointerBase(S));
-      return expandAddToGEP(SE.removePointerBase(S), StartV);
+      return expandAddToGEP(SE.removePointerBase(S), StartV,
+                            S->getNoWrapFlags(SCEV::FlagNUW));
     }
 
     SmallVector<const SCEV *, 4> NewOps(S->operands());
@@ -1358,11 +1390,14 @@ Value *SCEVExpander::visitSignExtendExpr(const SCEVSignExtendExpr *S) {
 Value *SCEVExpander::expandMinMaxExpr(const SCEVNAryExpr *S,
                                       Intrinsic::ID IntrinID, Twine Name,
                                       bool IsSequential) {
+  bool PrevSafeMode = SafeUDivMode;
+  SafeUDivMode |= IsSequential;
   Value *LHS = expand(S->getOperand(S->getNumOperands() - 1));
   Type *Ty = LHS->getType();
   if (IsSequential)
     LHS = Builder.CreateFreeze(LHS);
   for (int i = S->getNumOperands() - 2; i >= 0; --i) {
+    SafeUDivMode = (IsSequential && i != 0) || PrevSafeMode;
     Value *RHS = expand(S->getOperand(i));
     if (IsSequential && i != 0)
       RHS = Builder.CreateFreeze(RHS);
@@ -1377,6 +1412,7 @@ Value *SCEVExpander::expandMinMaxExpr(const SCEVNAryExpr *S,
     }
     LHS = Sel;
   }
+  SafeUDivMode = PrevSafeMode;
   return LHS;
 }
 
@@ -1431,8 +1467,8 @@ Value *SCEVExpander::FindValueInExprValueMap(
   if (!CanonicalMode && SE.containsAddRecurrence(S))
     return nullptr;
 
-  // If S is a constant, it may be worse to reuse an existing Value.
-  if (isa<SCEVConstant>(S))
+  // If S is a constant or unknown, it may be worse to reuse an existing Value.
+  if (isa<SCEVConstant>(S) || isa<SCEVUnknown>(S))
     return nullptr;
 
   for (Value *V : SE.getSCEVValues(S)) {
@@ -1612,9 +1648,9 @@ void SCEVExpander::replaceCongruentIVInc(
   // can remove cycles that had postinc uses.
   // Because we may potentially introduce a new use of OrigIV that didn't
   // exist before at this point, its poison flags need readjustment.
-  const SCEV *ResizedExpr =
-      SE.getTruncateOrZeroExtend(SE.getSCEV(OrigInc), IsomorphicInc->getType());
-  if (OrigInc == IsomorphicInc || ResizedExpr != SE.getSCEV(IsomorphicInc) ||
+  const SCEV *TruncExpr =
+      SE.getTruncateOrNoop(SE.getSCEV(OrigInc), IsomorphicInc->getType());
+  if (OrigInc == IsomorphicInc || TruncExpr != SE.getSCEV(IsomorphicInc) ||
       !SE.LI.replacementPreservesLCSSAForm(IsomorphicInc, OrigInc))
     return;
 
@@ -1637,8 +1673,10 @@ void SCEVExpander::replaceCongruentIVInc(
   // are NUW/NSW, then we can preserve them on the wider increment; the narrower
   // IsomorphicInc would wrap before the wider OrigInc, so the replacement won't
   // make IsomorphicInc's uses more poisonous.
-  if (OrigInc->getType()->getScalarSizeInBits() >=
-      IsomorphicInc->getType()->getScalarSizeInBits() && (BothHaveNUW || BothHaveNSW)) {
+  assert(OrigInc->getType()->getScalarSizeInBits() >=
+             IsomorphicInc->getType()->getScalarSizeInBits() &&
+         "Should only replace an increment with a wider one.");
+  if (BothHaveNUW || BothHaveNSW) {
     OrigInc->setHasNoUnsignedWrap(OBOIncV->hasNoUnsignedWrap() || BothHaveNUW);
     OrigInc->setHasNoSignedWrap(OBOIncV->hasNoSignedWrap() || BothHaveNSW);
   }
@@ -1656,12 +1694,8 @@ void SCEVExpander::replaceCongruentIVInc(
 
     IRBuilder<> Builder(IP->getParent(), IP);
     Builder.SetCurrentDebugLocation(IsomorphicInc->getDebugLoc());
-    if (OrigInc->getType()->getScalarSizeInBits() <
-        IsomorphicInc->getType()->getScalarSizeInBits())
-      NewInc = Builder.CreateZExt(OrigInc, IsomorphicInc->getType(), IVName);
-    else
-      NewInc = Builder.CreateTruncOrBitCast(OrigInc, IsomorphicInc->getType(),
-                                            IVName);
+    NewInc =
+        Builder.CreateTruncOrBitCast(OrigInc, IsomorphicInc->getType(), IVName);
   }
   IsomorphicInc->replaceAllUsesWith(NewInc);
   DeadInsts.emplace_back(IsomorphicInc);
@@ -1677,7 +1711,7 @@ unsigned
 SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
                                   SmallVectorImpl<WeakTrackingVH> &DeadInsts,
                                   const TargetTransformInfo *TTI) {
-  // Find integer phis in order of decreasing width.
+  // Find integer phis in order of increasing width.
   SmallVector<PHINode*, 8> Phis;
   for (PHINode &PN : L->getHeader()->phis())
     Phis.push_back(&PN);
@@ -1694,7 +1728,7 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
     });
 
   unsigned NumElim = 0;
-  SmallVector<PHINode*, 8> PhisRemaining;
+  DenseMap<const SCEV *, PHINode *> ExprToIVMap;
   // Process phis from wide to narrow. Map wide phis to their truncation
   // so narrow phis can reuse them.
   for (PHINode *Phi : Phis) {
@@ -1723,51 +1757,11 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
                                   << '\n');
       continue;
     }
-    if (SE.isSCEVable(Phi->getType()))
-      PhisRemaining.push_back(Phi);
-  }
-  Phis = std::move(PhisRemaining);
 
-  // Look for opporunities to freely zero extend narrow IVs. For targets that
-  // support this, it is strongly preferred to truncating wide IVs.
-  DenseMap<const SCEV *, PHINode *> ExprToIVMap;
-  if (TTI && TTI->preferNarrowTypes()) {
-    for (PHINode *Phi : reverse(Phis)) {
-      PHINode *&OrigPhiRef = ExprToIVMap[SE.getSCEV(Phi)];
-      if (OrigPhiRef || !Phi->getType()->isIntegerTy() || !TTI)
-        continue;
-
-      // Make sure we only rewrite using simple induction variables;
-      // otherwise, we can make the trip count of a loop unanalyzable
-      // to SCEV.
-      const SCEV *PhiExpr = SE.getSCEV(Phi);
-      if (!isa<SCEVAddRecExpr>(PhiExpr))
-        continue;
-
-      for (PHINode *OtherPhi : Phis) {
-        if (OtherPhi == Phi || !TTI->isZExtFree(Phi->getType(), OtherPhi->getType()))
-          continue;
-
-        // This can be used to create a wider type, so don't create it from
-        // a wider one.
-        OrigPhiRef = Phi;
-
-        // This phi can be freely zero extended to another phi type. Map the
-        // zero extended expression to it so it will be reused for wider
-        // types.
-        const SCEV *ZExtExpr =
-          SE.getZeroExtendExpr(PhiExpr, OtherPhi->getType());
-        ExprToIVMap[ZExtExpr] = Phi;
-      }
-    }
-  }
-
-  // Process phis from wide to narrow. Map wide phis to their truncation
-  // so narrow phis can reuse them.
-  for (PHINode *Phi : Phis) {
-    PHINode *&OrigPhiRef = ExprToIVMap[SE.getSCEV(Phi)];
-    if (OrigPhiRef == Phi)
+    if (!SE.isSCEVable(Phi->getType()))
       continue;
+
+    PHINode *&OrigPhiRef = ExprToIVMap[SE.getSCEV(Phi)];
     if (!OrigPhiRef) {
       OrigPhiRef = Phi;
       if (Phi->getType()->isIntegerTy() && TTI &&
@@ -1804,10 +1798,7 @@ SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
       IRBuilder<> Builder(L->getHeader(),
                           L->getHeader()->getFirstInsertionPt());
       Builder.SetCurrentDebugLocation(Phi->getDebugLoc());
-      if (OrigPhiRef->getType()->getScalarSizeInBits() < Phi->getType()->getScalarSizeInBits())
-        NewIV = Builder.CreateZExt(OrigPhiRef, Phi->getType(), IVName);
-      else
-        NewIV = Builder.CreateTruncOrBitCast(OrigPhiRef, Phi->getType(), IVName);
+      NewIV = Builder.CreateTruncOrBitCast(OrigPhiRef, Phi->getType(), IVName);
     }
     Phi->replaceAllUsesWith(NewIV);
     DeadInsts.emplace_back(Phi);
@@ -1825,7 +1816,7 @@ bool SCEVExpander::hasRelatedExistingExpansion(const SCEV *S,
 
   // Look for suitable value in simple conditions at the loop exits.
   for (BasicBlock *BB : ExitingBlocks) {
-    ICmpInst::Predicate Pred;
+    CmpPredicate Pred;
     Instruction *LHS, *RHS;
 
     if (!match(BB->getTerminator(),
@@ -2166,10 +2157,9 @@ Value *SCEVExpander::generateOverflowCheck(const SCEVAddRecExpr *AR,
       MulV = TruncTripCount;
       OfMul = ConstantInt::getFalse(MulV->getContext());
     } else {
-      auto *MulF = Intrinsic::getDeclaration(Loc->getModule(),
-                                             Intrinsic::umul_with_overflow, Ty);
-      CallInst *Mul =
-          Builder.CreateCall(MulF, {AbsStep, TruncTripCount}, "mul");
+      CallInst *Mul = Builder.CreateIntrinsic(Intrinsic::umul_with_overflow, Ty,
+                                              {AbsStep, TruncTripCount},
+                                              /*FMFSource=*/nullptr, "mul");
       MulV = Builder.CreateExtractValue(Mul, 0, "mul.result");
       OfMul = Builder.CreateExtractValue(Mul, 1, "mul.overflow");
     }

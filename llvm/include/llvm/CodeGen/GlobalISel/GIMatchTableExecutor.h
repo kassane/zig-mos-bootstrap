@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Transforms/Utils/SizeOpts.h"
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -591,7 +592,6 @@ public:
   MachineFunction *MF = nullptr;
   ProfileSummaryInfo *PSI = nullptr;
   BlockFrequencyInfo *BFI = nullptr;
-  AAResults *AA = nullptr;
   // For some predicates, we need to track the current MBB.
   MachineBasicBlock *CurMBB = nullptr;
 
@@ -601,14 +601,12 @@ public:
   virtual void setupMF(MachineFunction &mf, GISelKnownBits *kb,
                        CodeGenCoverage *covinfo = nullptr,
                        ProfileSummaryInfo *psi = nullptr,
-                       BlockFrequencyInfo *bfi = nullptr,
-                       AAResults *aa = nullptr) {
+                       BlockFrequencyInfo *bfi = nullptr) {
     CoverageInfo = covinfo;
     KB = kb;
     MF = &mf;
     PSI = psi;
     BFI = bfi;
-    AA = aa;
     CurMBB = nullptr;
     setupGeneratedPerFunctionState(mf);
   }
@@ -638,8 +636,12 @@ protected:
 
   bool shouldOptForSize(const MachineFunction *MF) const {
     const auto &F = MF->getFunction();
-    return F.hasOptSize() || F.hasMinSize() ||
-           (PSI && BFI && CurMBB && llvm::shouldOptForSize(*CurMBB, PSI, BFI));
+    if (F.hasOptSize())
+      return true;
+    if (CurMBB)
+      if (auto *BB = CurMBB->getBasicBlock())
+        return llvm::shouldOptimizeForSize(BB, PSI, BFI);
+    return false;
   }
 
 public:

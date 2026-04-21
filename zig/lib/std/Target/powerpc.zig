@@ -7,10 +7,6 @@ const CpuModel = std.Target.Cpu.Model;
 pub const Feature = enum {
     @"64bit",
     @"64bitregs",
-    aix,
-    aix_shared_lib_tls_model_opt,
-    aix_small_local_dynamic_tls,
-    aix_small_local_exec_tls,
     allow_unaligned_fp_access,
     altivec,
     booke,
@@ -61,7 +57,6 @@ pub const Feature = enum {
     longcall,
     mfocrf,
     mma,
-    modern_aix_as,
     msync,
     paired_vector_memops,
     partword_atomics,
@@ -108,26 +103,6 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.@"64bitregs")] = .{
         .llvm_name = "64bitregs",
         .description = "Enable 64-bit registers usage for ppc32 [beta]",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.aix)] = .{
-        .llvm_name = "aix",
-        .description = "AIX OS",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.aix_shared_lib_tls_model_opt)] = .{
-        .llvm_name = "aix-shared-lib-tls-model-opt",
-        .description = "Tune TLS model at function level in shared library loaded with the main program (for 64-bit AIX only)",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.aix_small_local_dynamic_tls)] = .{
-        .llvm_name = "aix-small-local-dynamic-tls",
-        .description = "Produce a faster local-dynamic TLS sequence for this function for 64-bit AIX",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.aix_small_local_exec_tls)] = .{
-        .llvm_name = "aix-small-local-exec-tls",
-        .description = "Produce a TOC-free local-exec TLS sequence for this function for 64-bit AIX",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.allow_unaligned_fp_access)] = .{
@@ -446,11 +421,6 @@ pub const all_features = blk: {
             .power9_altivec,
         }),
     };
-    result[@intFromEnum(Feature.modern_aix_as)] = .{
-        .llvm_name = "modern-aix-as",
-        .description = "AIX system assembler is modern enough to support new mnes",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.msync)] = .{
         .llvm_name = "msync",
         .description = "Has only the msync instruction instead of sync",
@@ -623,7 +593,7 @@ pub const all_features = blk: {
 };
 
 pub const cpu = struct {
-    pub const @"440" = CpuModel{
+    pub const @"440": CpuModel = .{
         .name = "440",
         .llvm_name = "440",
         .features = featureSet(&[_]Feature{
@@ -633,7 +603,7 @@ pub const cpu = struct {
             .msync,
         }),
     };
-    pub const @"450" = CpuModel{
+    pub const @"450": CpuModel = .{
         .name = "450",
         .llvm_name = "450",
         .features = featureSet(&[_]Feature{
@@ -643,21 +613,21 @@ pub const cpu = struct {
             .msync,
         }),
     };
-    pub const @"601" = CpuModel{
+    pub const @"601": CpuModel = .{
         .name = "601",
         .llvm_name = "601",
         .features = featureSet(&[_]Feature{
             .fpu,
         }),
     };
-    pub const @"602" = CpuModel{
+    pub const @"602": CpuModel = .{
         .name = "602",
         .llvm_name = "602",
         .features = featureSet(&[_]Feature{
             .fpu,
         }),
     };
-    pub const @"603" = CpuModel{
+    pub const @"603": CpuModel = .{
         .name = "603",
         .llvm_name = "603",
         .features = featureSet(&[_]Feature{
@@ -665,7 +635,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"603e" = CpuModel{
+    pub const @"603e": CpuModel = .{
         .name = "603e",
         .llvm_name = "603e",
         .features = featureSet(&[_]Feature{
@@ -673,7 +643,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"603ev" = CpuModel{
+    pub const @"603ev": CpuModel = .{
         .name = "603ev",
         .llvm_name = "603ev",
         .features = featureSet(&[_]Feature{
@@ -681,7 +651,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"604" = CpuModel{
+    pub const @"604": CpuModel = .{
         .name = "604",
         .llvm_name = "604",
         .features = featureSet(&[_]Feature{
@@ -689,7 +659,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"604e" = CpuModel{
+    pub const @"604e": CpuModel = .{
         .name = "604e",
         .llvm_name = "604e",
         .features = featureSet(&[_]Feature{
@@ -697,7 +667,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"620" = CpuModel{
+    pub const @"620": CpuModel = .{
         .name = "620",
         .llvm_name = "620",
         .features = featureSet(&[_]Feature{
@@ -705,7 +675,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"7400" = CpuModel{
+    pub const @"7400": CpuModel = .{
         .name = "7400",
         .llvm_name = "7400",
         .features = featureSet(&[_]Feature{
@@ -714,7 +684,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"7450" = CpuModel{
+    pub const @"7450": CpuModel = .{
         .name = "7450",
         .llvm_name = "7450",
         .features = featureSet(&[_]Feature{
@@ -723,7 +693,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"750" = CpuModel{
+    pub const @"750": CpuModel = .{
         .name = "750",
         .llvm_name = "750",
         .features = featureSet(&[_]Feature{
@@ -731,7 +701,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"970" = CpuModel{
+    pub const @"970": CpuModel = .{
         .name = "970",
         .llvm_name = "970",
         .features = featureSet(&[_]Feature{
@@ -744,7 +714,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const a2 = CpuModel{
+    pub const a2: CpuModel = .{
         .name = "a2",
         .llvm_name = "a2",
         .features = featureSet(&[_]Feature{
@@ -769,7 +739,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const e500 = CpuModel{
+    pub const e500: CpuModel = .{
         .name = "e500",
         .llvm_name = "e500",
         .features = featureSet(&[_]Feature{
@@ -778,7 +748,7 @@ pub const cpu = struct {
             .spe,
         }),
     };
-    pub const e500mc = CpuModel{
+    pub const e500mc: CpuModel = .{
         .name = "e500mc",
         .llvm_name = "e500mc",
         .features = featureSet(&[_]Feature{
@@ -787,7 +757,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const e5500 = CpuModel{
+    pub const e5500: CpuModel = .{
         .name = "e5500",
         .llvm_name = "e5500",
         .features = featureSet(&[_]Feature{
@@ -798,7 +768,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const future = CpuModel{
+    pub const future: CpuModel = .{
         .name = "future",
         .llvm_name = "future",
         .features = featureSet(&[_]Feature{
@@ -825,7 +795,6 @@ pub const cpu = struct {
             .fuse_logical_add,
             .fuse_sha3,
             .fuse_store,
-            .htm,
             .icbt,
             .isa_future_instructions,
             .isa_v206_instructions,
@@ -847,7 +816,7 @@ pub const cpu = struct {
             .two_const_nr,
         }),
     };
-    pub const g3 = CpuModel{
+    pub const g3: CpuModel = .{
         .name = "g3",
         .llvm_name = "g3",
         .features = featureSet(&[_]Feature{
@@ -855,7 +824,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const g4 = CpuModel{
+    pub const g4: CpuModel = .{
         .name = "g4",
         .llvm_name = "g4",
         .features = featureSet(&[_]Feature{
@@ -864,7 +833,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const @"g4+" = CpuModel{
+    pub const @"g4+": CpuModel = .{
         .name = "g4+",
         .llvm_name = "g4+",
         .features = featureSet(&[_]Feature{
@@ -873,7 +842,7 @@ pub const cpu = struct {
             .frsqrte,
         }),
     };
-    pub const g5 = CpuModel{
+    pub const g5: CpuModel = .{
         .name = "g5",
         .llvm_name = "g5",
         .features = featureSet(&[_]Feature{
@@ -886,21 +855,21 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const generic = CpuModel{
+    pub const generic: CpuModel = .{
         .name = "generic",
         .llvm_name = "generic",
         .features = featureSet(&[_]Feature{
             .hard_float,
         }),
     };
-    pub const ppc = CpuModel{
+    pub const ppc: CpuModel = .{
         .name = "ppc",
         .llvm_name = "ppc",
         .features = featureSet(&[_]Feature{
             .hard_float,
         }),
     };
-    pub const ppc64 = CpuModel{
+    pub const ppc64: CpuModel = .{
         .name = "ppc64",
         .llvm_name = "ppc64",
         .features = featureSet(&[_]Feature{
@@ -913,7 +882,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const ppc64le = CpuModel{
+    pub const ppc64le: CpuModel = .{
         .name = "ppc64le",
         .llvm_name = "ppc64le",
         .features = featureSet(&[_]Feature{
@@ -953,7 +922,7 @@ pub const cpu = struct {
             .two_const_nr,
         }),
     };
-    pub const pwr10 = CpuModel{
+    pub const pwr10: CpuModel = .{
         .name = "pwr10",
         .llvm_name = "pwr10",
         .features = featureSet(&[_]Feature{
@@ -980,7 +949,6 @@ pub const cpu = struct {
             .fuse_logical_add,
             .fuse_sha3,
             .fuse_store,
-            .htm,
             .icbt,
             .isa_v206_instructions,
             .isel,
@@ -1001,7 +969,7 @@ pub const cpu = struct {
             .two_const_nr,
         }),
     };
-    pub const pwr11 = CpuModel{
+    pub const pwr11: CpuModel = .{
         .name = "pwr11",
         .llvm_name = "pwr11",
         .features = featureSet(&[_]Feature{
@@ -1028,7 +996,6 @@ pub const cpu = struct {
             .fuse_logical_add,
             .fuse_sha3,
             .fuse_store,
-            .htm,
             .icbt,
             .isa_v206_instructions,
             .isel,
@@ -1049,7 +1016,7 @@ pub const cpu = struct {
             .two_const_nr,
         }),
     };
-    pub const pwr3 = CpuModel{
+    pub const pwr3: CpuModel = .{
         .name = "pwr3",
         .llvm_name = "pwr3",
         .features = featureSet(&[_]Feature{
@@ -1061,7 +1028,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr4 = CpuModel{
+    pub const pwr4: CpuModel = .{
         .name = "pwr4",
         .llvm_name = "pwr4",
         .features = featureSet(&[_]Feature{
@@ -1074,7 +1041,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr5 = CpuModel{
+    pub const pwr5: CpuModel = .{
         .name = "pwr5",
         .llvm_name = "pwr5",
         .features = featureSet(&[_]Feature{
@@ -1089,7 +1056,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr5x = CpuModel{
+    pub const pwr5x: CpuModel = .{
         .name = "pwr5x",
         .llvm_name = "pwr5x",
         .features = featureSet(&[_]Feature{
@@ -1105,7 +1072,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr6 = CpuModel{
+    pub const pwr6: CpuModel = .{
         .name = "pwr6",
         .llvm_name = "pwr6",
         .features = featureSet(&[_]Feature{
@@ -1125,7 +1092,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr6x = CpuModel{
+    pub const pwr6x: CpuModel = .{
         .name = "pwr6x",
         .llvm_name = "pwr6x",
         .features = featureSet(&[_]Feature{
@@ -1145,7 +1112,7 @@ pub const cpu = struct {
             .stfiwx,
         }),
     };
-    pub const pwr7 = CpuModel{
+    pub const pwr7: CpuModel = .{
         .name = "pwr7",
         .llvm_name = "pwr7",
         .features = featureSet(&[_]Feature{
@@ -1174,7 +1141,7 @@ pub const cpu = struct {
             .vsx,
         }),
     };
-    pub const pwr8 = CpuModel{
+    pub const pwr8: CpuModel = .{
         .name = "pwr8",
         .llvm_name = "pwr8",
         .features = featureSet(&[_]Feature{
@@ -1214,7 +1181,7 @@ pub const cpu = struct {
             .two_const_nr,
         }),
     };
-    pub const pwr9 = CpuModel{
+    pub const pwr9: CpuModel = .{
         .name = "pwr9",
         .llvm_name = "pwr9",
         .features = featureSet(&[_]Feature{

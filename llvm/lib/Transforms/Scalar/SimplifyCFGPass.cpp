@@ -34,7 +34,6 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -81,10 +80,6 @@ static cl::opt<bool> UserHoistLoadsStoresWithCondFaulting(
 static cl::opt<bool> UserSinkCommonInsts(
     "sink-common-insts", cl::Hidden, cl::init(false),
     cl::desc("Sink common instructions (default = false)"));
-
-static cl::opt<bool> UserSpeculateBlocks(
-    "speculate-blocks", cl::Hidden, cl::init(false),
-    cl::desc("Speculatively execute blocks (default = false)"));
 
 static cl::opt<bool> UserSpeculateUnpredictables(
     "speculate-unpredictables", cl::Hidden, cl::init(false),
@@ -340,8 +335,6 @@ static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options) {
         UserHoistLoadsStoresWithCondFaulting;
   if (UserSinkCommonInsts.getNumOccurrences())
     Options.SinkCommonInsts = UserSinkCommonInsts;
-  if (UserSpeculateBlocks.getNumOccurrences())
-    Options.SpeculateBlocks = UserSpeculateBlocks;
   if (UserSpeculateUnpredictables.getNumOccurrences())
     Options.SpeculateUnpredictables = UserSpeculateUnpredictables;
 }

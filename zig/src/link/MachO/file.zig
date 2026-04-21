@@ -10,23 +10,16 @@ pub const File = union(enum) {
         };
     }
 
-    pub fn fmtPath(file: File) std.fmt.Formatter(formatPath) {
+    pub fn fmtPath(file: File) std.fmt.Alt(File, formatPath) {
         return .{ .data = file };
     }
 
-    fn formatPath(
-        file: File,
-        comptime unused_fmt_string: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = unused_fmt_string;
-        _ = options;
+    fn formatPath(file: File, w: *Writer) Writer.Error!void {
         switch (file) {
-            .zig_object => |zo| try writer.writeAll(zo.basename),
-            .internal => try writer.writeAll("internal"),
-            .object => |x| try writer.print("{}", .{x.fmtPath()}),
-            .dylib => |dl| try writer.print("{}", .{@as(Path, dl.path)}),
+            .zig_object => |zo| try w.writeAll(zo.basename),
+            .internal => try w.writeAll("internal"),
+            .object => |x| try w.print("{f}", .{x.fmtPath()}),
+            .dylib => |dl| try w.print("{f}", .{@as(Path, dl.path)}),
         }
     }
 
@@ -45,29 +38,21 @@ pub const File = union(enum) {
 
     /// Encodes symbol rank so that the following ordering applies:
     /// * strong in object
-    /// * weak in object
-    /// * tentative in object
     /// * strong in archive/dylib
+    /// * weak in object
     /// * weak in archive/dylib
+    /// * tentative in object
     /// * tentative in archive
     /// * unclaimed
+    /// Ties are broken by file priority.
     pub fn getSymbolRank(file: File, args: struct {
         archive: bool = false,
         weak: bool = false,
         tentative: bool = false,
     }) u32 {
-        if (file != .dylib and !args.archive) {
-            const base: u32 = blk: {
-                if (args.tentative) break :blk 3;
-                break :blk if (args.weak) 2 else 1;
-            };
-            return (base << 16) + file.getIndex();
-        }
-        const base: u32 = blk: {
-            if (args.tentative) break :blk 3;
-            break :blk if (args.weak) 2 else 1;
-        };
-        return base + (file.getIndex() << 24);
+        const archive_or_dylib = @as(u32, @intFromBool(file == .dylib or args.archive)) << 29;
+        const strength: u32 = if (args.tentative) 0b10 << 30 else if (args.weak) 0b01 << 30 else 0b00 << 30;
+        return strength | archive_or_dylib | file.getIndex();
     }
 
     pub fn getAtom(file: File, atom_index: Atom.Index) ?*Atom {
@@ -207,21 +192,21 @@ pub const File = union(enum) {
         assert(file == .object or file == .zig_object);
 
         for (file.getSymbols(), file.getNlists(), 0..) |*sym, nlist, i| {
-            if (!nlist.ext()) continue;
-            if (!nlist.undf()) continue;
+            if (!nlist.n_type.bits.ext) continue;
+            if (nlist.n_type.bits.type != .undf) continue;
 
             if (file.getSymbolRef(@intCast(i), macho_file).getFile(macho_file) != null) continue;
 
             const is_import = switch (macho_file.undefined_treatment) {
                 .@"error" => false,
-                .warn, .suppress => nlist.weakRef(),
+                .warn, .suppress => nlist.n_desc.weak_ref,
                 .dynamic_lookup => true,
             };
             if (is_import) {
                 sym.value = 0;
                 sym.atom_ref = .{ .index = 0, .file = 0 };
                 sym.flags.weak = false;
-                sym.flags.weak_ref = nlist.weakRef();
+                sym.flags.weak_ref = nlist.n_desc.weak_ref;
                 sym.flags.import = is_import;
                 sym.visibility = .global;
 
@@ -238,13 +223,13 @@ pub const File = union(enum) {
         assert(file == .object or file == .zig_object);
 
         for (file.getSymbols(), file.getNlists(), 0..) |*sym, nlist, i| {
-            if (!nlist.ext()) continue;
-            if (!nlist.undf()) continue;
+            if (!nlist.n_type.bits.ext) continue;
+            if (nlist.n_type.bits.type != .undf) continue;
             if (file.getSymbolRef(@intCast(i), macho_file).getFile(macho_file) != null) continue;
 
             sym.value = 0;
             sym.atom_ref = .{ .index = 0, .file = 0 };
-            sym.flags.weak_ref = nlist.weakRef();
+            sym.flags.weak_ref = nlist.n_desc.weak_ref;
             sym.flags.import = true;
             sym.visibility = .global;
 
@@ -257,22 +242,23 @@ pub const File = union(enum) {
         const tracy = trace(@src());
         defer tracy.end();
 
+        const io = macho_file.base.comp.io;
         const gpa = macho_file.base.comp.gpa;
 
         for (file.getSymbols(), file.getNlists(), 0..) |sym, nlist, i| {
             if (sym.visibility != .global) continue;
             if (sym.flags.weak) continue;
-            if (nlist.undf()) continue;
+            if (nlist.n_type.bits.type == .undf) continue;
             const ref = file.getSymbolRef(@intCast(i), macho_file);
             const ref_file = ref.getFile(macho_file) orelse continue;
             if (ref_file.getIndex() == file.getIndex()) continue;
 
-            macho_file.dupes_mutex.lock();
-            defer macho_file.dupes_mutex.unlock();
+            macho_file.dupes_mutex.lockUncancelable(io);
+            defer macho_file.dupes_mutex.unlock(io);
 
             const gop = try macho_file.dupes.getOrPut(gpa, file.getGlobals()[i]);
             if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .empty;
             }
             try gop.value_ptr.append(gpa, file.getIndex());
         }
@@ -369,16 +355,18 @@ pub const File = union(enum) {
         dylib: Dylib,
     };
 
-    pub const Handle = std.fs.File;
+    pub const Handle = Io.File;
     pub const HandleIndex = Index;
 };
 
 const std = @import("std");
+const Io = std.Io;
 const assert = std.debug.assert;
 const log = std.log.scoped(.link);
 const macho = std.macho;
 const Allocator = std.mem.Allocator;
 const Path = std.Build.Cache.Path;
+const Writer = std.Io.Writer;
 
 const trace = @import("../../tracy.zig").trace;
 const Archive = @import("Archive.zig");

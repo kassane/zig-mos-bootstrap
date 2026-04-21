@@ -1,6 +1,3 @@
-//! We do this instead of @cImport because the self-hosted compiler is easier
-//! to bootstrap if it does not depend on translate-c.
-
 /// Do not compare directly to .True, use toBool() instead.
 pub const Bool = enum(c_int) {
     False,
@@ -57,6 +54,15 @@ pub const disposeMessage = LLVMDisposeMessage;
 extern fn LLVMDisposeMessage(Message: [*:0]const u8) void;
 
 pub const TargetMachine = opaque {
+    pub const FloatABI = enum(c_int) {
+        /// Target-specific (either soft or hard depending on triple, etc).
+        Default,
+        /// Soft float.
+        Soft,
+        // Hard float.
+        Hard,
+    };
+
     pub const create = ZigLLVMCreateTargetMachine;
     extern fn ZigLLVMCreateTargetMachine(
         T: *Target,
@@ -68,8 +74,9 @@ pub const TargetMachine = opaque {
         CodeModel: CodeModel,
         function_sections: bool,
         data_sections: bool,
-        float_abi: ABIType,
+        float_abi: FloatABI,
         abi_name: ?[*:0]const u8,
+        emulated_tls: bool,
     ) *TargetMachine;
 
     pub const dispose = LLVMDisposeTargetMachine;
@@ -78,16 +85,25 @@ pub const TargetMachine = opaque {
     pub const EmitOptions = extern struct {
         is_debug: bool,
         is_small: bool,
-        time_report: bool,
+        time_report_out: ?*[*:0]u8,
         tsan: bool,
         sancov: bool,
-        lto: bool,
+        lto: LtoPhase,
         allow_fast_isel: bool,
+        allow_machine_outliner: bool,
         asm_filename: ?[*:0]const u8,
         bin_filename: ?[*:0]const u8,
         llvm_ir_filename: ?[*:0]const u8,
         bitcode_filename: ?[*:0]const u8,
         coverage: Coverage,
+
+        pub const LtoPhase = enum(c_int) {
+            None,
+            ThinPreLink,
+            ThinPostLink,
+            FullPreLink,
+            FullPostLink,
+        };
 
         pub const Coverage = extern struct {
             CoverageType: Coverage.Type,
@@ -108,7 +124,7 @@ pub const TargetMachine = opaque {
             TraceStores: bool,
             CollectControlFlow: bool,
 
-            pub const Type = enum(c_uint) {
+            pub const Type = enum(c_int) {
                 None = 0,
                 Function,
                 BB,
@@ -166,15 +182,6 @@ pub const RelocMode = enum(c_int) {
     ROPI_RWPI,
 };
 
-pub const ABIType = enum(c_int) {
-    /// Target-specific (either soft or hard depending on triple, etc).
-    Default,
-    /// Soft float.
-    Soft,
-    // Hard float.
-    Hard,
-};
-
 pub const Target = opaque {
     pub const getFromTriple = LLVMGetTargetFromTriple;
     extern fn LLVMGetTargetFromTriple(Triple: [*:0]const u8, T: **Target, ErrorMessage: *[*:0]const u8) Bool;
@@ -199,11 +206,11 @@ pub extern fn LLVMInitializeX86TargetInfo() void;
 pub extern fn LLVMInitializeXCoreTargetInfo() void;
 pub extern fn LLVMInitializeXtensaTargetInfo() void;
 pub extern fn LLVMInitializeM68kTargetInfo() void;
-pub extern fn LLVMInitializeMOSTargetInfo() void;
 pub extern fn LLVMInitializeCSKYTargetInfo() void;
 pub extern fn LLVMInitializeVETargetInfo() void;
 pub extern fn LLVMInitializeARCTargetInfo() void;
 pub extern fn LLVMInitializeLoongArchTargetInfo() void;
+pub extern fn LLVMInitializeSPIRVTargetInfo() void;
 
 pub extern fn LLVMInitializeAArch64Target() void;
 pub extern fn LLVMInitializeAMDGPUTarget() void;
@@ -224,11 +231,11 @@ pub extern fn LLVMInitializeX86Target() void;
 pub extern fn LLVMInitializeXCoreTarget() void;
 pub extern fn LLVMInitializeXtensaTarget() void;
 pub extern fn LLVMInitializeM68kTarget() void;
-pub extern fn LLVMInitializeMOSTarget() void;
 pub extern fn LLVMInitializeVETarget() void;
 pub extern fn LLVMInitializeCSKYTarget() void;
 pub extern fn LLVMInitializeARCTarget() void;
 pub extern fn LLVMInitializeLoongArchTarget() void;
+pub extern fn LLVMInitializeSPIRVTarget() void;
 
 pub extern fn LLVMInitializeAArch64TargetMC() void;
 pub extern fn LLVMInitializeAMDGPUTargetMC() void;
@@ -249,11 +256,11 @@ pub extern fn LLVMInitializeX86TargetMC() void;
 pub extern fn LLVMInitializeXCoreTargetMC() void;
 pub extern fn LLVMInitializeXtensaTargetMC() void;
 pub extern fn LLVMInitializeM68kTargetMC() void;
-pub extern fn LLVMInitializeMOSTargetMC() void;
 pub extern fn LLVMInitializeCSKYTargetMC() void;
 pub extern fn LLVMInitializeVETargetMC() void;
 pub extern fn LLVMInitializeARCTargetMC() void;
 pub extern fn LLVMInitializeLoongArchTargetMC() void;
+pub extern fn LLVMInitializeSPIRVTargetMC() void;
 
 pub extern fn LLVMInitializeAArch64AsmPrinter() void;
 pub extern fn LLVMInitializeAMDGPUAsmPrinter() void;
@@ -273,10 +280,10 @@ pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
 pub extern fn LLVMInitializeX86AsmPrinter() void;
 pub extern fn LLVMInitializeXCoreAsmPrinter() void;
 pub extern fn LLVMInitializeM68kAsmPrinter() void;
-pub extern fn LLVMInitializeMOSAsmPrinter() void;
 pub extern fn LLVMInitializeVEAsmPrinter() void;
 pub extern fn LLVMInitializeARCAsmPrinter() void;
 pub extern fn LLVMInitializeLoongArchAsmPrinter() void;
+pub extern fn LLVMInitializeSPIRVAsmPrinter() void;
 
 pub extern fn LLVMInitializeAArch64AsmParser() void;
 pub extern fn LLVMInitializeAMDGPUAsmParser() void;
@@ -295,7 +302,6 @@ pub extern fn LLVMInitializeWebAssemblyAsmParser() void;
 pub extern fn LLVMInitializeX86AsmParser() void;
 pub extern fn LLVMInitializeXtensaAsmParser() void;
 pub extern fn LLVMInitializeM68kAsmParser() void;
-pub extern fn LLVMInitializeMOSAsmParser() void;
 pub extern fn LLVMInitializeCSKYAsmParser() void;
 pub extern fn LLVMInitializeVEAsmParser() void;
 pub extern fn LLVMInitializeLoongArchAsmParser() void;
@@ -308,16 +314,14 @@ pub const LinkCOFF = ZigLLDLinkCOFF;
 pub const LinkELF = ZigLLDLinkELF;
 pub const LinkWasm = ZigLLDLinkWasm;
 
-pub const ObjectFormatType = enum(c_int) {
-    Unknown,
+pub const ArchiveKind = enum(c_int) {
+    GNU,
+    GNU64,
+    BSD,
+    DARWIN,
+    DARWIN64,
     COFF,
-    DXContainer,
-    ELF,
-    GOFF,
-    MachO,
-    SPIRV,
-    Wasm,
-    XCOFF,
+    AIXBIG,
 };
 
 pub const WriteArchive = ZigLLVMWriteArchive;
@@ -325,129 +329,11 @@ extern fn ZigLLVMWriteArchive(
     archive_name: [*:0]const u8,
     file_names_ptr: [*]const [*:0]const u8,
     file_names_len: usize,
-    os_type: OSType,
+    archive_kind: ArchiveKind,
 ) bool;
-
-pub const OSType = enum(c_int) {
-    UnknownOS,
-    Darwin,
-    DragonFly,
-    FreeBSD,
-    Fuchsia,
-    IOS,
-    KFreeBSD,
-    Linux,
-    Lv2,
-    MacOSX,
-    NetBSD,
-    OpenBSD,
-    Solaris,
-    UEFI,
-    Win32,
-    ZOS,
-    Haiku,
-    RTEMS,
-    NaCl,
-    AIX,
-    CUDA,
-    NVCL,
-    AMDHSA,
-    PS4,
-    PS5,
-    ELFIAMCU,
-    TvOS,
-    WatchOS,
-    BridgeOS,
-    DriverKit,
-    XROS,
-    Mesa3D,
-    AMDPAL,
-    HermitCore,
-    Hurd,
-    WASI,
-    Emscripten,
-    ShaderModel,
-    LiteOS,
-    Serenity,
-    Vulkan,
-};
-
-pub const ArchType = enum(c_int) {
-    UnknownArch,
-    arm,
-    armeb,
-    aarch64,
-    aarch64_be,
-    aarch64_32,
-    arc,
-    avr,
-    bpfel,
-    bpfeb,
-    csky,
-    dxil,
-    hexagon,
-    loongarch32,
-    loongarch64,
-    m68k,
-    mips,
-    mipsel,
-    mips64,
-    mips64el,
-    mos,
-    msp430,
-    ppc,
-    ppcle,
-    ppc64,
-    ppc64le,
-    r600,
-    amdgcn,
-    riscv32,
-    riscv64,
-    sparc,
-    sparcv9,
-    sparcel,
-    systemz,
-    tce,
-    tcele,
-    thumb,
-    thumbeb,
-    x86,
-    x86_64,
-    xcore,
-    xtensa,
-    nvptx,
-    nvptx64,
-    le32,
-    le64,
-    amdil,
-    amdil64,
-    hsail,
-    hsail64,
-    spir,
-    spir64,
-    spirv,
-    spirv32,
-    spirv64,
-    kalimba,
-    shave,
-    lanai,
-    wasm32,
-    wasm64,
-    renderscript32,
-    renderscript64,
-    ve,
-};
 
 pub const ParseCommandLineOptions = ZigLLVMParseCommandLineOptions;
 extern fn ZigLLVMParseCommandLineOptions(argc: usize, argv: [*]const [*:0]const u8) void;
-
-pub const WriteImportLibrary = ZigLLVMWriteImportLibrary;
-extern fn ZigLLVMWriteImportLibrary(
-    def_path: [*:0]const u8,
-    arch: ArchType,
-    output_lib_path: [*:0]const u8,
-    kill_at: bool,
-) bool;
 
 pub const GetHostCPUName = LLVMGetHostCPUName;
 extern fn LLVMGetHostCPUName() ?[*:0]u8;

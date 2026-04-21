@@ -11,22 +11,6 @@ const c = std.c;
 
 pub const FILE = c.FILE;
 
-var __stack_chk_guard: usize = 0;
-fn __stack_chk_fail() callconv(.C) void {
-    std.debug.print("stack smashing detected: terminated\n", .{});
-    emscripten_force_exit(127);
-}
-
-comptime {
-    if (builtin.os.tag == .emscripten) {
-        if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
-            // Emscripten does not provide these symbols, so we must export our own
-            @export(&__stack_chk_guard, .{ .name = "__stack_chk_guard", .linkage = .strong });
-            @export(&__stack_chk_fail, .{ .name = "__stack_chk_fail", .linkage = .strong });
-        }
-    }
-}
-
 pub const PF = linux.PF;
 pub const AF = linux.AF;
 pub const CLOCK = linux.CLOCK;
@@ -224,14 +208,14 @@ pub const W = struct {
     pub fn EXITSTATUS(s: u32) u8 {
         return @as(u8, @intCast((s & 0xff00) >> 8));
     }
-    pub fn TERMSIG(s: u32) u32 {
-        return s & 0x7f;
+    pub fn TERMSIG(s: u32) SIG {
+        return @enumFromInt(s & 0x7f);
     }
-    pub fn STOPSIG(s: u32) u32 {
-        return EXITSTATUS(s);
+    pub fn STOPSIG(s: u32) SIG {
+        return @enumFromInt(EXITSTATUS(s));
     }
     pub fn IFEXITED(s: u32) bool {
-        return TERMSIG(s) == 0;
+        return (s & 0x7f) == 0;
     }
     pub fn IFSTOPPED(s: u32) bool {
         return @as(u16, @truncate(((s & 0xffff) *% 0x10001) >> 8)) > 0x7f00;
@@ -331,13 +315,14 @@ pub const POLL = struct {
     pub const RDBAND = 0x080;
 };
 
-pub const PROT = struct {
-    pub const NONE = 0x0;
-    pub const READ = 0x1;
-    pub const WRITE = 0x2;
-    pub const EXEC = 0x4;
-    pub const GROWSDOWN = 0x01000000;
-    pub const GROWSUP = 0x02000000;
+pub const PROT = packed struct(u32) {
+    READ: bool = false,
+    WRITE: bool = false,
+    EXEC: bool = false,
+    _: u21 = 0,
+    GROWSDOWN: bool = false,
+    GROWSUP: bool = false,
+    __: u6 = 0,
 };
 
 pub const rlim_t = u64;
@@ -398,28 +383,6 @@ pub const rusage = extern struct {
 pub const timeval = extern struct {
     sec: i64,
     usec: i32,
-};
-
-pub const REG = struct {
-    pub const GS = 0;
-    pub const FS = 1;
-    pub const ES = 2;
-    pub const DS = 3;
-    pub const EDI = 4;
-    pub const ESI = 5;
-    pub const EBP = 6;
-    pub const ESP = 7;
-    pub const EBX = 8;
-    pub const EDX = 9;
-    pub const ECX = 10;
-    pub const EAX = 11;
-    pub const TRAPNO = 12;
-    pub const ERR = 13;
-    pub const EIP = 14;
-    pub const CS = 15;
-    pub const EFL = 16;
-    pub const UESP = 17;
-    pub const SS = 18;
 };
 
 pub const S = struct {
@@ -501,54 +464,11 @@ pub const SHUT = struct {
     pub const RDWR = 2;
 };
 
-pub const SIG = struct {
-    pub const BLOCK = 0;
-    pub const UNBLOCK = 1;
-    pub const SETMASK = 2;
-
-    pub const HUP = 1;
-    pub const INT = 2;
-    pub const QUIT = 3;
-    pub const ILL = 4;
-    pub const TRAP = 5;
-    pub const ABRT = 6;
-    pub const IOT = ABRT;
-    pub const BUS = 7;
-    pub const FPE = 8;
-    pub const KILL = 9;
-    pub const USR1 = 10;
-    pub const SEGV = 11;
-    pub const USR2 = 12;
-    pub const PIPE = 13;
-    pub const ALRM = 14;
-    pub const TERM = 15;
-    pub const STKFLT = 16;
-    pub const CHLD = 17;
-    pub const CONT = 18;
-    pub const STOP = 19;
-    pub const TSTP = 20;
-    pub const TTIN = 21;
-    pub const TTOU = 22;
-    pub const URG = 23;
-    pub const XCPU = 24;
-    pub const XFSZ = 25;
-    pub const VTALRM = 26;
-    pub const PROF = 27;
-    pub const WINCH = 28;
-    pub const IO = 29;
-    pub const POLL = 29;
-    pub const PWR = 30;
-    pub const SYS = 31;
-    pub const UNUSED = SIG.SYS;
-
-    pub const ERR: ?Sigaction.handler_fn = @ptrFromInt(std.math.maxInt(usize));
-    pub const DFL: ?Sigaction.handler_fn = @ptrFromInt(0);
-    pub const IGN: ?Sigaction.handler_fn = @ptrFromInt(1);
-};
+pub const SIG = linux.SIG;
 
 pub const Sigaction = extern struct {
-    pub const handler_fn = *align(1) const fn (i32) callconv(.C) void;
-    pub const sigaction_fn = *const fn (i32, *const siginfo_t, ?*anyopaque) callconv(.C) void;
+    pub const handler_fn = *align(1) const fn (i32) callconv(.c) void;
+    pub const sigaction_fn = *const fn (i32, *const siginfo_t, ?*anyopaque) callconv(.c) void;
 
     handler: extern union {
         handler: ?handler_fn,
@@ -556,11 +476,13 @@ pub const Sigaction = extern struct {
     },
     mask: sigset_t,
     flags: c_uint,
-    restorer: ?*const fn () callconv(.C) void = null,
+    restorer: ?*const fn () callconv(.c) void = null,
 };
 
 pub const sigset_t = [1024 / 32]u32;
-pub const empty_sigset = [_]u32{0} ** @typeInfo(sigset_t).array.len;
+pub fn sigemptyset() sigset_t {
+    return [_]u32{0} ** @typeInfo(sigset_t).array.len;
+}
 pub const siginfo_t = extern struct {
     signo: i32,
     errno: i32,
@@ -791,7 +713,8 @@ pub const sockaddr = c.sockaddr;
 
 pub const blksize_t = i32;
 pub const nlink_t = u32;
-pub const time_t = i64;
+// https://github.com/emscripten-core/emscripten/blob/946ab574ae39401b51e75cd5257d894ae732ab54/system/lib/libc/musl/arch/emscripten/bits/alltypes.h#L140
+pub const time_t = c_longlong;
 pub const mode_t = u32;
 pub const off_t = i64;
 pub const ino_t = u64;
@@ -811,13 +734,6 @@ pub const dl_phdr_info = extern struct {
     phnum: u16,
 };
 
-pub const mcontext_t = extern struct {
-    gregs: [19]usize,
-    fpregs: [*]u8,
-    oldmask: usize,
-    cr2: usize,
-};
-
 pub const msghdr = std.c.msghdr;
 pub const msghdr_const = std.c.msghdr;
 
@@ -834,23 +750,22 @@ pub const stack_t = extern struct {
     size: usize,
 };
 
+/// For use with `utimensat` and `futimens`.
+// https://github.com/emscripten-core/emscripten/blob/d72d7226f4733af8ff993dec70198cf09a24142d/system/lib/libc/musl/include/sys/stat.h#L77-L78
+pub const UTIME = struct {
+    pub const NOW: timespec = .{ .sec = 0, .nsec = 0x3fffffff };
+    pub const OMIT: timespec = .{ .sec = 0, .nsec = 0x3ffffffe };
+};
+
+// https://github.com/emscripten-core/emscripten/blob/946ab574ae39401b51e75cd5257d894ae732ab54/system/lib/libc/musl/arch/emscripten/bits/alltypes.h#L284
 pub const timespec = extern struct {
     sec: time_t,
-    nsec: isize,
+    nsec: c_long,
 };
 
 pub const timezone = extern struct {
-    minuteswest: i32,
-    dsttime: i32,
-};
-
-pub const ucontext_t = extern struct {
-    flags: usize,
-    link: ?*ucontext_t,
-    stack: stack_t,
-    mcontext: mcontext_t,
-    sigmask: sigset_t,
-    regspace: [28]usize,
+    minuteswest: c_int,
+    dsttime: c_int,
 };
 
 pub const utsname = extern struct {
@@ -909,23 +824,23 @@ pub const LOG = struct {
     pub const INFO = 512;
 };
 
-pub const em_callback_func = ?*const fn () callconv(.C) void;
-pub const em_arg_callback_func = ?*const fn (?*anyopaque) callconv(.C) void;
-pub const em_str_callback_func = ?*const fn ([*:0]const u8) callconv(.C) void;
+pub const em_callback_func = ?*const fn () callconv(.c) void;
+pub const em_arg_callback_func = ?*const fn (?*anyopaque) callconv(.c) void;
+pub const em_str_callback_func = ?*const fn ([*:0]const u8) callconv(.c) void;
 
 pub extern "c" fn emscripten_async_wget(url: [*:0]const u8, file: [*:0]const u8, onload: em_str_callback_func, onerror: em_str_callback_func) void;
 
-pub const em_async_wget_onload_func = ?*const fn (?*anyopaque, ?*anyopaque, c_int) callconv(.C) void;
+pub const em_async_wget_onload_func = ?*const fn (?*anyopaque, ?*anyopaque, c_int) callconv(.c) void;
 pub extern "c" fn emscripten_async_wget_data(url: [*:0]const u8, arg: ?*anyopaque, onload: em_async_wget_onload_func, onerror: em_arg_callback_func) void;
 
-pub const em_async_wget2_onload_func = ?*const fn (c_uint, ?*anyopaque, [*:0]const u8) callconv(.C) void;
-pub const em_async_wget2_onstatus_func = ?*const fn (c_uint, ?*anyopaque, c_int) callconv(.C) void;
+pub const em_async_wget2_onload_func = ?*const fn (c_uint, ?*anyopaque, [*:0]const u8) callconv(.c) void;
+pub const em_async_wget2_onstatus_func = ?*const fn (c_uint, ?*anyopaque, c_int) callconv(.c) void;
 
 pub extern "c" fn emscripten_async_wget2(url: [*:0]const u8, file: [*:0]const u8, requesttype: [*:0]const u8, param: [*:0]const u8, arg: ?*anyopaque, onload: em_async_wget2_onload_func, onerror: em_async_wget2_onstatus_func, onprogress: em_async_wget2_onstatus_func) c_int;
 
-pub const em_async_wget2_data_onload_func = ?*const fn (c_uint, ?*anyopaque, ?*anyopaque, c_uint) callconv(.C) void;
-pub const em_async_wget2_data_onerror_func = ?*const fn (c_uint, ?*anyopaque, c_int, [*:0]const u8) callconv(.C) void;
-pub const em_async_wget2_data_onprogress_func = ?*const fn (c_uint, ?*anyopaque, c_int, c_int) callconv(.C) void;
+pub const em_async_wget2_data_onload_func = ?*const fn (c_uint, ?*anyopaque, ?*anyopaque, c_uint) callconv(.c) void;
+pub const em_async_wget2_data_onerror_func = ?*const fn (c_uint, ?*anyopaque, c_int, [*:0]const u8) callconv(.c) void;
+pub const em_async_wget2_data_onprogress_func = ?*const fn (c_uint, ?*anyopaque, c_int, c_int) callconv(.c) void;
 
 pub extern "c" fn emscripten_async_wget2_data(url: [*:0]const u8, requesttype: [*:0]const u8, param: [*:0]const u8, arg: ?*anyopaque, free: c_int, onload: em_async_wget2_data_onload_func, onerror: em_async_wget2_data_onerror_func, onprogress: em_async_wget2_data_onprogress_func) c_int;
 pub extern "c" fn emscripten_async_wget2_abort(handle: c_int) void;
@@ -933,7 +848,7 @@ pub extern "c" fn emscripten_wget(url: [*:0]const u8, file: [*:0]const u8) c_int
 pub extern "c" fn emscripten_wget_data(url: [*:0]const u8, pbuffer: *(?*anyopaque), pnum: *c_int, perror: *c_int) void;
 pub extern "c" fn emscripten_run_script(script: [*:0]const u8) void;
 pub extern "c" fn emscripten_run_script_int(script: [*:0]const u8) c_int;
-pub extern "c" fn emscripten_run_script_string(script: [*:0]const u8) [*:0]u8;
+pub extern "c" fn emscripten_run_script_string(script: [*:0]const u8) ?[*:0]u8;
 pub extern "c" fn emscripten_async_run_script(script: [*:0]const u8, millis: c_int) void;
 pub extern "c" fn emscripten_async_load_script(script: [*:0]const u8, onload: em_callback_func, onerror: em_callback_func) void;
 pub extern "c" fn emscripten_set_main_loop(func: em_callback_func, fps: c_int, simulate_infinite_loop: c_int) void;
@@ -944,8 +859,8 @@ pub extern "c" fn emscripten_pause_main_loop() void;
 pub extern "c" fn emscripten_resume_main_loop() void;
 pub extern "c" fn emscripten_cancel_main_loop() void;
 
-pub const em_socket_callback = ?*const fn (c_int, ?*anyopaque) callconv(.C) void;
-pub const em_socket_error_callback = ?*const fn (c_int, c_int, [*:0]const u8, ?*anyopaque) callconv(.C) void;
+pub const em_socket_callback = ?*const fn (c_int, ?*anyopaque) callconv(.c) void;
+pub const em_socket_error_callback = ?*const fn (c_int, c_int, [*:0]const u8, ?*anyopaque) callconv(.c) void;
 
 pub extern "c" fn emscripten_set_socket_error_callback(userData: ?*anyopaque, callback: em_socket_error_callback) void;
 pub extern "c" fn emscripten_set_socket_open_callback(userData: ?*anyopaque, callback: em_socket_callback) void;
@@ -968,11 +883,11 @@ pub extern "c" fn emscripten_set_canvas_size(width: c_int, height: c_int) void;
 pub extern "c" fn emscripten_get_canvas_size(width: *c_int, height: *c_int, isFullscreen: *c_int) void;
 pub extern "c" fn emscripten_get_now() f64;
 pub extern "c" fn emscripten_random() f32;
-pub const em_idb_onload_func = ?*const fn (?*anyopaque, ?*anyopaque, c_int) callconv(.C) void;
+pub const em_idb_onload_func = ?*const fn (?*anyopaque, ?*anyopaque, c_int) callconv(.c) void;
 pub extern "c" fn emscripten_idb_async_load(db_name: [*:0]const u8, file_id: [*:0]const u8, arg: ?*anyopaque, onload: em_idb_onload_func, onerror: em_arg_callback_func) void;
 pub extern "c" fn emscripten_idb_async_store(db_name: [*:0]const u8, file_id: [*:0]const u8, ptr: ?*anyopaque, num: c_int, arg: ?*anyopaque, onstore: em_arg_callback_func, onerror: em_arg_callback_func) void;
 pub extern "c" fn emscripten_idb_async_delete(db_name: [*:0]const u8, file_id: [*:0]const u8, arg: ?*anyopaque, ondelete: em_arg_callback_func, onerror: em_arg_callback_func) void;
-pub const em_idb_exists_func = ?*const fn (?*anyopaque, c_int) callconv(.C) void;
+pub const em_idb_exists_func = ?*const fn (?*anyopaque, c_int) callconv(.c) void;
 pub extern "c" fn emscripten_idb_async_exists(db_name: [*:0]const u8, file_id: [*:0]const u8, arg: ?*anyopaque, oncheck: em_idb_exists_func, onerror: em_arg_callback_func) void;
 pub extern "c" fn emscripten_idb_load(db_name: [*:0]const u8, file_id: [*:0]const u8, pbuffer: *?*anyopaque, pnum: *c_int, perror: *c_int) void;
 pub extern "c" fn emscripten_idb_store(db_name: [*:0]const u8, file_id: [*:0]const u8, buffer: *anyopaque, num: c_int, perror: *c_int) void;
@@ -983,13 +898,13 @@ pub extern "c" fn emscripten_idb_store_blob(db_name: [*:0]const u8, file_id: [*:
 pub extern "c" fn emscripten_idb_read_from_blob(blob: c_int, start: c_int, num: c_int, buffer: ?*anyopaque) void;
 pub extern "c" fn emscripten_idb_free_blob(blob: c_int) void;
 pub extern "c" fn emscripten_run_preload_plugins(file: [*:0]const u8, onload: em_str_callback_func, onerror: em_str_callback_func) c_int;
-pub const em_run_preload_plugins_data_onload_func = ?*const fn (?*anyopaque, [*:0]const u8) callconv(.C) void;
+pub const em_run_preload_plugins_data_onload_func = ?*const fn (?*anyopaque, [*:0]const u8) callconv(.c) void;
 pub extern "c" fn emscripten_run_preload_plugins_data(data: [*]u8, size: c_int, suffix: [*:0]const u8, arg: ?*anyopaque, onload: em_run_preload_plugins_data_onload_func, onerror: em_arg_callback_func) void;
 pub extern "c" fn emscripten_lazy_load_code() void;
 pub const worker_handle = c_int;
 pub extern "c" fn emscripten_create_worker(url: [*:0]const u8) worker_handle;
 pub extern "c" fn emscripten_destroy_worker(worker: worker_handle) void;
-pub const em_worker_callback_func = ?*const fn ([*]u8, c_int, ?*anyopaque) callconv(.C) void;
+pub const em_worker_callback_func = ?*const fn ([*]u8, c_int, ?*anyopaque) callconv(.c) void;
 pub extern "c" fn emscripten_call_worker(worker: worker_handle, funcname: [*:0]const u8, data: [*]u8, size: c_int, callback: em_worker_callback_func, arg: ?*anyopaque) void;
 pub extern "c" fn emscripten_worker_respond(data: [*]u8, size: c_int) void;
 pub extern "c" fn emscripten_worker_respond_provisionally(data: [*]u8, size: c_int) void;
@@ -1003,10 +918,10 @@ pub extern "c" fn emscripten_get_preloaded_image_data_from_FILE(file: *FILE, w: 
 pub extern "c" fn emscripten_log(flags: c_int, format: [*:0]const u8, ...) void;
 pub extern "c" fn emscripten_get_callstack(flags: c_int, out: ?[*]u8, maxbytes: c_int) c_int;
 pub extern "c" fn emscripten_print_double(x: f64, to: ?[*]u8, max: c_int) c_int;
-pub const em_scan_func = ?*const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
+pub const em_scan_func = ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
 pub extern "c" fn emscripten_scan_registers(func: em_scan_func) void;
 pub extern "c" fn emscripten_scan_stack(func: em_scan_func) void;
-pub const em_dlopen_callback = ?*const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
+pub const em_dlopen_callback = ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
 pub extern "c" fn emscripten_dlopen(filename: [*:0]const u8, flags: c_int, user_data: ?*anyopaque, onsuccess: em_dlopen_callback, onerror: em_arg_callback_func) void;
 pub extern "c" fn emscripten_dlopen_promise(filename: [*:0]const u8, flags: c_int) em_promise_t;
 pub extern "c" fn emscripten_throw_number(number: f64) void;
@@ -1024,7 +939,7 @@ pub const struct__em_promise = opaque {};
 pub const em_promise_t = ?*struct__em_promise;
 pub const enum_em_promise_result_t = c_uint;
 pub const em_promise_result_t = enum_em_promise_result_t;
-pub const em_promise_callback_t = ?*const fn (?*?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.C) em_promise_result_t;
+pub const em_promise_callback_t = ?*const fn (?*?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) em_promise_result_t;
 
 pub extern "c" fn emscripten_promise_create() em_promise_t;
 pub extern "c" fn emscripten_promise_destroy(promise: em_promise_t) void;

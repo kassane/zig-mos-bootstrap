@@ -16,6 +16,7 @@
 
 #include "clang/APINotes/APINotesManager.h"
 #include "clang/AST/ASTFwd.h"
+#include "clang/AST/ASTLambda.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/AttrIterator.h"
 #include "clang/AST/CharUnits.h"
@@ -49,6 +50,7 @@
 #include "clang/Basic/PragmaKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Specifiers.h"
+#include "clang/Basic/StackExhaustionHandler.h"
 #include "clang/Basic/TemplateKinds.h"
 #include "clang/Basic/TokenKinds.h"
 #include "clang/Basic/TypeTraits.h"
@@ -172,11 +174,11 @@ class SemaOpenMP;
 class SemaPPC;
 class SemaPseudoObject;
 class SemaRISCV;
+class SemaSPIRV;
 class SemaSYCL;
 class SemaSwift;
 class SemaSystemZ;
 class SemaWasm;
-class SemaMOS;
 class SemaX86;
 class StandardConversionSequence;
 class TemplateArgument;
@@ -458,55 +460,6 @@ enum class FunctionEffectMode : uint8_t {
   Dependent // effect(expr) where expr is dependent.
 };
 
-struct FunctionEffectDiff {
-  enum class Kind { Added, Removed, ConditionMismatch };
-
-  FunctionEffect::Kind EffectKind;
-  Kind DiffKind;
-  FunctionEffectWithCondition Old; // invalid when Added.
-  FunctionEffectWithCondition New; // invalid when Removed.
-
-  StringRef effectName() const {
-    if (Old.Effect.kind() != FunctionEffect::Kind::None)
-      return Old.Effect.name();
-    return New.Effect.name();
-  }
-
-  /// Describes the result of effects differing between a base class's virtual
-  /// method and an overriding method in a subclass.
-  enum class OverrideResult {
-    NoAction,
-    Warn,
-    Merge // Merge missing effect from base to derived.
-  };
-
-  /// Return true if adding or removing the effect as part of a type conversion
-  /// should generate a diagnostic.
-  bool shouldDiagnoseConversion(QualType SrcType,
-                                const FunctionEffectsRef &SrcFX,
-                                QualType DstType,
-                                const FunctionEffectsRef &DstFX) const;
-
-  /// Return true if adding or removing the effect in a redeclaration should
-  /// generate a diagnostic.
-  bool shouldDiagnoseRedeclaration(const FunctionDecl &OldFunction,
-                                   const FunctionEffectsRef &OldFX,
-                                   const FunctionDecl &NewFunction,
-                                   const FunctionEffectsRef &NewFX) const;
-
-  /// Return true if adding or removing the effect in a C++ virtual method
-  /// override should generate a diagnostic.
-  OverrideResult shouldDiagnoseMethodOverride(
-      const CXXMethodDecl &OldMethod, const FunctionEffectsRef &OldFX,
-      const CXXMethodDecl &NewMethod, const FunctionEffectsRef &NewFX) const;
-};
-
-struct FunctionEffectDifferences : public SmallVector<FunctionEffectDiff> {
-  /// Caller should short-circuit by checking for equality first.
-  FunctionEffectDifferences(const FunctionEffectsRef &Old,
-                            const FunctionEffectsRef &New);
-};
-
 /// Sema - This implements semantic analysis and AST building for C.
 /// \nosubgrouping
 class Sema final : public SemaBase {
@@ -547,6 +500,7 @@ class Sema final : public SemaBase {
   // 32. Constraints and Concepts (SemaConcept.cpp)
   // 33. Types (SemaType.cpp)
   // 34. FixIt Helpers (SemaFixItUtils.cpp)
+  // 35. Function Effects (SemaFunctionEffects.cpp)
 
   /// \name Semantic Analysis
   /// Implementations are in Sema.cpp
@@ -594,9 +548,6 @@ public:
 
   /// Print out statistics about the semantic analysis.
   void PrintStats() const;
-
-  /// Warn that the stack is nearly exhausted.
-  void warnStackExhausted(SourceLocation Loc);
 
   /// Run some code with "sufficient" stack space. (Currently, at least 256K is
   /// guaranteed). Produces a warning if we're low on stack space and allocates
@@ -751,10 +702,10 @@ public:
   /// Retrieve the current block, if any.
   sema::BlockScopeInfo *getCurBlock();
 
-  /// Get the innermost lambda enclosing the current location, if any. This
-  /// looks through intervening non-lambda scopes such as local functions and
-  /// blocks.
-  sema::LambdaScopeInfo *getEnclosingLambda() const;
+  /// Get the innermost lambda or block enclosing the current location, if any.
+  /// This looks through intervening non-lambda, non-block scopes such as local
+  /// functions.
+  sema::CapturingScopeInfo *getEnclosingLambdaOrBlock() const;
 
   /// Retrieve the current lambda scope info, if any.
   /// \param IgnoreNonLambdaCapturingScope true if should find the top-most
@@ -852,29 +803,9 @@ public:
   /// Warn when implicitly casting 0 to nullptr.
   void diagnoseZeroToNullptrConversion(CastKind Kind, const Expr *E);
 
-  // ----- function effects ---
-
   /// Warn when implicitly changing function effects.
   void diagnoseFunctionEffectConversion(QualType DstType, QualType SrcType,
                                         SourceLocation Loc);
-
-  /// Warn and return true if adding an effect to a set would create a conflict.
-  bool diagnoseConflictingFunctionEffect(const FunctionEffectsRef &FX,
-                                         const FunctionEffectWithCondition &EC,
-                                         SourceLocation NewAttrLoc);
-
-  // Report a failure to merge function effects between declarations due to a
-  // conflict.
-  void
-  diagnoseFunctionEffectMergeConflicts(const FunctionEffectSet::Conflicts &Errs,
-                                       SourceLocation NewLoc,
-                                       SourceLocation OldLoc);
-
-  /// Try to parse the conditional expression attached to an effect attribute
-  /// (e.g. 'nonblocking'). (c.f. Sema::ActOnNoexceptSpec). Return an empty
-  /// optional on error.
-  std::optional<FunctionEffectMode>
-  ActOnEffectExpression(Expr *CondExpr, StringRef AttributeName);
 
   /// makeUnavailableInSystemHeader - There is an error in the current
   /// context.  If we're still in a system header, and we can plausibly
@@ -940,8 +871,6 @@ public:
   /// to lookup file scope declarations in the "ordinary" C decl namespace.
   /// For example, user-defined classes, built-in "id" type, etc.
   Scope *TUScope;
-
-  bool WarnedStackExhausted = false;
 
   void incrementMSManglingNumber() const {
     return CurScope->incrementMSManglingNumber();
@@ -1215,6 +1144,11 @@ public:
     return *RISCVPtr;
   }
 
+  SemaSPIRV &SPIRV() {
+    assert(SPIRVPtr);
+    return *SPIRVPtr;
+  }
+
   SemaSYCL &SYCL() {
     assert(SYCLPtr);
     return *SYCLPtr;
@@ -1235,11 +1169,6 @@ public:
     return *WasmPtr;
   }
 
-  SemaMOS &MOS() {
-    assert(MOSPtr);
-    return *MOSPtr;
-  }
-
   SemaX86 &X86() {
     assert(X86Ptr);
     return *X86Ptr;
@@ -1258,6 +1187,8 @@ protected:
 private:
   std::optional<std::unique_ptr<DarwinSDKInfo>> CachedDarwinSDKInfo;
   bool WarnedDarwinSDKInfoMissing = false;
+
+  StackExhaustionHandler StackHandler;
 
   Sema(const Sema &) = delete;
   void operator=(const Sema &) = delete;
@@ -1286,7 +1217,6 @@ private:
   std::unique_ptr<SemaLoongArch> LoongArchPtr;
   std::unique_ptr<SemaM68k> M68kPtr;
   std::unique_ptr<SemaMIPS> MIPSPtr;
-  std::unique_ptr<SemaMOS> MOSPtr;
   std::unique_ptr<SemaMSP430> MSP430Ptr;
   std::unique_ptr<SemaNVPTX> NVPTXPtr;
   std::unique_ptr<SemaObjC> ObjCPtr;
@@ -1296,6 +1226,7 @@ private:
   std::unique_ptr<SemaPPC> PPCPtr;
   std::unique_ptr<SemaPseudoObject> PseudoObjectPtr;
   std::unique_ptr<SemaRISCV> RISCVPtr;
+  std::unique_ptr<SemaSPIRV> SPIRVPtr;
   std::unique_ptr<SemaSYCL> SYCLPtr;
   std::unique_ptr<SemaSwift> SwiftPtr;
   std::unique_ptr<SemaSystemZ> SystemZPtr;
@@ -1834,8 +1765,19 @@ public:
   /// Add [[clang:::lifetimebound]] attr for std:: functions and methods.
   void inferLifetimeBoundAttribute(FunctionDecl *FD);
 
+  /// Add [[clang:::lifetime_capture_by(this)]] to STL container methods.
+  void inferLifetimeCaptureByAttribute(FunctionDecl *FD);
+
   /// Add [[gsl::Pointer]] attributes for std:: types.
   void inferGslPointerAttribute(TypedefNameDecl *TD);
+
+  LifetimeCaptureByAttr *ParseLifetimeCaptureByAttr(const ParsedAttr &AL,
+                                                    StringRef ParamName);
+  // Processes the argument 'X' in [[clang::lifetime_capture_by(X)]]. Since 'X'
+  // can be the name of a function parameter, we need to parse the function
+  // declaration and rest of the parameters before processesing 'X'. Therefore
+  // do this lazily instead of processing while parsing the annotation itself.
+  void LazyProcessLifetimeCaptureByParams(FunctionDecl *FD);
 
   /// Add _Nullable attributes for std:: types.
   void inferNullableClassAttribute(CXXRecordDecl *CRD);
@@ -2388,8 +2330,12 @@ public:
   bool CheckFunctionCall(FunctionDecl *FDecl, CallExpr *TheCall,
                          const FunctionProtoType *Proto);
 
-  bool BuiltinVectorMath(CallExpr *TheCall, QualType &Res);
+  /// \param FPOnly restricts the arguments to floating-point types.
+  bool BuiltinVectorMath(CallExpr *TheCall, QualType &Res, bool FPOnly = false);
   bool BuiltinVectorToScalarMath(CallExpr *TheCall);
+
+  void checkLifetimeCaptureBy(FunctionDecl *FDecl, bool IsMemberFunction,
+                              const Expr *ThisArg, ArrayRef<const Expr *> Args);
 
   /// Handles the checks for format strings, non-POD arguments to vararg
   /// functions, NULL arguments passed to non-NULL parameters, diagnose_if
@@ -2580,10 +2526,24 @@ private:
   ExprResult AtomicOpsOverloaded(ExprResult TheCallResult,
                                  AtomicExpr::AtomicOp Op);
 
-  bool BuiltinElementwiseMath(CallExpr *TheCall);
+  /// \param FPOnly restricts the arguments to floating-point types.
+  bool BuiltinElementwiseMath(CallExpr *TheCall, bool FPOnly = false);
   bool PrepareBuiltinReduceMathOneArgCall(CallExpr *TheCall);
 
   bool BuiltinNonDeterministicValue(CallExpr *TheCall);
+
+  enum BuiltinCountedByRefKind {
+    AssignmentKind,
+    InitializerKind,
+    FunctionArgKind,
+    ReturnArgKind,
+    ArraySubscriptKind,
+    BinaryExprKind,
+  };
+
+  bool CheckInvalidBuiltinCountedByRef(const Expr *E,
+                                       BuiltinCountedByRefKind K);
+  bool BuiltinCountedByRef(CallExpr *TheCall);
 
   // Matrix builtin handling.
   ExprResult BuiltinMatrixTranspose(CallExpr *TheCall, ExprResult CallResult);
@@ -3553,10 +3513,12 @@ public:
   /// a C++0x [dcl.typedef]p2 alias-declaration: 'using T = A;'.
   NamedDecl *ActOnTypedefNameDecl(Scope *S, DeclContext *DC, TypedefNameDecl *D,
                                   LookupResult &Previous, bool &Redeclaration);
-  NamedDecl *ActOnVariableDeclarator(
-      Scope *S, Declarator &D, DeclContext *DC, TypeSourceInfo *TInfo,
-      LookupResult &Previous, MultiTemplateParamsArg TemplateParamLists,
-      bool &AddToScope, ArrayRef<BindingDecl *> Bindings = std::nullopt);
+  NamedDecl *ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
+                                     TypeSourceInfo *TInfo,
+                                     LookupResult &Previous,
+                                     MultiTemplateParamsArg TemplateParamLists,
+                                     bool &AddToScope,
+                                     ArrayRef<BindingDecl *> Bindings = {});
 
   /// Perform semantic checking on a newly-created variable
   /// declaration.
@@ -4526,9 +4488,10 @@ public:
                                       SourceLocation *ArgLocation = nullptr);
 
   /// Determine if type T is a valid subject for a nonnull and similar
-  /// attributes. By default, we look through references (the behavior used by
-  /// nonnull), but if the second parameter is true, then we treat a reference
-  /// type as valid.
+  /// attributes. Dependent types are considered valid so they can be checked
+  /// during instantiation time. By default, we look through references (the
+  /// behavior used by nonnull), but if the second parameter is true, then we
+  /// treat a reference type as valid.
   bool isValidPointerAttrType(QualType T, bool RefOkay = false);
 
   /// AddAssumeAlignedAttr - Adds an assume_aligned attribute to a particular
@@ -4600,9 +4563,10 @@ public:
   /// declaration.
   void AddAlignValueAttr(Decl *D, const AttributeCommonInfo &CI, Expr *E);
 
-  /// AddAnnotationAttr - Adds an annotation Annot with Args arguments to D.
-  void AddAnnotationAttr(Decl *D, const AttributeCommonInfo &CI,
-                         StringRef Annot, MutableArrayRef<Expr *> Args);
+  /// CreateAnnotationAttr - Creates an annotation Annot with Args arguments.
+  Attr *CreateAnnotationAttr(const AttributeCommonInfo &CI, StringRef Annot,
+                             MutableArrayRef<Expr *> Args);
+  Attr *CreateAnnotationAttr(const ParsedAttr &AL);
 
   bool checkMSInheritanceAttrOnDefinition(CXXRecordDecl *RD, SourceRange Range,
                                           bool BestCase,
@@ -4618,9 +4582,6 @@ public:
                                           const IdentifierInfo *Ident);
   MinSizeAttr *mergeMinSizeAttr(Decl *D, const AttributeCommonInfo &CI);
   OptimizeNoneAttr *mergeOptimizeNoneAttr(Decl *D,
-                                          const AttributeCommonInfo &CI);
-  ReentrantAttr *mergeReentrantAttr(Decl *D, const AttributeCommonInfo &CI);
-  NonReentrantAttr *mergeNonReentrantAttr(Decl *D,
                                           const AttributeCommonInfo &CI);
   InternalLinkageAttr *mergeInternalLinkageAttr(Decl *D, const ParsedAttr &AL);
   InternalLinkageAttr *mergeInternalLinkageAttr(Decl *D,
@@ -5361,7 +5322,7 @@ public:
   /// is complete.
   void ActOnFinishCXXInClassMemberInitializer(Decl *VarDecl,
                                               SourceLocation EqualLoc,
-                                              Expr *Init);
+                                              ExprResult Init);
 
   /// Handle a C++ member initializer using parentheses syntax.
   MemInitResult
@@ -5401,9 +5362,8 @@ public:
   bool SetDelegatingInitializer(CXXConstructorDecl *Constructor,
                                 CXXCtorInitializer *Initializer);
 
-  bool SetCtorInitializers(
-      CXXConstructorDecl *Constructor, bool AnyErrors,
-      ArrayRef<CXXCtorInitializer *> Initializers = std::nullopt);
+  bool SetCtorInitializers(CXXConstructorDecl *Constructor, bool AnyErrors,
+                           ArrayRef<CXXCtorInitializer *> Initializers = {});
 
   /// MarkBaseAndMemberDestructorsReferenced - Given a record decl,
   /// mark all the non-trivial destructors of its members and bases as
@@ -6699,9 +6659,9 @@ public:
   /// \param SkipLocalVariables If true, don't mark local variables as
   /// 'referenced'.
   /// \param StopAt Subexpressions that we shouldn't recurse into.
-  void MarkDeclarationsReferencedInExpr(
-      Expr *E, bool SkipLocalVariables = false,
-      ArrayRef<const Expr *> StopAt = std::nullopt);
+  void MarkDeclarationsReferencedInExpr(Expr *E,
+                                        bool SkipLocalVariables = false,
+                                        ArrayRef<const Expr *> StopAt = {});
 
   /// Try to convert an expression \p E to type \p Ty. Returns the result of the
   /// conversion.
@@ -6772,7 +6732,7 @@ public:
   DiagnoseEmptyLookup(Scope *S, CXXScopeSpec &SS, LookupResult &R,
                       CorrectionCandidateCallback &CCC,
                       TemplateArgumentListInfo *ExplicitTemplateArgs = nullptr,
-                      ArrayRef<Expr *> Args = std::nullopt,
+                      ArrayRef<Expr *> Args = {},
                       DeclContext *LookupCtx = nullptr,
                       TypoExpr **Out = nullptr);
 
@@ -6829,7 +6789,7 @@ public:
 
   ExprResult BuildPredefinedExpr(SourceLocation Loc, PredefinedIdentKind IK);
   ExprResult ActOnPredefinedExpr(SourceLocation Loc, tok::TokenKind Kind);
-  ExprResult ActOnIntegerConstant(SourceLocation Loc, uint64_t Val);
+  ExprResult ActOnIntegerConstant(SourceLocation Loc, int64_t Val);
 
   bool CheckLoopHintExpr(Expr *E, SourceLocation Loc, bool AllowZero);
 
@@ -10040,6 +10000,7 @@ public:
     CCEK_CaseValue,    ///< Expression in a case label.
     CCEK_Enumerator,   ///< Enumerator value with fixed underlying type.
     CCEK_TemplateArg,  ///< Value of a non-type template parameter.
+    CCEK_InjectedTTP,  ///< Injected parameter of a template template parameter.
     CCEK_ArrayBound,   ///< Array bound in array declarator or new-expression.
     CCEK_ExplicitBool, ///< Condition in an explicit(bool) specifier.
     CCEK_Noexcept,     ///< Condition in a noexcept(bool) specifier.
@@ -10200,15 +10161,18 @@ public:
   /// \param PartialOverloading true if we are performing "partial" overloading
   /// based on an incomplete set of function arguments. This feature is used by
   /// code completion.
-  void AddOverloadCandidate(
-      FunctionDecl *Function, DeclAccessPair FoundDecl, ArrayRef<Expr *> Args,
-      OverloadCandidateSet &CandidateSet, bool SuppressUserConversions = false,
-      bool PartialOverloading = false, bool AllowExplicit = true,
-      bool AllowExplicitConversion = false,
-      ADLCallKind IsADLCandidate = ADLCallKind::NotADL,
-      ConversionSequenceList EarlyConversions = std::nullopt,
-      OverloadCandidateParamOrder PO = {},
-      bool AggregateCandidateDeduction = false);
+  void AddOverloadCandidate(FunctionDecl *Function, DeclAccessPair FoundDecl,
+                            ArrayRef<Expr *> Args,
+                            OverloadCandidateSet &CandidateSet,
+                            bool SuppressUserConversions = false,
+                            bool PartialOverloading = false,
+                            bool AllowExplicit = true,
+                            bool AllowExplicitConversion = false,
+                            ADLCallKind IsADLCandidate = ADLCallKind::NotADL,
+                            ConversionSequenceList EarlyConversions = {},
+                            OverloadCandidateParamOrder PO = {},
+                            bool AggregateCandidateDeduction = false,
+                            bool HasMatchedPackOnParmToNonPackOnArg = false);
 
   /// Add all of the function declarations in the given function set to
   /// the overload candidate set.
@@ -10235,15 +10199,16 @@ public:
   /// both @c a1 and @c a2. If @p SuppressUserConversions, then don't
   /// allow user-defined conversions via constructors or conversion
   /// operators.
-  void
-  AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
-                     CXXRecordDecl *ActingContext, QualType ObjectType,
-                     Expr::Classification ObjectClassification,
-                     ArrayRef<Expr *> Args, OverloadCandidateSet &CandidateSet,
-                     bool SuppressUserConversions = false,
-                     bool PartialOverloading = false,
-                     ConversionSequenceList EarlyConversions = std::nullopt,
-                     OverloadCandidateParamOrder PO = {});
+  void AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
+                          CXXRecordDecl *ActingContext, QualType ObjectType,
+                          Expr::Classification ObjectClassification,
+                          ArrayRef<Expr *> Args,
+                          OverloadCandidateSet &CandidateSet,
+                          bool SuppressUserConversions = false,
+                          bool PartialOverloading = false,
+                          ConversionSequenceList EarlyConversions = {},
+                          OverloadCandidateParamOrder PO = {},
+                          bool HasMatchedPackOnParmToNonPackOnArg = false);
 
   /// Add a C++ member function template as a candidate to the candidate
   /// set, using template argument deduction to produce an appropriate member
@@ -10289,7 +10254,8 @@ public:
       CXXConversionDecl *Conversion, DeclAccessPair FoundDecl,
       CXXRecordDecl *ActingContext, Expr *From, QualType ToType,
       OverloadCandidateSet &CandidateSet, bool AllowObjCConversionOnExplicit,
-      bool AllowExplicit, bool AllowResultConversion = true);
+      bool AllowExplicit, bool AllowResultConversion = true,
+      bool HasMatchedPackOnParmToNonPackOnArg = false);
 
   /// Adds a conversion function template specialization
   /// candidate to the overload set, using template argument deduction
@@ -10704,6 +10670,11 @@ public:
   StmtResult ActOnDeclStmt(DeclGroupPtrTy Decl, SourceLocation StartLoc,
                            SourceLocation EndLoc);
   void ActOnForEachDeclStmt(DeclGroupPtrTy Decl);
+
+  /// DiagnoseDiscardedExprMarkedNodiscard - Given an expression that is
+  /// semantically a discarded-value expression, diagnose if any [[nodiscard]]
+  /// value has been discarded.
+  void DiagnoseDiscardedExprMarkedNodiscard(const Expr *E);
 
   /// DiagnoseUnusedExprResult - If the statement passed in is an expression
   /// whose result is unused, warn.
@@ -11263,6 +11234,7 @@ public:
                             ConceptDecl *NamedConcept, NamedDecl *FoundDecl,
                             const TemplateArgumentListInfo *TemplateArgs,
                             TemplateTypeParmDecl *ConstrainedParameter,
+                            QualType ConstrainedType,
                             SourceLocation EllipsisLoc);
 
   bool AttachTypeConstraint(AutoTypeLoc TL,
@@ -11679,6 +11651,33 @@ public:
     CTAK_DeducedFromArrayBound
   };
 
+  struct CheckTemplateArgumentInfo {
+    explicit CheckTemplateArgumentInfo(bool PartialOrdering = false,
+                                       bool MatchingTTP = false)
+        : PartialOrdering(PartialOrdering), MatchingTTP(MatchingTTP) {}
+    CheckTemplateArgumentInfo(const CheckTemplateArgumentInfo &) = delete;
+    CheckTemplateArgumentInfo &
+    operator=(const CheckTemplateArgumentInfo &) = delete;
+
+    /// The checked, converted argument will be added to the
+    /// end of these vectors.
+    SmallVector<TemplateArgument, 4> SugaredConverted, CanonicalConverted;
+
+    /// The check is being performed in the context of partial ordering.
+    bool PartialOrdering;
+
+    /// If true, assume these template arguments are
+    /// the injected template arguments for a template template parameter.
+    /// This will relax the requirement that all its possible uses are valid:
+    /// TTP checking is loose, and assumes that invalid uses will be diagnosed
+    /// during instantiation.
+    bool MatchingTTP;
+
+    /// Is set to true when, in the context of TTP matching, a pack parameter
+    /// matches non-pack arguments.
+    bool MatchedPackOnParmToNonPackOnArg = false;
+  };
+
   /// Check that the given template argument corresponds to the given
   /// template parameter.
   ///
@@ -11698,20 +11697,16 @@ public:
   /// \param ArgumentPackIndex The index into the argument pack where this
   /// argument will be placed. Only valid if the parameter is a parameter pack.
   ///
-  /// \param Converted The checked, converted argument will be added to the
-  /// end of this small vector.
-  ///
   /// \param CTAK Describes how we arrived at this particular template argument:
   /// explicitly written, deduced, etc.
   ///
   /// \returns true on error, false otherwise.
-  bool
-  CheckTemplateArgument(NamedDecl *Param, TemplateArgumentLoc &Arg,
-                        NamedDecl *Template, SourceLocation TemplateLoc,
-                        SourceLocation RAngleLoc, unsigned ArgumentPackIndex,
-                        SmallVectorImpl<TemplateArgument> &SugaredConverted,
-                        SmallVectorImpl<TemplateArgument> &CanonicalConverted,
-                        CheckTemplateArgumentKind CTAK);
+  bool CheckTemplateArgument(NamedDecl *Param, TemplateArgumentLoc &Arg,
+                             NamedDecl *Template, SourceLocation TemplateLoc,
+                             SourceLocation RAngleLoc,
+                             unsigned ArgumentPackIndex,
+                             CheckTemplateArgumentInfo &CTAI,
+                             CheckTemplateArgumentKind CTAK);
 
   /// Check that the given template arguments can be provided to
   /// the given template, converting the arguments along the way.
@@ -11744,21 +11739,15 @@ public:
   /// \param DefaultArgs any default arguments from template specialization
   /// deduction.
   ///
-  /// \param PartialOrderingTTP If true, assume these template arguments are
-  /// the injected template arguments for a template template parameter.
-  /// This will relax the requirement that all its possible uses are valid:
-  /// TTP checking is loose, and assumes that invalid uses will be diagnosed
-  /// during instantiation.
-  ///
   /// \returns true if an error occurred, false otherwise.
-  bool CheckTemplateArgumentList(
-      TemplateDecl *Template, SourceLocation TemplateLoc,
-      TemplateArgumentListInfo &TemplateArgs,
-      const DefaultArguments &DefaultArgs, bool PartialTemplateArgs,
-      SmallVectorImpl<TemplateArgument> &SugaredConverted,
-      SmallVectorImpl<TemplateArgument> &CanonicalConverted,
-      bool UpdateArgsWithConversions = true,
-      bool *ConstraintsNotSatisfied = nullptr, bool PartialOrderingTTP = false);
+  bool CheckTemplateArgumentList(TemplateDecl *Template,
+                                 SourceLocation TemplateLoc,
+                                 TemplateArgumentListInfo &TemplateArgs,
+                                 const DefaultArguments &DefaultArgs,
+                                 bool PartialTemplateArgs,
+                                 CheckTemplateArgumentInfo &CTAI,
+                                 bool UpdateArgsWithConversions = true,
+                                 bool *ConstraintsNotSatisfied = nullptr);
 
   bool CheckTemplateTypeArgument(
       TemplateTypeParmDecl *Param, TemplateArgumentLoc &Arg,
@@ -11783,6 +11772,7 @@ public:
                                    QualType InstantiatedParamType, Expr *Arg,
                                    TemplateArgument &SugaredConverted,
                                    TemplateArgument &CanonicalConverted,
+                                   bool MatchingTTP,
                                    CheckTemplateArgumentKind CTAK);
 
   /// Check a template argument against its corresponding
@@ -11792,7 +11782,9 @@ public:
   /// It returns true if an error occurred, and false otherwise.
   bool CheckTemplateTemplateArgument(TemplateTemplateParmDecl *Param,
                                      TemplateParameterList *Params,
-                                     TemplateArgumentLoc &Arg, bool IsDeduced);
+                                     TemplateArgumentLoc &Arg,
+                                     bool PartialOrdering,
+                                     bool *MatchedPackOnParmToNonPackOnArg);
 
   void NoteTemplateLocation(const NamedDecl &Decl,
                             std::optional<SourceRange> ParamRange = {});
@@ -11802,6 +11794,9 @@ public:
   /// declaration and the type of its corresponding non-type template
   /// parameter, produce an expression that properly refers to that
   /// declaration.
+  /// FIXME: This is used in some contexts where the resulting expression
+  /// doesn't need to live too long. It would be useful if this function
+  /// could return a temporary expression.
   ExprResult BuildExpressionFromDeclTemplateArgument(
       const TemplateArgument &Arg, QualType ParamType, SourceLocation Loc,
       NamedDecl *TemplateParam = nullptr);
@@ -12303,8 +12298,8 @@ public:
       SmallVectorImpl<DeducedTemplateArgument> &Deduced,
       unsigned NumExplicitlySpecified, FunctionDecl *&Specialization,
       sema::TemplateDeductionInfo &Info,
-      SmallVectorImpl<OriginalCallArg> const *OriginalCallArgs = nullptr,
-      bool PartialOverloading = false,
+      SmallVectorImpl<OriginalCallArg> const *OriginalCallArgs,
+      bool PartialOverloading, bool PartialOrdering,
       llvm::function_ref<bool()> CheckNonDependent = [] { return false; });
 
   /// Perform template argument deduction from a function call
@@ -12338,7 +12333,8 @@ public:
       TemplateArgumentListInfo *ExplicitTemplateArgs, ArrayRef<Expr *> Args,
       FunctionDecl *&Specialization, sema::TemplateDeductionInfo &Info,
       bool PartialOverloading, bool AggregateDeductionCandidate,
-      QualType ObjectType, Expr::Classification ObjectClassification,
+      bool PartialOrdering, QualType ObjectType,
+      Expr::Classification ObjectClassification,
       llvm::function_ref<bool(ArrayRef<QualType>)> CheckNonDependent);
 
   /// Deduce template arguments when taking the address of a function
@@ -12491,8 +12487,9 @@ public:
                                     sema::TemplateDeductionInfo &Info);
 
   bool isTemplateTemplateParameterAtLeastAsSpecializedAs(
-      TemplateParameterList *PParam, TemplateDecl *AArg,
-      const DefaultArguments &DefaultArgs, SourceLocation Loc, bool IsDeduced);
+      TemplateParameterList *PParam, TemplateDecl *PArg, TemplateDecl *AArg,
+      const DefaultArguments &DefaultArgs, SourceLocation ArgLoc,
+      bool PartialOrdering, bool *MatchedPackOnParmToNonPackOnArg);
 
   /// Mark which template parameters are used in a given expression.
   ///
@@ -12801,6 +12798,9 @@ public:
 
       /// We are instantiating a type alias template declaration.
       TypeAliasTemplateInstantiation,
+
+      /// We are performing partial ordering for template template parameters.
+      PartialOrderingTTP,
     } Kind;
 
     /// Was the enclosing context a non-instantiation SFINAE context?
@@ -13022,6 +13022,12 @@ public:
                           TemplateDecl *Entity, BuildingDeductionGuidesTag,
                           SourceRange InstantiationRange = SourceRange());
 
+    struct PartialOrderingTTP {};
+    /// \brief Note that we are partial ordering template template parameters.
+    InstantiatingTemplate(Sema &SemaRef, SourceLocation ArgLoc,
+                          PartialOrderingTTP, TemplateDecl *PArg,
+                          SourceRange InstantiationRange = SourceRange());
+
     /// Note that we have finished instantiating this template.
     void Clear();
 
@@ -13042,12 +13048,13 @@ public:
     bool CheckInstantiationDepth(SourceLocation PointOfInstantiation,
                                  SourceRange InstantiationRange);
 
-    InstantiatingTemplate(
-        Sema &SemaRef, CodeSynthesisContext::SynthesisKind Kind,
-        SourceLocation PointOfInstantiation, SourceRange InstantiationRange,
-        Decl *Entity, NamedDecl *Template = nullptr,
-        ArrayRef<TemplateArgument> TemplateArgs = std::nullopt,
-        sema::TemplateDeductionInfo *DeductionInfo = nullptr);
+    InstantiatingTemplate(Sema &SemaRef,
+                          CodeSynthesisContext::SynthesisKind Kind,
+                          SourceLocation PointOfInstantiation,
+                          SourceRange InstantiationRange, Decl *Entity,
+                          NamedDecl *Template = nullptr,
+                          ArrayRef<TemplateArgument> TemplateArgs = {},
+                          sema::TemplateDeductionInfo *DeductionInfo = nullptr);
 
     InstantiatingTemplate(const InstantiatingTemplate &) = delete;
 
@@ -13118,18 +13125,20 @@ public:
       auto *FD = dyn_cast<FunctionDecl>(DC);
       S.PushFunctionScope();
       S.PushExpressionEvaluationContext(
-          (FD && FD->isConsteval())
+          (FD && FD->isImmediateFunction())
               ? ExpressionEvaluationContext::ImmediateFunctionContext
               : ExpressionEvaluationContext::PotentiallyEvaluated);
       if (FD) {
+        auto &Current = S.currentEvaluationContext();
+        const auto &Parent = S.parentEvaluationContext();
+
         FD->setWillHaveBody(true);
-        S.ExprEvalContexts.back().InImmediateFunctionContext =
+        Current.InImmediateFunctionContext =
             FD->isImmediateFunction() ||
-            S.ExprEvalContexts[S.ExprEvalContexts.size() - 2]
-                .isConstantEvaluated() ||
-            S.ExprEvalContexts[S.ExprEvalContexts.size() - 2]
-                .isImmediateFunctionContext();
-        S.ExprEvalContexts.back().InImmediateEscalatingFunctionContext =
+            (isLambdaMethod(FD) && (Parent.isConstantEvaluated() ||
+                                    Parent.isImmediateFunctionContext()));
+
+        Current.InImmediateEscalatingFunctionContext =
             S.getLangOpts().CPlusPlus20 && FD->isImmediateEscalating();
       } else
         assert(isa<ObjCMethodDecl>(DC));
@@ -13482,7 +13491,8 @@ public:
   bool InstantiateClassTemplateSpecialization(
       SourceLocation PointOfInstantiation,
       ClassTemplateSpecializationDecl *ClassTemplateSpec,
-      TemplateSpecializationKind TSK, bool Complain = true);
+      TemplateSpecializationKind TSK, bool Complain = true,
+      bool PrimaryHasMatchedPackOnParmToNonPackOnArg = false);
 
   /// Instantiates the definitions of all of the member
   /// of the given class, which is an instantiation of a class template
@@ -13522,6 +13532,13 @@ public:
   bool inTemplateInstantiation() const {
     return CodeSynthesisContexts.size() > NonInstantiationEntries;
   }
+
+  using EntityPrinter = llvm::function_ref<void(llvm::raw_ostream &)>;
+
+  /// \brief create a Requirement::SubstitutionDiagnostic with only a
+  /// SubstitutedEntity and DiagLoc using ASTContext's allocator.
+  concepts::Requirement::SubstitutionDiagnostic *
+  createSubstDiagAt(SourceLocation Location, EntityPrinter Printer);
 
   ///@}
 
@@ -13862,6 +13879,13 @@ private:
   /// instantiation scope, and set the parameter names to those used
   /// in the template.
   bool addInstantiatedParametersToScope(
+      FunctionDecl *Function, const FunctionDecl *PatternDecl,
+      LocalInstantiationScope &Scope,
+      const MultiLevelTemplateArgumentList &TemplateArgs);
+
+  /// Introduce the instantiated captures of the lambda into the local
+  /// instantiation scope.
+  bool addInstantiatedCapturesToScope(
       FunctionDecl *Function, const FunctionDecl *PatternDecl,
       LocalInstantiationScope &Scope,
       const MultiLevelTemplateArgumentList &TemplateArgs);
@@ -14305,7 +14329,7 @@ public:
                                    SourceLocation EllipsisLoc, Expr *IndexExpr,
                                    SourceLocation RSquareLoc,
                                    ArrayRef<Expr *> ExpandedExprs = {},
-                                   bool EmptyPack = false);
+                                   bool FullySubstituted = false);
 
   /// Handle a C++1z fold-expression: ( expr op ... op expr ).
   ExprResult ActOnCXXFoldExpr(Scope *S, SourceLocation LParenLoc, Expr *LHS,
@@ -14546,16 +14570,9 @@ private:
   // The current stack of constraint satisfactions, so we can exit-early.
   llvm::SmallVector<SatisfactionStackEntryTy, 10> SatisfactionStack;
 
-  /// Introduce the instantiated captures of the lambda into the local
-  /// instantiation scope.
-  bool addInstantiatedCapturesToScope(
-      FunctionDecl *Function, const FunctionDecl *PatternDecl,
-      LocalInstantiationScope &Scope,
-      const MultiLevelTemplateArgumentList &TemplateArgs);
-
-  /// Used by SetupConstraintCheckingTemplateArgumentsAndScope to recursively(in
-  /// the case of lambdas) set up the LocalInstantiationScope of the current
-  /// function.
+  /// Used by SetupConstraintCheckingTemplateArgumentsAndScope to set up the
+  /// LocalInstantiationScope of the current non-lambda function. For lambdas,
+  /// use LambdaScopeForCallOperatorInstantiationRAII.
   bool
   SetupConstraintScope(FunctionDecl *FD,
                        std::optional<ArrayRef<TemplateArgument>> TemplateArgs,
@@ -15059,6 +15076,12 @@ public:
     return hasAcceptableDefinition(D, &Hidden, Kind);
   }
 
+  /// Try to parse the conditional expression attached to an effect attribute
+  /// (e.g. 'nonblocking'). (c.f. Sema::ActOnNoexceptSpec). Return an empty
+  /// optional on error.
+  std::optional<FunctionEffectMode>
+  ActOnEffectExpression(Expr *CondExpr, StringRef AttributeName);
+
 private:
   /// The implementation of RequireCompleteType
   bool RequireCompleteTypeImpl(SourceLocation Loc, QualType T,
@@ -15087,6 +15110,108 @@ public:
   std::string getFixItZeroInitializerForType(QualType T,
                                              SourceLocation Loc) const;
   std::string getFixItZeroLiteralForType(QualType T, SourceLocation Loc) const;
+
+  ///@}
+
+  //
+  //
+  // -------------------------------------------------------------------------
+  //
+  //
+
+  /// \name Function Effects
+  /// Implementations are in SemaFunctionEffects.cpp
+  ///@{
+public:
+  struct FunctionEffectDiff {
+    enum class Kind { Added, Removed, ConditionMismatch };
+
+    FunctionEffect::Kind EffectKind;
+    Kind DiffKind;
+    std::optional<FunctionEffectWithCondition>
+        Old; // Invalid when 'Kind' is 'Added'.
+    std::optional<FunctionEffectWithCondition>
+        New; // Invalid when 'Kind' is 'Removed'.
+
+    StringRef effectName() const {
+      if (Old)
+        return Old.value().Effect.name();
+      return New.value().Effect.name();
+    }
+
+    /// Describes the result of effects differing between a base class's virtual
+    /// method and an overriding method in a subclass.
+    enum class OverrideResult {
+      NoAction,
+      Warn,
+      Merge // Merge missing effect from base to derived.
+    };
+
+    /// Return true if adding or removing the effect as part of a type
+    /// conversion should generate a diagnostic.
+    bool shouldDiagnoseConversion(QualType SrcType,
+                                  const FunctionEffectsRef &SrcFX,
+                                  QualType DstType,
+                                  const FunctionEffectsRef &DstFX) const;
+
+    /// Return true if adding or removing the effect in a redeclaration should
+    /// generate a diagnostic.
+    bool shouldDiagnoseRedeclaration(const FunctionDecl &OldFunction,
+                                     const FunctionEffectsRef &OldFX,
+                                     const FunctionDecl &NewFunction,
+                                     const FunctionEffectsRef &NewFX) const;
+
+    /// Return true if adding or removing the effect in a C++ virtual method
+    /// override should generate a diagnostic.
+    OverrideResult shouldDiagnoseMethodOverride(
+        const CXXMethodDecl &OldMethod, const FunctionEffectsRef &OldFX,
+        const CXXMethodDecl &NewMethod, const FunctionEffectsRef &NewFX) const;
+  };
+
+  struct FunctionEffectDiffVector : public SmallVector<FunctionEffectDiff> {
+    /// Caller should short-circuit by checking for equality first.
+    FunctionEffectDiffVector(const FunctionEffectsRef &Old,
+                             const FunctionEffectsRef &New);
+  };
+
+  /// All functions/lambdas/blocks which have bodies and which have a non-empty
+  /// FunctionEffectsRef to be verified.
+  SmallVector<const Decl *> DeclsWithEffectsToVerify;
+
+  /// The union of all effects present on DeclsWithEffectsToVerify. Conditions
+  /// are all null.
+  FunctionEffectKindSet AllEffectsToVerify;
+
+public:
+  /// Warn and return true if adding a function effect to a set would create a
+  /// conflict.
+  bool diagnoseConflictingFunctionEffect(const FunctionEffectsRef &FX,
+                                         const FunctionEffectWithCondition &EC,
+                                         SourceLocation NewAttrLoc);
+
+  // Report a failure to merge function effects between declarations due to a
+  // conflict.
+  void
+  diagnoseFunctionEffectMergeConflicts(const FunctionEffectSet::Conflicts &Errs,
+                                       SourceLocation NewLoc,
+                                       SourceLocation OldLoc);
+
+  /// Inline checks from the start of maybeAddDeclWithEffects, to
+  /// minimize performance impact on code not using effects.
+  template <class FuncOrBlockDecl>
+  void maybeAddDeclWithEffects(FuncOrBlockDecl *D) {
+    if (Context.hasAnyFunctionEffects())
+      if (FunctionEffectsRef FX = D->getFunctionEffects(); !FX.empty())
+        maybeAddDeclWithEffects(D, FX);
+  }
+
+  /// Potentially add a FunctionDecl or BlockDecl to DeclsWithEffectsToVerify.
+  void maybeAddDeclWithEffects(const Decl *D, const FunctionEffectsRef &FX);
+
+  /// Unconditionally add a Decl to DeclsWithEfffectsToVerify.
+  void addDeclWithEffects(const Decl *D, const FunctionEffectsRef &FX);
+
+  void performFunctionEffectAnalysis(TranslationUnitDecl *TU);
 
   ///@}
 };

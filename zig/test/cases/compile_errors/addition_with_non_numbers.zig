@@ -8,7 +8,5 @@ export fn entry() usize {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :4:29: error: invalid operands to binary expression: 'struct' and 'struct'

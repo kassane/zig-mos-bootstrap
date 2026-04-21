@@ -8,11 +8,12 @@ const Node = struct {
 
 const NodeAligned = struct {
     payload: i32,
-    children: []align(@alignOf(NodeAligned)) NodeAligned,
+    children: []align(1) NodeAligned,
 };
 
 test "struct contains slice of itself" {
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     var other_nodes = [_]Node{
         Node{
@@ -51,8 +52,8 @@ test "struct contains slice of itself" {
 }
 
 test "struct contains aligned slice of itself" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     var other_nodes = [_]NodeAligned{
         NodeAligned{

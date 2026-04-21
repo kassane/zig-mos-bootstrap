@@ -5,7 +5,5 @@ comptime {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :3:32: error: null pointer casted to type '*i32'

@@ -15,12 +15,12 @@ pub const Curve25519 = struct {
     x: Fe,
 
     /// Decode a Curve25519 point from its compressed (X) coordinates.
-    pub inline fn fromBytes(s: [32]u8) Curve25519 {
+    pub fn fromBytes(s: [32]u8) Curve25519 {
         return .{ .x = Fe.fromBytes(s) };
     }
 
     /// Encode a Curve25519 point.
-    pub inline fn toBytes(p: Curve25519) [32]u8 {
+    pub fn toBytes(p: Curve25519) [32]u8 {
         return p.x.toBytes();
     }
 
@@ -101,6 +101,11 @@ pub const Curve25519 = struct {
         return try ladder(p, s, 256);
     }
 
+    /// Elligator2 map for Curve25519.
+    pub fn elligator2(r: Fe) Curve25519 {
+        return .{ .x = crypto.ecc.Edwards25519.elligator2(r).x };
+    }
+
     /// Compute the Curve25519 equivalent to an Edwards25519 point.
     ///
     /// Note that the function doesn't check that the input point is
@@ -124,9 +129,9 @@ test "curve25519" {
     const p = try Curve25519.basePoint.clampedMul(s);
     try p.rejectIdentity();
     var buf: [128]u8 = undefined;
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buf, "{s}", .{std.fmt.fmtSliceHexUpper(&p.toBytes())}), "E6F2A4D1C28EE5C7AD0329268255A468AD407D2672824C0C0EB30EA6EF450145");
+    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buf, "{X}", .{&p.toBytes()}), "E6F2A4D1C28EE5C7AD0329268255A468AD407D2672824C0C0EB30EA6EF450145");
     const q = try p.clampedMul(s);
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buf, "{s}", .{std.fmt.fmtSliceHexUpper(&q.toBytes())}), "3614E119FFE55EC55B87D6B19971A9F4CBC78EFE80BEC55B96392BABCC712537");
+    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&buf, "{X}", .{&q.toBytes()}), "3614E119FFE55EC55B87D6B19971A9F4CBC78EFE80BEC55B96392BABCC712537");
 
     try Curve25519.rejectNonCanonical(s);
     s[31] |= 0x80;
@@ -143,6 +148,23 @@ test "non-affine edwards25519 to curve25519 projection" {
     var expected: [32]u8 = undefined;
     _ = std.fmt.hexToBytes(&expected, expected_hex) catch unreachable;
     try std.testing.expectEqualSlices(u8, &xp.toBytes(), &expected);
+}
+
+test "elligator2" {
+    const Fe = Curve25519.Fe;
+
+    // RFC 9380 Appendix J.4.2 test vector (curve25519_XMD:SHA-512_ELL2_NU_)
+    // u = 0x608d892b641f0328523802a6603427c26e55e6f27e71a91a478148d45b5093cd
+    // Q.x = 0x51125222da5e763d97f3c10fcc92ea6860b9ccbbd2eb1285728f566721c1e65b
+    const u = Fe.fromBytes(.{
+        0xcd, 0x93, 0x50, 0x5b, 0xd4, 0x48, 0x81, 0x47, 0x1a, 0xa9, 0x71, 0x7e, 0xf2, 0xe6, 0x55, 0x6e,
+        0xc2, 0x27, 0x34, 0x60, 0xa6, 0x02, 0x38, 0x52, 0x28, 0x03, 0x1f, 0x64, 0x2b, 0x89, 0x8d, 0x60,
+    });
+    const p = Curve25519.elligator2(u);
+    try std.testing.expectEqual([32]u8{
+        0x5b, 0xe6, 0xc1, 0x21, 0x67, 0x56, 0x8f, 0x72, 0x85, 0x12, 0xeb, 0xd2, 0xbb, 0xcc, 0xb9, 0x60,
+        0x68, 0xea, 0x92, 0xcc, 0x0f, 0xc1, 0xf3, 0x97, 0x3d, 0x76, 0x5e, 0xda, 0x22, 0x52, 0x12, 0x51,
+    }, p.toBytes());
 }
 
 test "small order check" {

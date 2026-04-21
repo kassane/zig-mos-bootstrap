@@ -10,7 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #ifndef LLVM_CODEGEN_TARGETINSTRINFO_H
 #define LLVM_CODEGEN_TARGETINSTRINFO_H
 
@@ -137,6 +136,10 @@ public:
                                          const TargetRegisterInfo *TRI,
                                          const MachineFunction &MF) const;
 
+  /// Returns true if MI is an instruction we are unable to reason about
+  /// (like a call or something with unmodeled side effects).
+  virtual bool isGlobalMemoryObject(const MachineInstr *MI) const;
+
   /// Return true if the instruction is trivially rematerializable, meaning it
   /// has no side effects and requires no operands that aren't always available.
   /// This means the only allowed uses are constants and unallocatable physical
@@ -158,6 +161,12 @@ public:
   virtual bool isSafeToSink(MachineInstr &MI, MachineBasicBlock *SuccToSinkTo,
                             MachineCycleInfo *CI) const {
     return true;
+  }
+
+  /// For a "cheap" instruction which doesn't enable additional sinking,
+  /// should MachineSink break a critical edge to sink it anyways?
+  virtual bool shouldBreakCriticalEdgeToSink(MachineInstr &MI) const {
+    return false;
   }
 
 protected:
@@ -801,7 +810,7 @@ public:
     ///
     /// Once this function is called, no other functions on this object are
     /// valid; the loop has been removed.
-    virtual void disposed() = 0;
+    virtual void disposed(LiveIntervals *LIS = nullptr) {}
 
     /// Return true if the target can expand pipelined schedule with modulo
     /// variable expansion.
@@ -1133,13 +1142,14 @@ public:
   /// register, \p VReg is the register being assigned. This additional register
   /// argument is needed for certain targets when invoked from RegAllocFast to
   /// map the spilled physical register to its virtual register. A null register
-  /// can be passed elsewhere.
-  virtual void storeRegToStackSlot(MachineBasicBlock &MBB,
-                                   MachineBasicBlock::iterator MI,
-                                   Register SrcReg, bool isKill, int FrameIndex,
-                                   const TargetRegisterClass *RC,
-                                   const TargetRegisterInfo *TRI,
-                                   Register VReg) const {
+  /// can be passed elsewhere. The \p Flags is used to set appropriate machine
+  /// flags on the spill instruction e.g. FrameSetup flag on a callee saved
+  /// register spill instruction, part of prologue, during the frame lowering.
+  virtual void storeRegToStackSlot(
+      MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
+      bool isKill, int FrameIndex, const TargetRegisterClass *RC,
+      const TargetRegisterInfo *TRI, Register VReg,
+      MachineInstr::MIFlag Flags = MachineInstr::NoFlags) const {
     llvm_unreachable("Target didn't implement "
                      "TargetInstrInfo::storeRegToStackSlot!");
   }
@@ -1151,13 +1161,14 @@ public:
   /// register, \p VReg is the register being assigned. This additional register
   /// argument is needed for certain targets when invoked from RegAllocFast to
   /// map the loaded physical register to its virtual register. A null register
-  /// can be passed elsewhere.
-  virtual void loadRegFromStackSlot(MachineBasicBlock &MBB,
-                                    MachineBasicBlock::iterator MI,
-                                    Register DestReg, int FrameIndex,
-                                    const TargetRegisterClass *RC,
-                                    const TargetRegisterInfo *TRI,
-                                    Register VReg) const {
+  /// can be passed elsewhere. The \p Flags is used to set appropriate machine
+  /// flags on the spill instruction e.g. FrameDestroy flag on a callee saved
+  /// register reload instruction, part of epilogue, during the frame lowering.
+  virtual void loadRegFromStackSlot(
+      MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register DestReg,
+      int FrameIndex, const TargetRegisterClass *RC,
+      const TargetRegisterInfo *TRI, Register VReg,
+      MachineInstr::MIFlag Flags = MachineInstr::NoFlags) const {
     llvm_unreachable("Target didn't implement "
                      "TargetInstrInfo::loadRegFromStackSlot!");
   }
@@ -1212,12 +1223,6 @@ public:
   MachineInstr *foldMemoryOperand(MachineInstr &MI, ArrayRef<unsigned> Ops,
                                   MachineInstr &LoadMI,
                                   LiveIntervals *LIS = nullptr) const;
-
-  // If the COPY instruction in MI can be folded to a stack operation, return
-  // the register class to use.
-  virtual const TargetRegisterClass *canFoldCopy(const MachineInstr &MI,
-                                                 const TargetInstrInfo &TII,
-                                                 unsigned FoldIdx) const;
 
   /// This function defines the logic to lower COPY instruction to
   /// target specific instruction(s).
@@ -2256,25 +2261,6 @@ public:
   virtual const MachineOperand &getCalleeOperand(const MachineInstr &MI) const {
     return MI.getOperand(0);
   }
-
-  virtual bool shouldOverlapInterval(const MachineInstr &MI) const {
-    return true;
-  }
-
-  /// Returns true if the operand can have more than TiedMax tied operands, and
-  /// the logic for determining tied operands is custom.
-  virtual bool hasCustomTiedOperands(unsigned Opcode) const {
-    return false;
-  }
-
-  /// For an instruction where hasCustomTiedOperands(), implement
-  /// MachinInstr.findTiedOperandIdx().
-  virtual unsigned findCustomTiedOperandIdx(const MachineInstr &MI,
-                                            unsigned OpIdx) const {
-    llvm_unreachable("target did not implement");
-  }
-
-  virtual bool shouldRematPhysRegCopy() const { return true; }
 
   /// Return the uniformity behavior of the given instruction.
   virtual InstructionUniformity

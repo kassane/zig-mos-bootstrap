@@ -110,6 +110,12 @@ bool GlobalValue::isInterposable() const {
 }
 
 bool GlobalValue::canBenefitFromLocalAlias() const {
+  if (isTagged()) {
+    // Cannot create local aliases to MTE tagged globals. The address of a
+    // tagged global includes a tag that is assigned by the loader in the
+    // GOT.
+    return false;
+  }
   // See AsmPrinter::getSymbolPreferLocal(). For a deduplicate comdat kind,
   // references to a discarded local symbol from outside the group are not
   // allowed, so avoid the local alias.
@@ -379,7 +385,6 @@ findBaseObject(const Constant *C, DenseSet<const GlobalAlias *> &Aliases,
         return nullptr;
       return findBaseObject(CE->getOperand(0), Aliases, Op);
     }
-    case Instruction::AddrSpaceCast:
     case Instruction::IntToPtr:
     case Instruction::PtrToInt:
     case Instruction::BitCast:

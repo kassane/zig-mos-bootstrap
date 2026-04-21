@@ -47,7 +47,6 @@ protected: // Can only create subclasses.
   bool SkipSpace = true;
   bool AllowAtInIdentifier = false;
   bool AllowHashInIdentifier = false;
-  bool DotAsIntSeparator = false;
   bool IsAtStartOfStatement = true;
   bool LexMasmHexFloats = false;
   bool LexMasmIntegers = false;

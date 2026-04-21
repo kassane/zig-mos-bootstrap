@@ -1,15 +1,13 @@
 //! The engines provided here should be initialized from an external source.
-//! For a thread-local cryptographically secure pseudo random number generator,
-//! use `std.crypto.random`.
 //! Be sure to use a CSPRNG when required, otherwise using a normal PRNG will
 //! be faster and use substantially less stack space.
+const Random = @This();
 
 const std = @import("std.zig");
 const math = std.math;
 const mem = std.mem;
 const assert = std.debug.assert;
 const maxInt = std.math.maxInt;
-const Random = @This();
 
 /// Fast unbiased random numbers.
 pub const DefaultPrng = Xoshiro256;
@@ -28,14 +26,34 @@ pub const Sfc64 = @import("Random/Sfc64.zig");
 pub const RomuTrio = @import("Random/RomuTrio.zig");
 pub const SplitMix64 = @import("Random/SplitMix64.zig");
 pub const ziggurat = @import("Random/ziggurat.zig");
+pub const lcg = @import("Random/lcg.zig");
 
+/// Any comparison of this field may result in illegal behavior, since it may be set to
+/// `undefined` in cases where the random implementation does not have any associated
+/// state.
 ptr: *anyopaque,
 fillFn: *const fn (ptr: *anyopaque, buf: []u8) void,
+
+pub const IoSource = struct {
+    io: std.Io,
+
+    pub fn interface(this: *const @This()) std.Random {
+        return .{
+            .ptr = @constCast(this),
+            .fillFn = fill,
+        };
+    }
+
+    fn fill(ptr: *anyopaque, buffer: []u8) void {
+        const this: *const @This() = @ptrCast(@alignCast(ptr));
+        this.io.random(buffer);
+    }
+};
 
 pub fn init(pointer: anytype, comptime fillFn: fn (ptr: @TypeOf(pointer), buf: []u8) void) Random {
     const Ptr = @TypeOf(pointer);
     assert(@typeInfo(Ptr) == .pointer); // Must be a pointer
-    assert(@typeInfo(Ptr).pointer.size == .One); // Must be a single-item pointer
+    assert(@typeInfo(Ptr).pointer.size == .one); // Must be a single-item pointer
     assert(@typeInfo(@typeInfo(Ptr).pointer.child) == .@"struct"); // Must point to a struct
     const gen = struct {
         fn fill(ptr: *anyopaque, buf: []u8) void {
@@ -53,6 +71,12 @@ pub fn init(pointer: anytype, comptime fillFn: fn (ptr: @TypeOf(pointer), buf: [
 /// Read random bytes into the specified buffer until full.
 pub fn bytes(r: Random, buf: []u8) void {
     r.fillFn(r.ptr, buf);
+}
+
+pub fn array(r: Random, comptime E: type, comptime N: usize) [N]E {
+    var result: [N]E = undefined;
+    bytes(r, &result);
+    return result;
 }
 
 pub fn boolean(r: Random) bool {
@@ -86,7 +110,7 @@ pub fn enumValueWithIndex(r: Random, comptime EnumType: type, comptime Index: ty
     const values = comptime std.enums.values(EnumType);
     comptime assert(values.len > 0); // can't return anything
     comptime assert(maxInt(Index) >= values.len - 1); // can't access all values
-    comptime if (values.len == 1) return values[0];
+    if (values.len == 1) return values[0];
 
     const index = if (comptime values.len - 1 == maxInt(Index))
         r.int(Index)
@@ -271,11 +295,10 @@ pub fn float(r: Random, comptime T: type) T {
             const rand = r.int(u64);
             var rand_lz = @clz(rand);
             if (rand_lz >= 41) {
-                // TODO: when #5177 or #489 is implemented,
-                // tell the compiler it is unlikely (1/2^41) to reach this point.
-                // (Same for the if branch and the f64 calculations below.)
+                @branchHint(.unlikely);
                 rand_lz = 41 + @clz(r.int(u64));
                 if (rand_lz == 41 + 64) {
+                    @branchHint(.unlikely);
                     // It is astronomically unlikely to reach this point.
                     rand_lz += @clz(r.int(u32) | 0x7FF);
                 }
@@ -297,6 +320,7 @@ pub fn float(r: Random, comptime T: type) T {
                     const addl_rand_lz = @clz(r.int(u64));
                     rand_lz += addl_rand_lz;
                     if (addl_rand_lz != 64) {
+                        @branchHint(.likely);
                         break;
                     }
                     if (rand_lz >= 1022) {

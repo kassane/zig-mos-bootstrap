@@ -10,7 +10,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-
 #ifndef LLVM_CODEGEN_TARGETPASSCONFIG_H
 #define LLVM_CODEGEN_TARGETPASSCONFIG_H
 
@@ -22,7 +21,7 @@
 
 namespace llvm {
 
-class LLVMTargetMachine;
+class TargetMachine;
 struct MachineSchedContext;
 class PassConfigImpl;
 class ScheduleDAGInstrs;
@@ -121,7 +120,7 @@ private:
   void setStartStopPasses();
 
 protected:
-  LLVMTargetMachine *TM;
+  TargetMachine *TM;
   PassConfigImpl *Impl = nullptr; // Internal data structures
   bool Initialized = false; // Flagged after all passes are configured.
 
@@ -149,7 +148,7 @@ protected:
   bool addCoreISelPasses();
 
 public:
-  TargetPassConfig(LLVMTargetMachine &TM, PassManagerBase &pm);
+  TargetPassConfig(TargetMachine &TM, PassManagerBase &PM);
   // Dummy constructor.
   TargetPassConfig();
 
@@ -297,10 +296,6 @@ public:
   /// register classes.
   virtual bool addGlobalInstructionSelect() { return true; }
 
-  /// Whether the target needs Machine Scheduling to function properly, even in
-  /// optnone functions.
-  virtual bool alwaysRequiresMachineScheduler() const { return false; }
-
   /// Add the complete, standard set of LLVM CodeGen passes.
   /// Fully developed targets will not generally override this.
   virtual void addMachinePasses();
@@ -418,7 +413,8 @@ protected:
   virtual void addFastRegAlloc();
 
   /// addOptimizedRegAlloc - Add passes related to register allocation.
-  /// LLVMTargetMachine provides standard regalloc passes for most targets.
+  /// CodeGenTargetMachineImpl provides standard regalloc passes for most
+  /// targets.
   virtual void addOptimizedRegAlloc();
 
   /// addPreRewrite - Add passes to the optimized register allocation pipeline
@@ -448,8 +444,6 @@ protected:
   /// This method may be implemented by targets that want to run passes after
   /// register allocation pass pipeline but before prolog-epilog insertion.
   virtual void addPostRegAlloc() { }
-
-  virtual void addPrePEI() { }
 
   /// Add passes that optimize machine instructions after register allocation.
   virtual void addMachineLateOptimization();
@@ -504,7 +498,7 @@ protected:
 };
 
 void registerCodeGenCallback(PassInstrumentationCallbacks &PIC,
-                             LLVMTargetMachine &);
+                             TargetMachine &);
 
 } // end namespace llvm
 

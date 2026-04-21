@@ -1,20 +1,19 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
 const comparef = @import("./comparef.zig");
-
-pub const panic = common.panic;
+const symbol = @import("../compiler_rt.zig").symbol;
 
 comptime {
-    if (common.want_aeabi) {
-        @export(&__aeabi_dcmpun, .{ .name = "__aeabi_dcmpun", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_dcmpun, "__aeabi_dcmpun");
     } else {
-        @export(&__unorddf2, .{ .name = "__unorddf2", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&__unorddf2, "__unorddf2");
     }
 }
 
-pub fn __unorddf2(a: f64, b: f64) callconv(.C) i32 {
+pub fn __unorddf2(a: f64, b: f64) callconv(.c) i32 {
     return comparef.unordcmp(f64, a, b);
 }
 
-fn __aeabi_dcmpun(a: f64, b: f64) callconv(.AAPCS) i32 {
+fn __aeabi_dcmpun(a: f64, b: f64) callconv(.{ .arm_aapcs = .{} }) i32 {
     return comparef.unordcmp(f64, a, b);
 }

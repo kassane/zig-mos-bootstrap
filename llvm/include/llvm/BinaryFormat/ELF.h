@@ -127,9 +127,11 @@ enum {
 // Versioning
 enum { EV_NONE = 0, EV_CURRENT = 1 };
 
-// Machine architectures
-// See current registered ELF machine architectures at:
-//    http://www.uxsglobal.com/developers/gabi/latest/ch4.eheader.html
+// Machine architectures.
+// At the time of writing, the list of registered machine architectures is
+// at https://groups.google.com/g/generic-abi/c/0kORSDcyhTE/m/ZRf_PvcHAAAJ
+// Please refer to https://groups.google.com/g/generic-abi for any further
+// updates.
 enum {
   EM_NONE = 0,           // No machine
   EM_M32 = 1,            // AT&T WE 32100
@@ -321,7 +323,6 @@ enum {
   EM_VE = 251,            // NEC SX-Aurora VE
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
-  EM_MOS = 6502,          // MOS Technologies 65xx
 };
 
 // Object file classes.
@@ -503,36 +504,6 @@ enum : unsigned {
                                     // relaxation to be applied
 };
 
-// Special values for the st_other field in the symbol table entry for MOS.
-enum {
-  // External symbol is in the zero page.
-  STO_MOS_ZEROPAGE = 0x20
-};
-
-// ELF relocation types for MOS
-enum {
-#include "ELFRelocs/MOS.def"
-};
-
-// https://llvm-mos.org/wiki/ELF_specification
-enum : unsigned {
-  EF_MOS_ARCH_6502 = 0x00000001, // Core NMOS 6502 instruction set, no BCD
-  EF_MOS_ARCH_6502_BCD = 0x00000002, // BCD support, including CLD and SED
-  EF_MOS_ARCH_6502X = 0x00000004, // "Illegal" NMOS 6502 instructions
-  EF_MOS_ARCH_65C02 = 0x00000008, // Core 65C02 instruction set
-  EF_MOS_ARCH_R65C02 = 0x00000010, // Rockwell extensions to 65C02 insns
-  EF_MOS_ARCH_W65C02 = 0x00000020, // WDC extensions to 65C02 insns
-  EF_MOS_ARCH_W65816 = 0x00000100, // 65816 instructions
-  EF_MOS_ARCH_65EL02 = 0x00000200, // 65EL02 instructions
-  EF_MOS_ARCH_65CE02 = 0x00000400,  // 65CE02 instructions
-  EF_MOS_ARCH_HUC6280 = 0x00000800,  // HuC6280 instructions
-  EF_MOS_ARCH_65DTV02 = 0x00001000,  // C64DTV 6502 instructions
-  EF_MOS_ARCH_4510 = 0x00002000,  // CSG 4510 instructions
-  EF_MOS_ARCH_45GS02 = 0x0004000, // 45GS02 instructions
-  EF_MOS_ARCH_SWEET16 = 0x00010000,   // SWEET16 instructions
-  EF_MOS_ARCH_SPC700 = 0x00020000   // SPC700 instructions
-};
-
 // ELF Relocation types for AVR
 enum {
 #include "ELFRelocs/AVR.def"
@@ -658,6 +629,8 @@ enum {
   EF_HEXAGON_MACH_V71 = 0x00000071,  // Hexagon V71
   EF_HEXAGON_MACH_V71T = 0x00008071, // Hexagon V71T
   EF_HEXAGON_MACH_V73 = 0x00000073,  // Hexagon V73
+  EF_HEXAGON_MACH_V75 = 0x00000075,  // Hexagon V75
+  EF_HEXAGON_MACH_V79 = 0x00000079,  // Hexagon V79
   EF_HEXAGON_MACH = 0x000003ff,      // Hexagon V..
 
   // Highest ISA version flags
@@ -678,6 +651,7 @@ enum {
   EF_HEXAGON_ISA_V71 = 0x00000071,  // Hexagon V71 ISA
   EF_HEXAGON_ISA_V73 = 0x00000073,  // Hexagon V73 ISA
   EF_HEXAGON_ISA_V75 = 0x00000075,  // Hexagon V75 ISA
+  EF_HEXAGON_ISA_V79 = 0x00000079,  // Hexagon V79 ISA
   EF_HEXAGON_ISA = 0x000003ff,      // Hexagon V.. ISA
 };
 
@@ -715,6 +689,9 @@ enum : unsigned {
 // ELF Relocation types for RISC-V
 enum {
 #include "ELFRelocs/RISCV.def"
+#define ELF_RISCV_NONSTANDARD_RELOC(_vendor, name, value) name = value,
+#include "ELFRelocs/RISCV_nonstandard.def"
+#undef ELF_RISCV_NONSTANDARD_RELOC
 };
 
 enum {
@@ -842,7 +819,7 @@ enum : unsigned {
   EF_AMDGPU_MACH_AMDGCN_GFX942          = 0x04c,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4D   = 0x04d,
   EF_AMDGPU_MACH_AMDGCN_GFX1201         = 0x04e,
-  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4F   = 0x04f,
+  EF_AMDGPU_MACH_AMDGCN_GFX950          = 0x04f,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X50   = 0x050,
   EF_AMDGPU_MACH_AMDGCN_GFX9_GENERIC    = 0x051,
   EF_AMDGPU_MACH_AMDGCN_GFX10_1_GENERIC = 0x052,
@@ -851,13 +828,14 @@ enum : unsigned {
   EF_AMDGPU_MACH_AMDGCN_GFX1152         = 0x055,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X56   = 0x056,
   EF_AMDGPU_MACH_AMDGCN_RESERVED_0X57   = 0x057,
-  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X58   = 0x058,
+  EF_AMDGPU_MACH_AMDGCN_GFX1153         = 0x058,
   EF_AMDGPU_MACH_AMDGCN_GFX12_GENERIC   = 0x059,
+  EF_AMDGPU_MACH_AMDGCN_GFX9_4_GENERIC  = 0x05f,
   // clang-format on
 
   // First/last AMDGCN-based processors.
   EF_AMDGPU_MACH_AMDGCN_FIRST = EF_AMDGPU_MACH_AMDGCN_GFX600,
-  EF_AMDGPU_MACH_AMDGCN_LAST = EF_AMDGPU_MACH_AMDGCN_GFX12_GENERIC,
+  EF_AMDGPU_MACH_AMDGCN_LAST = EF_AMDGPU_MACH_AMDGCN_GFX9_4_GENERIC,
 
   // Indicates if the "xnack" target feature is enabled for all code contained
   // in the object.
@@ -1180,6 +1158,8 @@ enum : unsigned {
   SHT_ARM_ATTRIBUTES = 0x70000003U,
   SHT_ARM_DEBUGOVERLAY = 0x70000004U,
   SHT_ARM_OVERLAYSECTION = 0x70000005U,
+  // Support for AArch64 build attributes
+  SHT_AARCH64_ATTRIBUTES = 0x70000003U,
   // Special aarch64-specific section for MTE support, as described in:
   // https://github.com/ARM-software/abi-aa/blob/main/pauthabielf64/pauthabielf64.rst#section-types
   SHT_AARCH64_AUTH_RELR = 0x70000004U,
@@ -1310,10 +1290,7 @@ enum : unsigned {
   SHF_MIPS_STRING = 0x80000000,
 
   // Make code section unreadable when in execute-only mode
-  SHF_ARM_PURECODE = 0x20000000,
-
-  // 8-bit addressable section
-  SHF_MOS_ZEROPAGE = 0x10000000
+  SHF_ARM_PURECODE = 0x20000000
 };
 
 // Section Group Flags
@@ -1757,6 +1734,7 @@ enum : unsigned {
   NT_ARM_ZA = 0x40c,
   NT_ARM_ZT = 0x40d,
   NT_ARM_FPMR = 0x40e,
+  NT_ARM_GCS = 0x410,
 
   NT_FILE = 0x46494c45,
   NT_PRXFPREG = 0x46e62b7f,

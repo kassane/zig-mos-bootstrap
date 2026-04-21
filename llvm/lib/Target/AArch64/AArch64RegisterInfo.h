@@ -53,7 +53,7 @@ public:
   const uint32_t *getDarwinCallPreservedMask(const MachineFunction &MF,
                                              CallingConv::ID) const;
 
-  unsigned getCSRFirstUseCost(const MachineFunction &MF) const override {
+  unsigned getCSRFirstUseCost() const override {
     // The cost will be compared against BlockFrequency where entry has the
     // value of 1 << 14. A value of 5 will choose to spill or split really
     // cold path instead of using a callee-saved register.
@@ -133,6 +133,11 @@ public:
 
   unsigned getRegPressureLimit(const TargetRegisterClass *RC,
                                MachineFunction &MF) const override;
+
+  bool getRegAllocationHints(Register VirtReg, ArrayRef<MCPhysReg> Order,
+                             SmallVectorImpl<MCPhysReg> &Hints,
+                             const MachineFunction &MF, const VirtRegMap *VRM,
+                             const LiveRegMatrix *Matrix) const override;
 
   unsigned getLocalAddressRegister(const MachineFunction &MF) const;
   bool regNeedsCFI(unsigned Reg, unsigned &RegToUseForCFI) const;

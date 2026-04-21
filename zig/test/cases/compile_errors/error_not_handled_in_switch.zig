@@ -13,8 +13,6 @@ fn foo(x: i32) !void {
 }
 
 // error
-// backend=llvm
-// target=native
 //
 // :2:26: error: switch must handle all possibilities
 // :2:26: note: unhandled error value: 'error.Bar'

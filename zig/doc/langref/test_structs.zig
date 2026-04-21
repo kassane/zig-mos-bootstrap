@@ -6,28 +6,13 @@ const Point = struct {
     y: f32,
 };
 
-// Maybe we want to pass it to OpenGL so we want to be particular about
-// how the bytes are arranged.
-const Point2 = packed struct {
-    x: f32,
-    y: f32,
-};
-
 // Declare an instance of a struct.
-const p = Point{
+const p: Point = .{
     .x = 0.12,
     .y = 0.34,
 };
 
-// Maybe we're not ready to fill out some of the fields.
-var p2 = Point{
-    .x = 0.12,
-    .y = undefined,
-};
-
-// Structs can have methods
-// Struct methods are not special, they are only namespaced
-// functions that you can call with dot syntax.
+// Functions in the struct's namespace can be called with dot syntax.
 const Vec3 = struct {
     x: f32,
     y: f32,
@@ -46,16 +31,15 @@ const Vec3 = struct {
     }
 };
 
-const expect = @import("std").testing.expect;
 test "dot product" {
     const v1 = Vec3.init(1.0, 0.0, 0.0);
     const v2 = Vec3.init(0.0, 1.0, 0.0);
-    try expect(v1.dot(v2) == 0.0);
+    try expectEqual(0.0, v1.dot(v2));
 
     // Other than being available to call with dot syntax, struct methods are
     // not special. You can reference them as any other declaration inside
     // the struct:
-    try expect(Vec3.dot(v1, v2) == 0.0);
+    try expectEqual(0.0, Vec3.dot(v1, v2));
 }
 
 // Structs can have declarations.
@@ -64,17 +48,17 @@ const Empty = struct {
     pub const PI = 3.14;
 };
 test "struct namespaced variable" {
-    try expect(Empty.PI == 3.14);
-    try expect(@sizeOf(Empty) == 0);
+    try expectEqual(3.14, Empty.PI);
+    try expectEqual(0, @sizeOf(Empty));
 
-    // you can still instantiate an empty struct
-    const does_nothing = Empty{};
+    // Empty structs can be instantiated the same as usual.
+    const does_nothing: Empty = .{};
 
     _ = does_nothing;
 }
 
-// struct field order is determined by the compiler for optimal performance.
-// however, you can still calculate a struct base pointer given a field pointer:
+// Struct field order is determined by the compiler, however, a base pointer
+// can be computed from a field pointer:
 fn setYBasedOnX(x: *f32, y: f32) void {
     const point: *Point = @fieldParentPtr("x", x);
     point.y = y;
@@ -85,11 +69,10 @@ test "field parent pointer" {
         .y = 0.5678,
     };
     setYBasedOnX(&point.x, 0.9);
-    try expect(point.y == 0.9);
+    try expectEqual(0.9, point.y);
 }
 
-// You can return a struct from a function. This is how we do generics
-// in Zig:
+// Structs can be returned from functions.
 fn LinkedList(comptime T: type) type {
     return struct {
         pub const Node = struct {
@@ -105,21 +88,20 @@ fn LinkedList(comptime T: type) type {
 }
 
 test "linked list" {
-    // Functions called at compile-time are memoized. This means you can
-    // do this:
-    try expect(LinkedList(i32) == LinkedList(i32));
+    // Functions called at compile-time are memoized.
+    try expectEqual(LinkedList(i32), LinkedList(i32));
 
     const list = LinkedList(i32){
         .first = null,
         .last = null,
         .len = 0,
     };
-    try expect(list.len == 0);
+    try expectEqual(0, list.len);
 
     // Since types are first class values you can instantiate the type
     // by assigning it to a variable:
     const ListOfInts = LinkedList(i32);
-    try expect(ListOfInts == LinkedList(i32));
+    try expectEqual(LinkedList(i32), ListOfInts);
 
     var node = ListOfInts.Node{
         .prev = null,
@@ -135,8 +117,10 @@ test "linked list" {
     // When using a pointer to a struct, fields can be accessed directly,
     // without explicitly dereferencing the pointer.
     // So you can do
-    try expect(list2.first.?.data == 1234);
-    // instead of try expect(list2.first.?.*.data == 1234);
+    try expectEqual(1234, list2.first.?.data);
+    // instead of try expectEqual(1234, list2.first.?.*.data);
 }
+
+const expectEqual = @import("std").testing.expectEqual;
 
 // test

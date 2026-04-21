@@ -1,5 +1,5 @@
 /* O_*, F_*, FD_* bit values for Linux.
-   Copyright (C) 2001-2024 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -200,6 +200,8 @@
 # define F_SETLEASE	1024	/* Set a lease.  */
 # define F_GETLEASE	1025	/* Enquire what lease is active.  */
 # define F_NOTIFY	1026	/* Request notifications on a directory.  */
+# define F_DUPFD_QUERY  1027    /* Compare two file descriptors for sameness.  */
+# define F_CREATED_QUERY 1028   /* Was the file just created?  */
 # define F_SETPIPE_SZ	1031	/* Set pipe page size array.  */
 # define F_GETPIPE_SZ	1032	/* Set pipe page size array.  */
 # define F_ADD_SEALS	1033	/* Add seals to file.  */
@@ -217,6 +219,9 @@
 
 /* For F_[GET|SET]FD.  */
 #define FD_CLOEXEC	1	/* Actually anything with low bit set goes */
+#ifdef __USE_GNU
+# define FD_PIDFS_ROOT	-10002	/* Root of the pidfs filesystem */
+#endif
 
 #ifndef F_RDLCK
 /* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
@@ -377,6 +382,13 @@ struct file_handle
 						identity and may not
 						be usable to
 						open_by_handle_at.  */
+# define AT_HANDLE_MNT_ID_UNIQUE 1 /* Return the 64-bit unique mount
+				      ID.  */
+# define AT_HANDLE_CONNECTABLE 2 /* Request a connectable file handle */
+
+/* Flags for execveat2(2). */
+# define AT_EXECVE_CHECK 0x10000 /* Only perform a check if execution
+				    would be allowed */
 #endif
 
 __BEGIN_DECLS
@@ -451,6 +463,33 @@ extern int name_to_handle_at (int __dfd, const char *__name,
 extern int open_by_handle_at (int __mountdirfd, struct file_handle *__handle,
 			      int __flags);
 
+#ifdef __has_include
+# if __has_include ("linux/openat2.h")
+#  include "linux/openat2.h"
+#  define __glibc_has_open_how 1
+# endif
+#endif
+
+#include <bits/openat2.h>
+
+/* Similar to `openat' but the arguments are packed on HOW with the size
+   USIZE.  If flags and mode from HOW are non-zero, then openat2 operates
+   like openat.
+
+   Unlike openat, unknown or invalid flags result in an error (EINVAL),
+   rather than being ignored.  The mode must be zero unless one of O_CREAT
+   or O_TMPFILE are set.
+
+   The kernel does not support legacy non-LFS interface.  */
+extern int openat2 (int __dfd, const char * __filename,
+		    const struct open_how * __how,
+		    __SIZE_TYPE__ __usize)
+     __nonnull ((2, 3));
+
 #endif	/* use GNU */
+
+#if __USE_FORTIFY_LEVEL > 0 && defined __fortify_function
+# include <bits/fcntl-linux-fortify.h>
+#endif
 
 __END_DECLS

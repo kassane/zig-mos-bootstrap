@@ -1,12 +1,10 @@
-const common = @import("./common.zig");
+const symbol = @import("../compiler_rt.zig").symbol;
 const floatFromInt = @import("./float_from_int.zig").floatFromInt;
 
-pub const panic = common.panic;
-
 comptime {
-    @export(&__floatdihf, .{ .name = "__floatdihf", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&__floatdihf, "__floatdihf");
 }
 
-fn __floatdihf(a: i64) callconv(.C) f16 {
+fn __floatdihf(a: i64) callconv(.c) f16 {
     return floatFromInt(f16, a);
 }

@@ -3,19 +3,18 @@ const builtin = @import("builtin");
 const arch = builtin.cpu.arch;
 const os = builtin.os.tag;
 const abi = builtin.abi;
-const common = @import("common.zig");
-
-pub const panic = common.panic;
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 
 comptime {
-    if (arch == .x86 and os == .windows and (abi == .msvc or abi == .itanium) and builtin.zig_backend != .stage2_c) {
+    if (compiler_rt.want_windows_x86_msvc_abi) {
         // Don't let LLVM apply the stdcall name mangling on those MSVC builtins
-        @export(&_allrem, .{ .name = "\x01__allrem", .linkage = common.linkage, .visibility = common.visibility });
-        @export(&_aullrem, .{ .name = "\x01__aullrem", .linkage = common.linkage, .visibility = common.visibility });
+        symbol(&_allrem, "\x01__allrem");
+        symbol(&_aullrem, "\x01__aullrem");
     }
 }
 
-pub fn _allrem(a: i64, b: i64) callconv(.Stdcall) i64 {
+pub fn _allrem(a: i64, b: i64) callconv(.{ .x86_stdcall = .{} }) i64 {
     const s_a = a >> (64 - 1);
     const s_b = b >> (64 - 1);
 
@@ -27,7 +26,7 @@ pub fn _allrem(a: i64, b: i64) callconv(.Stdcall) i64 {
     return (@as(i64, @bitCast(r)) ^ s) -% s;
 }
 
-pub fn _aullrem() callconv(.Naked) void {
+pub fn _aullrem() callconv(.naked) void {
     @setRuntimeSafety(false);
 
     // The stack layout is:

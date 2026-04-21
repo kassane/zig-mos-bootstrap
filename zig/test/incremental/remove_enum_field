@@ -1,6 +1,3 @@
-#target=x86_64-linux-selfhosted
-#target=x86_64-linux-cbe
-#target=x86_64-windows-cbe
 #update=initial version
 #file=main.zig
 const MyEnum = enum(u8) {
@@ -8,9 +5,11 @@ const MyEnum = enum(u8) {
     bar = 2,
 };
 pub fn main() !void {
-    try std.io.getStdOut().writer().print("{}\n", .{@intFromEnum(MyEnum.foo)});
+    var stdout_writer = std.Io.File.stdout().writerStreaming(io, &.{});
+    try stdout_writer.interface.print("{}\n", .{@intFromEnum(MyEnum.foo)});
 }
 const std = @import("std");
+const io = std.Io.Threaded.global_single_threaded.io();
 #expect_stdout="1\n"
 #update=remove enum field
 #file=main.zig
@@ -19,7 +18,10 @@ const MyEnum = enum(u8) {
     bar = 2,
 };
 pub fn main() !void {
-    try std.io.getStdOut().writer().print("{}\n", .{@intFromEnum(MyEnum.foo)});
+    var stdout_writer = std.Io.File.stdout().writerStreaming(io, &.{});
+    try stdout_writer.interface.print("{}\n", .{@intFromEnum(MyEnum.foo)});
 }
 const std = @import("std");
-#expect_error=ignored
+const io = std.Io.Threaded.global_single_threaded.io();
+#expect_error=main.zig:7:69: error: enum 'main.MyEnum' has no member named 'foo'
+#expect_error=main.zig:1:16: note: enum declared here

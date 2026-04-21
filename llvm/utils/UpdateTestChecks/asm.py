@@ -96,12 +96,6 @@ ASM_FUNCTION_MIPS_RE = re.compile(
     flags=(re.M | re.S),
 )
 
-ASM_FUNCTION_MOS_RE = re.compile(
-    r'^_?(?P<func>[^:]+):[ \t]*;[ \t]*@"?(?P=func)"?\n'
-    r'(?P<body>.*?)\s*' # (body of the function)
-    r'.Lfunc_end[0-9]+:\n',
-    flags=(re.M | re.S))
-
 ASM_FUNCTION_MSP430_RE = re.compile(
     r'^_?(?P<func>[^:]+):[ \t]*;+[ \t]*@"?(?P=func)"?\n[^:]*?'
     r"(?P<body>.*?)\n"
@@ -225,6 +219,11 @@ ASM_FUNCTION_VE_RE = re.compile(
     r"(?:\s*\.?Lfunc_begin[^:\n]*:\n)?[^:]*?"
     r"(?P<body>^##?[ \t]+[^:]+:.*?)\s*"
     r".Lfunc_end[0-9]+:\n",
+    flags=(re.M | re.S),
+)
+
+ASM_FUNCTION_XTENSA_RE = re.compile(
+    r"^(?P<func>[^:]+): +# @(?P=func)\n(?P<body>.*?)\n\.Lfunc_end\d+:\n",
     flags=(re.M | re.S),
 )
 
@@ -399,16 +398,6 @@ def scrub_asm_mips(asm, args):
     return asm
 
 
-def scrub_asm_mos(asm, args):
-  # Scrub runs of whitespace out of the assembly, but leave the leading
-  # whitespace in place.
-  asm = common.SCRUB_WHITESPACE_RE.sub(r' ', asm)
-  # Expand the tabs used for indentation.
-  asm = string.expandtabs(asm, 2)
-  # Strip trailing whitespace.
-  asm = common.SCRUB_TRAILING_WHITESPACE_RE.sub(r'', asm)
-  return asm
-
 def scrub_asm_msp430(asm, args):
     # Scrub runs of whitespace out of the assembly, but leave the leading
     # whitespace in place.
@@ -508,6 +497,17 @@ def scrub_asm_ve(asm, args):
     return asm
 
 
+def scrub_asm_xtensa(asm, args):
+    # Scrub runs of whitespace out of the assembly, but leave the leading
+    # whitespace in place.
+    asm = common.SCRUB_WHITESPACE_RE.sub(r" ", asm)
+    # Expand the tabs used for indentation.
+    asm = string.expandtabs(asm, 2)
+    # Strip trailing whitespace.
+    asm = common.SCRUB_TRAILING_WHITESPACE_RE.sub(r"", asm)
+    return asm
+
+
 def scrub_asm_csky(asm, args):
     # Scrub runs of whitespace out of the assembly, but leave the leading
     # whitespace in place.
@@ -577,7 +577,6 @@ def get_run_handler(triple):
         "thumbv7-apple-ios": (scrub_asm_arm_eabi, ASM_FUNCTION_ARM_IOS_RE),
         "m68k": (scrub_asm_m68k, ASM_FUNCTION_M68K_RE),
         "mips": (scrub_asm_mips, ASM_FUNCTION_MIPS_RE),
-        "mos": (scrub_asm_mos, ASM_FUNCTION_MOS_RE),
         "msp430": (scrub_asm_msp430, ASM_FUNCTION_MSP430_RE),
         "avr": (scrub_asm_avr, ASM_FUNCTION_AVR_RE),
         "ppc32": (scrub_asm_powerpc, ASM_FUNCTION_PPC_RE),
@@ -593,6 +592,7 @@ def get_run_handler(triple):
         "wasm32": (scrub_asm_wasm, ASM_FUNCTION_WASM_RE),
         "wasm64": (scrub_asm_wasm, ASM_FUNCTION_WASM_RE),
         "ve": (scrub_asm_ve, ASM_FUNCTION_VE_RE),
+        "xtensa": (scrub_asm_xtensa, ASM_FUNCTION_XTENSA_RE),
         "csky": (scrub_asm_csky, ASM_FUNCTION_CSKY_RE),
         "nvptx": (scrub_asm_nvptx, ASM_FUNCTION_NVPTX_RE),
         "loongarch32": (scrub_asm_loongarch, ASM_FUNCTION_LOONGARCH_RE),

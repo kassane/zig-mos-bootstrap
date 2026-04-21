@@ -1,4 +1,4 @@
-; RUN: llc -mattr=avr6,sram < %s -march=avr | FileCheck %s
+; RUN: llc -mattr=avr6,sram < %s -mtriple=avr | FileCheck %s
 
 define void @store8(ptr %x, i8 %y) {
 ; CHECK-LABEL: store8:
@@ -94,8 +94,7 @@ while.end:                                        ; preds = %while.body, %entry
 
 define void @store8predec(ptr %x, i8 %y) {
 ; CHECK-LABEL: store8predec:
-; COM:LLVM-MOS: This is broken now.
-; COM:CHECK: st -{{[XYZ]}}, {{.*}}
+; CHECK: st -{{[XYZ]}}, {{.*}}
 entry:
   %tobool3 = icmp eq i8 %y, 0
   br i1 %tobool3, label %while.end, label %while.body
@@ -113,9 +112,8 @@ while.end:                                        ; preds = %while.body, %entry
 
 define void @store16predec(ptr %x, i16 %y) {
 ; CHECK-LABEL: store16predec:
-; COM:LLVM-MOS: This is broken now.
-; COM:CHECK: st -{{[XYZ]}}, {{.*}}
-; COM:CHECK: st -{{[XYZ]}}, {{.*}}
+; CHECK: st -{{[XYZ]}}, {{.*}}
+; CHECK: st -{{[XYZ]}}, {{.*}}
 entry:
   %tobool3 = icmp eq i16 %y, 0
   br i1 %tobool3, label %while.end, label %while.body

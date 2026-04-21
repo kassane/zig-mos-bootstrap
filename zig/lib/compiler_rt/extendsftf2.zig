@@ -1,21 +1,20 @@
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 const extendf = @import("./extendf.zig").extendf;
 
-pub const panic = common.panic;
-
 comptime {
-    if (common.want_ppc_abi) {
-        @export(&__extendsftf2, .{ .name = "__extendsfkf2", .linkage = common.linkage, .visibility = common.visibility });
-    } else if (common.want_sparc_abi) {
-        @export(&_Qp_stoq, .{ .name = "_Qp_stoq", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_ppc_abi) {
+        symbol(&__extendsftf2, "__extendsfkf2");
+    } else if (compiler_rt.want_sparc_abi) {
+        symbol(&_Qp_stoq, "_Qp_stoq");
     }
-    @export(&__extendsftf2, .{ .name = "__extendsftf2", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&__extendsftf2, "__extendsftf2");
 }
 
-pub fn __extendsftf2(a: f32) callconv(.C) f128 {
+pub fn __extendsftf2(a: f32) callconv(.c) f128 {
     return extendf(f128, f32, @as(u32, @bitCast(a)));
 }
 
-fn _Qp_stoq(c: *f128, a: f32) callconv(.C) void {
+fn _Qp_stoq(c: *f128, a: f32) callconv(.c) void {
     c.* = extendf(f128, f32, @as(u32, @bitCast(a)));
 }

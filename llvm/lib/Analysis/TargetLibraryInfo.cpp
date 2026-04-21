@@ -10,7 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
@@ -197,43 +196,6 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
   TLI.setUnavailable(LibFunc_fputs_unlocked);
   TLI.setUnavailable(LibFunc_fgets_unlocked);
 
-  if (T.getArch() == Triple::mos) {
-    // The MOS target doesn't come with a standard library yet.
-    TLI.disableAllFunctions();
-    // Freestanding functions are available.
-    TLI.setAvailable(LibFunc_memcpy);
-    TLI.setAvailable(LibFunc_memset);
-
-    // A few other C library functions are also available.
-
-    TLI.setAvailable(LibFunc_printf);
-    TLI.setAvailable(LibFunc_sprintf);
-    TLI.setAvailable(LibFunc_snprintf);
-    TLI.setAvailable(LibFunc_vsnprintf);
-    TLI.setAvailable(LibFunc_vprintf);
-    TLI.setAvailable(LibFunc_putchar);
-    TLI.setAvailable(LibFunc_puts);
-
-    TLI.setAvailable(LibFunc_abs);
-    TLI.setAvailable(LibFunc_labs);
-    TLI.setAvailable(LibFunc_llabs);
-
-    TLI.setAvailable(LibFunc_memchr);
-    TLI.setAvailable(LibFunc_memcmp);
-    TLI.setAvailable(LibFunc_memcpy);
-    TLI.setAvailable(LibFunc_memset);
-    TLI.setAvailable(LibFunc_memmove);
-    TLI.setAvailable(LibFunc_strchr);
-    TLI.setAvailable(LibFunc_strcmp);
-    TLI.setAvailable(LibFunc_strcpy);
-    TLI.setAvailable(LibFunc_strlen);
-    TLI.setAvailable(LibFunc_strncmp);
-    TLI.setAvailable(LibFunc_strncpy);
-    TLI.setAvailable(LibFunc_strrchr);
-
-    return;
-  }
-
   // There is really no runtime library on AMDGPU, apart from
   // __kmpc_alloc/free_shared.
   if (T.isAMDGPU()) {
@@ -338,6 +300,7 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
       TLI.setUnavailable(LibFunc_expf);
       TLI.setUnavailable(LibFunc_floorf);
       TLI.setUnavailable(LibFunc_fmodf);
+      TLI.setUnavailable(LibFunc_hypotf);
       TLI.setUnavailable(LibFunc_log10f);
       TLI.setUnavailable(LibFunc_logf);
       TLI.setUnavailable(LibFunc_modff);
@@ -369,6 +332,7 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
     TLI.setUnavailable(LibFunc_floorl);
     TLI.setUnavailable(LibFunc_fmodl);
     TLI.setUnavailable(LibFunc_frexpl);
+    TLI.setUnavailable(LibFunc_hypotl);
     TLI.setUnavailable(LibFunc_ldexpl);
     TLI.setUnavailable(LibFunc_log10l);
     TLI.setUnavailable(LibFunc_logl);
@@ -410,6 +374,8 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
       TLI.setUnavailable(LibFunc_log2);
       TLI.setUnavailable(LibFunc_log2f);
       TLI.setAvailableWithName(LibFunc_logb, "_logb");
+      TLI.setUnavailable(LibFunc_ilogb);
+      TLI.setUnavailable(LibFunc_ilogbf);
       if (hasPartialFloat)
         TLI.setAvailableWithName(LibFunc_logbf, "_logbf");
       else
@@ -418,6 +384,12 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
       TLI.setUnavailable(LibFunc_rintf);
       TLI.setUnavailable(LibFunc_round);
       TLI.setUnavailable(LibFunc_roundf);
+      TLI.setUnavailable(LibFunc_scalbln);
+      TLI.setUnavailable(LibFunc_scalblnf);
+      TLI.setUnavailable(LibFunc_scalblnl);
+      TLI.setUnavailable(LibFunc_scalbn);
+      TLI.setUnavailable(LibFunc_scalbnf);
+      TLI.setUnavailable(LibFunc_scalbnl);
       TLI.setUnavailable(LibFunc_trunc);
       TLI.setUnavailable(LibFunc_truncf);
     }
@@ -436,9 +408,12 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
     TLI.setUnavailable(LibFunc_log1pl);
     TLI.setUnavailable(LibFunc_log2l);
     TLI.setUnavailable(LibFunc_logbl);
+    TLI.setUnavailable(LibFunc_ilogbl);
     TLI.setUnavailable(LibFunc_nearbyintl);
     TLI.setUnavailable(LibFunc_rintl);
     TLI.setUnavailable(LibFunc_roundl);
+    TLI.setUnavailable(LibFunc_scalblnl);
+    TLI.setUnavailable(LibFunc_scalbnl);
     TLI.setUnavailable(LibFunc_truncl);
 
     // Win32 does not support these functions, but
@@ -877,6 +852,7 @@ static void initializeLibCalls(TargetLibraryInfoImpl &TLI, const Triple &T,
     TLI.setUnavailable(LibFunc_memrchr);
     TLI.setUnavailable(LibFunc_ntohl);
     TLI.setUnavailable(LibFunc_ntohs);
+    TLI.setUnavailable(LibFunc_reallocarray);
     TLI.setUnavailable(LibFunc_reallocf);
     TLI.setUnavailable(LibFunc_roundeven);
     TLI.setUnavailable(LibFunc_roundevenf);
@@ -1349,6 +1325,14 @@ static const VecDesc VecFuncs_SLEEFGNUABI_VFScalable[] = {
 #undef TLI_DEFINE_SLEEFGNUABI_SCALABLE_VECFUNCS
 };
 
+static const VecDesc VecFuncs_SLEEFGNUABI_VFScalableRISCV[] = {
+#define TLI_DEFINE_SLEEFGNUABI_SCALABLE_VECFUNCS_RISCV
+#define TLI_DEFINE_VECFUNC(SCAL, VEC, VF, MASK, VABI_PREFIX)                   \
+  {SCAL, VEC, VF, MASK, VABI_PREFIX},
+#include "llvm/Analysis/VecFuncs.def"
+#undef TLI_DEFINE_SLEEFGNUABI_SCALABLE_VECFUNCS_RISCV
+};
+
 static const VecDesc VecFuncs_ArmPL[] = {
 #define TLI_DEFINE_ARMPL_VECFUNCS
 #define TLI_DEFINE_VECFUNC(SCAL, VEC, VF, MASK, VABI_PREFIX)                   \
@@ -1397,6 +1381,9 @@ void TargetLibraryInfoImpl::addVectorizableFunctionsFromVecLib(
       addVectorizableFunctions(VecFuncs_SLEEFGNUABI_VF2);
       addVectorizableFunctions(VecFuncs_SLEEFGNUABI_VF4);
       addVectorizableFunctions(VecFuncs_SLEEFGNUABI_VFScalable);
+      break;
+    case llvm::Triple::riscv64:
+      addVectorizableFunctions(VecFuncs_SLEEFGNUABI_VFScalableRISCV);
       break;
     }
     break;
@@ -1472,19 +1459,16 @@ unsigned TargetLibraryInfoImpl::getWCharSize(const Module &M) const {
 }
 
 unsigned TargetLibraryInfoImpl::getSizeTSize(const Module &M) const {
-  // There is really no guarantee that sizeof(size_t) is equal to sizeof(int*).
-  // If that isn't true then it should be possible to derive the SizeTTy from
-  // the target triple here instead and do an early return.
+  // There is really no guarantee that sizeof(size_t) is equal to the index
+  // size of the default address space. If that isn't true then it should be
+  // possible to derive the SizeTTy from the target triple here instead and do
+  // an early return.
 
-  // Historically LLVM assume that size_t has same size as intptr_t (hence
-  // deriving the size from sizeof(int*) in address space zero). This should
-  // work for most targets. For future consideration: DataLayout also implement
-  // getIndexSizeInBits which might map better to size_t compared to
-  // getPointerSizeInBits. Hard coding address space zero here might be
-  // unfortunate as well. Maybe getDefaultGlobalsAddressSpace() or
-  // getAllocaAddrSpace() is better.
-  unsigned AddressSpace = 0;
-  return M.getDataLayout().getPointerSizeInBits(AddressSpace);
+  // Hard coding address space zero may seem unfortunate, but a number of
+  // configurations of common targets (i386, x86-64 x32, aarch64 x32, possibly
+  // others) have larger-than-size_t index sizes on non-default address spaces,
+  // making this the best default.
+  return M.getDataLayout().getIndexSizeInBits(/*AddressSpace=*/0);
 }
 
 TargetLibraryInfoWrapperPass::TargetLibraryInfoWrapperPass()

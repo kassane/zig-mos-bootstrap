@@ -23,13 +23,9 @@ export fn h() void {
     _ = c;
 }
 // error
-// backend=stage2
-// target=native
 //
 // :9:16: error: missing struct field: x
 // :1:11: note: struct declared here
 // :18:16: error: missing tuple field with index 1
-// :16:11: note: struct declared here
 // :22:16: error: missing tuple field with index 0
 // :22:16: note: missing tuple field with index 1
-// :16:11: note: struct declared here

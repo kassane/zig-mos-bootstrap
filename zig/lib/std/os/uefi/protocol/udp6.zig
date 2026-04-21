@@ -18,32 +18,158 @@ pub const Udp6 = extern struct {
     _cancel: *const fn (*const Udp6, ?*CompletionToken) callconv(cc) Status,
     _poll: *const fn (*const Udp6) callconv(cc) Status,
 
-    pub fn getModeData(self: *const Udp6, udp6_config_data: ?*Config, ip6_mode_data: ?*Ip6.Mode, mnp_config_data: ?*ManagedNetworkConfigData, snp_mode_data: ?*SimpleNetwork) Status {
-        return self._get_mode_data(self, udp6_config_data, ip6_mode_data, mnp_config_data, snp_mode_data);
+    pub const GetModeDataError = uefi.UnexpectedError || error{
+        NotStarted,
+        InvalidParameter,
+    };
+    pub const ConfigureError = uefi.UnexpectedError || error{
+        NoMapping,
+        InvalidParameter,
+        AlreadyStarted,
+        AccessDenied,
+        OutOfResources,
+        DeviceError,
+    };
+    pub const GroupsError = uefi.UnexpectedError || error{
+        NotStarted,
+        OutOfResources,
+        InvalidParameter,
+        AlreadyStarted,
+        NotFound,
+        DeviceError,
+    };
+    pub const TransmitError = uefi.UnexpectedError || error{
+        NotStarted,
+        NoMapping,
+        InvalidParameter,
+        AccessDenied,
+        NotReady,
+        OutOfResources,
+        NotFound,
+        BadBufferSize,
+        NoMedia,
+    };
+    pub const ReceiveError = uefi.UnexpectedError || error{
+        NotStarted,
+        NoMapping,
+        InvalidParameter,
+        OutOfResources,
+        DeviceError,
+        AccessDenied,
+        NotReady,
+        NoMedia,
+    };
+    pub const CancelError = uefi.UnexpectedError || error{
+        InvalidParameter,
+        NotStarted,
+        NotFound,
+    };
+    pub const PollError = uefi.UnexpectedError || error{
+        InvalidParameter,
+        DeviceError,
+        Timeout,
+    };
+
+    pub fn getModeData(self: *const Udp6) GetModeDataError!ModeData {
+        var data: ModeData = undefined;
+        switch (self._get_mode_data(
+            self,
+            &data.udp6_config_data,
+            &data.ip6_mode_data,
+            &data.mnp_config_data,
+            &data.snp_mode_data,
+        )) {
+            .success => return data,
+            .not_started => return error.NotStarted,
+            .invalid_parameter => return error.InvalidParameter,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn configure(self: *const Udp6, udp6_config_data: ?*const Config) Status {
-        return self._configure(self, udp6_config_data);
+    pub fn configure(self: *Udp6, udp6_config_data: ?*const Config) ConfigureError!void {
+        switch (self._configure(self, udp6_config_data)) {
+            .success => {},
+            .no_mapping => return error.NoMapping,
+            .invalid_parameter => return error.InvalidParameter,
+            .already_started => return error.AlreadyStarted,
+            .access_denied => return error.AccessDenied,
+            .out_of_resources => return error.OutOfResources,
+            .device_error => return error.DeviceError,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn groups(self: *const Udp6, join_flag: bool, multicast_address: ?*const Ip6.Address) Status {
-        return self._groups(self, join_flag, multicast_address);
+    pub fn groups(
+        self: *Udp6,
+        join_flag: JoinFlag,
+        multicast_address: ?*const Ip6.Address,
+    ) GroupsError!void {
+        switch (self._groups(
+            self,
+            // set to TRUE to join a multicast group
+            join_flag == .join,
+            multicast_address,
+        )) {
+            .success => {},
+            .not_started => return error.NotStarted,
+            .out_of_resources => return error.OutOfResources,
+            .invalid_parameter => return error.InvalidParameter,
+            .already_started => return error.AlreadyStarted,
+            .not_found => return error.NotFound,
+            .device_error => return error.DeviceError,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn transmit(self: *const Udp6, token: *CompletionToken) Status {
-        return self._transmit(self, token);
+    pub fn transmit(self: *Udp6, token: *CompletionToken) TransmitError!void {
+        switch (self._transmit(self, token)) {
+            .success => {},
+            .not_started => return error.NotStarted,
+            .no_mapping => return error.NoMapping,
+            .invalid_parameter => return error.InvalidParameter,
+            .access_denied => return error.AccessDenied,
+            .not_ready => return error.NotReady,
+            .out_of_resources => return error.OutOfResources,
+            .not_found => return error.NotFound,
+            .bad_buffer_size => return error.BadBufferSize,
+            .no_media => return error.NoMedia,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn receive(self: *const Udp6, token: *CompletionToken) Status {
-        return self._receive(self, token);
+    pub fn receive(self: *Udp6, token: *CompletionToken) ReceiveError!void {
+        switch (self._receive(self, token)) {
+            .success => {},
+            .not_started => return error.NotStarted,
+            .no_mapping => return error.NoMapping,
+            .invalid_parameter => return error.InvalidParameter,
+            .out_of_resources => return error.OutOfResources,
+            .device_error => return error.DeviceError,
+            .access_denied => return error.AccessDenied,
+            .not_ready => return error.NotReady,
+            .no_media => return error.NoMedia,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn cancel(self: *const Udp6, token: ?*CompletionToken) Status {
-        return self._cancel(self, token);
+    pub fn cancel(self: *Udp6, token: ?*CompletionToken) CancelError!void {
+        switch (self._cancel(self, token)) {
+            .success => {},
+            .invalid_parameter => return error.InvalidParameter,
+            .not_started => return error.NotStarted,
+            .not_found => return error.NotFound,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
-    pub fn poll(self: *const Udp6) Status {
-        return self._poll(self);
+    pub fn poll(self: *Udp6) PollError!void {
+        switch (self._poll(self)) {
+            .success => {},
+            .invalid_parameter => return error.InvalidParameter,
+            .device_error => return error.DeviceError,
+            .timeout => return error.Timeout,
+            else => |status| return uefi.unexpectedStatus(status),
+        }
     }
 
     pub const guid align(8) = uefi.Guid{
@@ -53,6 +179,18 @@ pub const Udp6 = extern struct {
         .clock_seq_high_and_reserved = 0x8a,
         .clock_seq_low = 0x33,
         .node = [_]u8{ 0x90, 0xe0, 0x60, 0xb3, 0x49, 0x55 },
+    };
+
+    pub const JoinFlag = enum {
+        join,
+        leave,
+    };
+
+    pub const ModeData = struct {
+        udp6_config_data: Config,
+        ip6_mode_data: Ip6.Mode,
+        mnp_config_data: ManagedNetworkConfigData,
+        snp_mode_data: SimpleNetwork,
     };
 
     pub const Config = extern struct {
@@ -71,10 +209,10 @@ pub const Udp6 = extern struct {
 
     pub const CompletionToken = extern struct {
         event: Event,
-        Status: usize,
+        status: usize,
         packet: extern union {
-            RxData: *ReceiveData,
-            TxData: *TransmitData,
+            rx_data: *ReceiveData,
+            tx_data: *TransmitData,
         },
     };
 

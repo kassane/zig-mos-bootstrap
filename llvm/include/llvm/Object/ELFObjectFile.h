@@ -63,7 +63,6 @@ class ELFObjectFileBase : public ObjectFile {
   SubtargetFeatures getARMFeatures() const;
   SubtargetFeatures getHexagonFeatures() const;
   Expected<SubtargetFeatures> getRISCVFeatures() const;
-  SubtargetFeatures getMOSFeatures() const;
   SubtargetFeatures getLoongArchFeatures() const;
 
   StringRef getAMDGPUCPUName() const;
@@ -817,15 +816,6 @@ Expected<uint32_t> ELFObjectFile<ELFT>::getSymbolFlags(DataRefImpl Sym) const {
       // TODO: Actually report errors helpfully.
       consumeError(NameOrErr.takeError());
     }
-  } else if (EF.getHeader().e_machine == ELF::EM_MOS) {
-    if (Expected<StringRef> NameOrErr = getSymbolName(Sym)) {
-      StringRef Name = *NameOrErr;
-      if (Name.starts_with("$m") || Name.starts_with("$x"))
-        Result |= SymbolRef::SF_FormatSpecific;
-    } else {
-      // TODO: Actually report errors helpfully.
-      consumeError(NameOrErr.takeError());
-    }
   } else if (EF.getHeader().e_machine == ELF::EM_RISCV) {
     if (Expected<StringRef> NameOrErr = getSymbolName(Sym)) {
       StringRef Name = *NameOrErr;
@@ -1311,8 +1301,6 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
       return "elf32-lanai";
     case ELF::EM_MIPS:
       return "elf32-mips";
-    case ELF::EM_MOS:
-     return "elf32-mos";
     case ELF::EM_MSP430:
       return "elf32-msp430";
     case ELF::EM_PPC:
@@ -1397,8 +1385,6 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
     default:
       report_fatal_error("Invalid ELFCLASS!");
     }
-  case ELF::EM_MOS:
-    return Triple::mos;
   case ELF::EM_MSP430:
     return Triple::msp430;
   case ELF::EM_PPC:

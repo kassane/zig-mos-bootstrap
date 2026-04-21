@@ -127,8 +127,7 @@ RegAllocEvictionAdvisor::RegAllocEvictionAdvisor(const MachineFunction &MF,
                                                  const RAGreedy &RA)
     : MF(MF), RA(RA), Matrix(RA.getInterferenceMatrix()),
       LIS(RA.getLiveIntervals()), VRM(RA.getVirtRegMap()),
-      MRI(&VRM->getRegInfo()), TII(MF.getSubtarget().getInstrInfo()),
-      TRI(MF.getSubtarget().getRegisterInfo()),
+      MRI(&VRM->getRegInfo()), TRI(MF.getSubtarget().getRegisterInfo()),
       RegClassInfo(RA.getRegClassInfo()), RegCosts(TRI->getRegisterCosts(MF)),
       EnableLocalReassign(EnableLocalReassignment ||
                           MF.getSubtarget().enableRALocalReassignment(
@@ -158,31 +157,8 @@ bool DefaultEvictionAdvisor::shouldEvict(const LiveInterval &A, bool IsHint,
     return true;
 
   if (A.weight() > B.weight()) {
-    LLVM_DEBUG(dbgs() << "should evict: " << B << " w= " << B.weight() << '\n');
+    LLVM_DEBUG(dbgs() << "should evict: " << B << '\n');
     return true;
-  }
-  return false;
-}
-
-// Determine if any of the definitions or uses of a VirtReg have constraints
-// that could hypothetically be widened if the register were fully split around
-// instructions. It makes sense to evict unspillable regs where this is true,
-// since splitting them may widen the register classes enough to avoid the
-// conflict with another unspillable reg.
-static bool canWiden(const MachineRegisterInfo *MRI, const TargetInstrInfo *TII,
-                     const TargetRegisterInfo *TRI, Register Reg) {
-  const TargetRegisterClass *RC = MRI->getRegClass(Reg);
-  for (MachineInstr &MI : MRI->use_instructions(Reg)) {
-    for (unsigned OpIdx = 0, OpEnd = MI.getNumOperands(); OpIdx != OpEnd;
-         ++OpIdx) {
-      const MachineOperand &MO = MI.getOperand(OpIdx);
-      if (!MO.isReg() || MO.getReg() != Reg)
-        continue;
-      const TargetRegisterClass *MORC =
-          MI.getRegClassConstraint(OpIdx, TII, TRI);
-      if (!MORC || MORC->hasSubClass(RC))
-        return true;
-    }
   }
   return false;
 }
@@ -214,7 +190,7 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
   if (Matrix->checkInterference(VirtReg, PhysReg) > LiveRegMatrix::IK_VirtReg)
     return false;
 
-  bool IsLocal = LIS->intervalIsInOneMBB(VirtReg);
+  bool IsLocal = VirtReg.empty() || LIS->intervalIsInOneMBB(VirtReg);
 
   // Find VirtReg's cascade number. This will be unassigned if VirtReg was never
   // involved in an eviction before. If a cascade number was assigned, deny
@@ -258,11 +234,7 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
           (Intf->isSpillable() ||
            RegClassInfo.getNumAllocatableRegs(MRI->getRegClass(VirtReg.reg())) <
                RegClassInfo.getNumAllocatableRegs(
-                   MRI->getRegClass(Intf->reg())) ||
-           (!canWiden(MRI, TII, TRI, VirtReg.reg()) &&
-            canWiden(MRI, TII, TRI, Intf->reg())) ||
-           (VirtReg.isZeroLength(LIS->getSlotIndexes()) &&
-            !Intf->isZeroLength(LIS->getSlotIndexes())));
+                   MRI->getRegClass(Intf->reg())));
       // Only evict older cascades or live ranges without a cascade.
       unsigned IntfCascade = RA.getExtraInfo().getCascade(Intf->reg());
       if (Cascade == IntfCascade)
@@ -285,17 +257,6 @@ bool DefaultEvictionAdvisor::canEvictInterferenceBasedOnCost(
         return false;
       if (Urgent)
         continue;
-
-      // If there's only one option for this assigment, and if splitting and
-      // spilling won't help widen it, then at least one interference will
-      // necessarily be evicted. In such cases, it's better to preemptively
-      // evict the interferences, so long as there's something available to
-      // reassign them to.
-      if (MRI->getRegClass(VirtReg.reg())->getNumRegs() == 1 &&
-          !canWiden(MRI, TII, TRI, VirtReg.reg()) &&
-          canReassign(*Intf, PhysReg))
-        continue;
-
       // Apply the eviction policy for non-urgent evictions.
       if (!shouldEvict(VirtReg, IsHint, *Intf, BreaksHint))
         return false;

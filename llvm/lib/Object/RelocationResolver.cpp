@@ -17,7 +17,6 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/Object/ELFObjectFile.h"
-#include "llvm/Object/ELFTypes.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Casting.h"
@@ -149,62 +148,6 @@ static uint64_t resolveMips64(uint64_t Type, uint64_t Offset, uint64_t S,
     return S + Addend - 0x8000;
   case ELF::R_MIPS_PC32:
     return S + Addend - Offset;
-  default:
-    llvm_unreachable("Invalid relocation type");
-  }
-}
-
-static bool supportsMOS(uint64_t Type) {
-  switch (Type) {
-  case ELF::R_MOS_ADDR8:
-  case ELF::R_MOS_ADDR16:
-  case ELF::R_MOS_ADDR16_LO:
-  case ELF::R_MOS_ADDR24_SEGMENT_LO:
-  case ELF::R_MOS_ADDR16_HI:
-  case ELF::R_MOS_ADDR24_SEGMENT_HI:
-  case ELF::R_MOS_ADDR24:
-  case ELF::R_MOS_ADDR24_BANK:
-  case ELF::R_MOS_ADDR24_SEGMENT:
-  case ELF::R_MOS_PCREL_8:
-  case ELF::R_MOS_PCREL_16:
-  case ELF::R_MOS_ADDR13:
-  case ELF::R_MOS_FK_DATA_4:
-  case ELF::R_MOS_FK_DATA_8:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static uint64_t resolveMOS(uint64_t Type, uint64_t Offset, uint64_t S,
-                           uint64_t /*LocData*/, int64_t Addend) {
-  switch (Type) {
-  case ELF::R_MOS_ADDR8:
-    return (S + Addend) & 0xFF;
-  case ELF::R_MOS_ADDR16:
-    return (S + Addend) & 0xFFFF;
-  case ELF::R_MOS_ADDR16_LO:
-  case ELF::R_MOS_ADDR24_SEGMENT_LO:
-    return (S + Addend) & 0xFF;
-  case ELF::R_MOS_ADDR16_HI:
-  case ELF::R_MOS_ADDR24_SEGMENT_HI:
-    return ((S + Addend) >> 8) & 0xFF;
-  case ELF::R_MOS_ADDR24:
-    return (S + Addend) & 0xFFFFFF;
-  case ELF::R_MOS_ADDR24_BANK:
-    return ((S + Addend) >> 16) & 0xFF;
-  case ELF::R_MOS_ADDR24_SEGMENT:
-    return ((S + Addend) >> 8) & 0xFFFF;
-  case ELF::R_MOS_PCREL_8:
-    return (S + Addend - Offset - 1) & 0xFF;
-  case ELF::R_MOS_PCREL_16:
-    return (S + Addend - Offset - 2) & 0xFFFF;
-  case ELF::R_MOS_ADDR13:
-    return (S + Addend) & 0x1FFF;
-  case ELF::R_MOS_FK_DATA_4:
-    return (S + Addend) & 0xFFFFFFFF;
-  case ELF::R_MOS_FK_DATA_8:
-    return S + Addend;
   default:
     llvm_unreachable("Invalid relocation type");
   }
@@ -897,8 +840,6 @@ getRelocationResolver(const ObjectFile &Obj) {
     case Triple::mipsel:
     case Triple::mips:
       return {supportsMips32, resolveMips32};
-    case Triple::mos:
-      return {supportsMOS, resolveMOS};
     case Triple::msp430:
       return {supportsMSP430, resolveMSP430};
     case Triple::sparc:

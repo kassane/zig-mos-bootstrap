@@ -12,7 +12,9 @@ export fn entry() usize {
 }
 
 // error
-// backend=stage2
-// target=native
 //
-// :1:11: error: struct 'tmp.A' depends on itself
+// error: dependency loop with length 3
+// :2:8: note: type 'tmp.A' depends on type 'tmp.B' for field declared here
+// :5:8: note: type 'tmp.B' depends on type 'tmp.C' for field declared here
+// :8:8: note: type 'tmp.C' depends on type 'tmp.A' for field declared here
+// note: eliminate any one of these dependencies to break the loop

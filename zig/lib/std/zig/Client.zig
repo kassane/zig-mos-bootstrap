@@ -33,10 +33,24 @@ pub const Message = struct {
         /// Ask the test runner to run a particular test.
         /// The message body is a u32 test index.
         run_test,
-        /// Ask the test runner to start fuzzing a particular test.
-        /// The message body is a u32 test index.
+        /// Ask the test runner to start fuzzing a set of test forever or each for a given amount of
+        /// iterations. After this is sent, the only allowed message is `new_fuzz_input`.
+        ///
+        /// The message body is:
+        /// - a u8 test limit kind (std.Build.api.fuzz.LimitKind)
+        /// - a u64 value whose meaning depends on FuzzLimitKind (either a limit amount or an instance id)
+        /// - a u32 number of tests followed by n elements of
+        ///   - a u32 test name len.
+        ///   - a test name with the above length
         start_fuzzing,
+        /// The message body has the same format as in Server.
+        new_fuzz_input,
 
         _,
     };
+
+    comptime {
+        const std = @import("std");
+        std.debug.assert(@sizeOf(std.Build.abi.fuzz.LimitKind) == 1);
+    }
 };

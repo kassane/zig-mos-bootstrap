@@ -121,12 +121,10 @@ TEST(NativeFormatTest, BoundaryTests) {
 
   EXPECT_EQ("nan", format_number(std::numeric_limits<double>::quiet_NaN(),
                                  FloatStyle::Fixed));
-#if 0
   EXPECT_EQ("INF", format_number(std::numeric_limits<double>::infinity(),
                                  FloatStyle::Fixed));
   EXPECT_EQ("-INF", format_number(-std::numeric_limits<double>::infinity(),
                                   FloatStyle::Fixed));
-#endif
 }
 
 TEST(NativeFormatTest, HexTests) {

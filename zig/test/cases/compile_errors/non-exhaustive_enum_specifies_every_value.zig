@@ -4,11 +4,9 @@ const C = enum(u1) {
     _,
 };
 pub export fn entry() void {
-    _ = C;
+    _ = C.a;
 }
 
 // error
-// backend=stage2
-// target=native
 //
 // :1:11: error: non-exhaustive enum specifies every value

@@ -10,9 +10,11 @@
 //! would mean that the next parameter specifies the target.
 
 const std = @import("std");
-const fs = std.fs;
+const Io = std.Io;
 const assert = std.debug.assert;
 const json = std.json;
+const fatal = std.process.fatal;
+const ClangCliParam = std.zig.ClangCliParam;
 
 const KnownOpt = struct {
     name: []const u8,
@@ -109,6 +111,14 @@ const known_options = [_]KnownOpt{
     .{
         .name = "fno-unwind-tables",
         .ident = "no_unwind_tables",
+    },
+    .{
+        .name = "fasynchronous-unwind-tables",
+        .ident = "asynchronous_unwind_tables",
+    },
+    .{
+        .name = "fno-asynchronous-unwind-tables",
+        .ident = "no_asynchronous_unwind_tables",
     },
     .{
         .name = "nolibc",
@@ -275,6 +285,18 @@ const known_options = [_]KnownOpt{
     .{
         .name = "fsanitize",
         .ident = "sanitize",
+    },
+    .{
+        .name = "fno-sanitize",
+        .ident = "no_sanitize",
+    },
+    .{
+        .name = "fsanitize-trap",
+        .ident = "sanitize_trap",
+    },
+    .{
+        .name = "fno-sanitize-trap",
+        .ident = "no_sanitize_trap",
     },
     .{
         .name = "T",
@@ -560,12 +582,24 @@ const known_options = [_]KnownOpt{
         .name = "rtlib=",
         .ident = "rtlib",
     },
+    .{
+        .name = "static",
+        .ident = "static",
+    },
+    .{
+        .name = "dynamic",
+        .ident = "dynamic",
+    },
+    .{
+        .name = "version",
+        .ident = "version",
+    },
 };
 
 const blacklisted_options = [_][]const u8{};
 
 fn knownOption(name: []const u8) ?[]const u8 {
-    const chopped_name = if (std.mem.endsWith(u8, name, "=")) name[0 .. name.len - 1] else name;
+    const chopped_name = if (std.mem.indexOfScalar(u8, name, '=')) |idx| name[0..idx] else name;
     for (known_options) |item| {
         if (std.mem.eql(u8, chopped_name, item.name)) {
             return item.ident;
@@ -576,7 +610,7 @@ fn knownOption(name: []const u8) ?[]const u8 {
 
 const cpu_targets = struct {
     pub const aarch64 = std.Target.aarch64;
-    pub const amdgpu = std.Target.amdgpu;
+    pub const amdgcn = std.Target.amdgcn;
     pub const arc = std.Target.arc;
     pub const arm = std.Target.arm;
     pub const avr = std.Target.avr;
@@ -586,7 +620,6 @@ const cpu_targets = struct {
     pub const loongarch = std.Target.loongarch;
     pub const m68k = std.Target.m68k;
     pub const mips = std.Target.mips;
-    pub const mos = std.Target.mos;
     pub const msp430 = std.Target.msp430;
     pub const nvptx = std.Target.nvptx;
     pub const powerpc = std.Target.powerpc;
@@ -600,34 +633,32 @@ const cpu_targets = struct {
     pub const xtensa = std.Target.xtensa;
 };
 
-pub fn main() anyerror!void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+pub fn main(init: std.process.Init) !void {
+    const arena = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(arena);
+    const io = init.io;
 
-    const allocator = arena.allocator();
-    const args = try std.process.argsAlloc(allocator);
+    var stdout_buffer: [4000]u8 = undefined;
+    var stdout_writer = Io.File.stdout().writerStreaming(io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
 
-    if (args.len <= 1) {
-        usageAndExit(std.io.getStdErr(), args[0], 1);
-    }
+    if (args.len <= 1) printUsageAndExit(args[0]);
+
     if (std.mem.eql(u8, args[1], "--help")) {
-        usageAndExit(std.io.getStdOut(), args[0], 0);
+        printUsage(stdout, args[0]) catch std.process.exit(2);
+        stdout.flush() catch std.process.exit(2);
+        std.process.exit(0);
     }
-    if (args.len < 3) {
-        usageAndExit(std.io.getStdErr(), args[0], 1);
-    }
+
+    if (args.len < 3) printUsageAndExit(args[0]);
 
     const llvm_tblgen_exe = args[1];
-    if (std.mem.startsWith(u8, llvm_tblgen_exe, "-")) {
-        usageAndExit(std.io.getStdErr(), args[0], 1);
-    }
+    if (std.mem.startsWith(u8, llvm_tblgen_exe, "-")) printUsageAndExit(args[0]);
 
     const llvm_src_root = args[2];
-    if (std.mem.startsWith(u8, llvm_src_root, "-")) {
-        usageAndExit(std.io.getStdErr(), args[0], 1);
-    }
+    if (std.mem.startsWith(u8, llvm_src_root, "-")) printUsageAndExit(args[0]);
 
-    var llvm_to_zig_cpu_features = std.StringHashMap([]const u8).init(allocator);
+    var llvm_to_zig_cpu_features = std.StringHashMap([]const u8).init(arena);
 
     inline for (@typeInfo(cpu_targets).@"struct".decls) |decl| {
         const Feature = @field(cpu_targets, decl.name).Feature;
@@ -644,35 +675,37 @@ pub fn main() anyerror!void {
     const child_args = [_][]const u8{
         llvm_tblgen_exe,
         "--dump-json",
-        try std.fmt.allocPrint(allocator, "{s}/clang/include/clang/Driver/Options.td", .{llvm_src_root}),
-        try std.fmt.allocPrint(allocator, "-I={s}/llvm/include", .{llvm_src_root}),
-        try std.fmt.allocPrint(allocator, "-I={s}/clang/include/clang/Driver", .{llvm_src_root}),
+        try std.fmt.allocPrint(arena, "{s}/clang/include/clang/Driver/Options.td", .{llvm_src_root}),
+        try std.fmt.allocPrint(arena, "-I={s}/llvm/include", .{llvm_src_root}),
+        try std.fmt.allocPrint(arena, "-I={s}/clang/include/clang/Driver", .{llvm_src_root}),
     };
 
-    const child_result = try std.process.Child.run(.{
-        .allocator = allocator,
+    const child_result = try std.process.run(arena, io, .{
         .argv = &child_args,
-        .max_output_bytes = 100 * 1024 * 1024,
     });
 
     std.debug.print("{s}\n", .{child_result.stderr});
 
     const json_text = switch (child_result.term) {
-        .Exited => |code| if (code == 0) child_result.stdout else {
-            std.debug.print("llvm-tblgen exited with code {d}\n", .{code});
-            std.process.exit(1);
+        .exited => |code| if (code == 0) child_result.stdout else {
+            fatal("llvm-tblgen exited with code {d}\n", .{code});
         },
-        else => {
-            std.debug.print("llvm-tblgen crashed\n", .{});
-            std.process.exit(1);
+        .signal => |sig| {
+            fatal("llvm-tblgen terminated with signal {t}\n", .{sig});
+        },
+        .stopped => |sig| {
+            fatal("llvm-tblgen stopped with signal {d}\n", .{sig});
+        },
+        .unknown => {
+            fatal("llvm-tblgen crashed\n", .{});
         },
     };
 
-    const parsed = try json.parseFromSlice(json.Value, allocator, json_text, .{});
+    const parsed = try json.parseFromSlice(json.Value, arena, json_text, .{});
     defer parsed.deinit();
     const root_map = &parsed.value.object;
 
-    var all_objects = std.ArrayList(*json.ObjectMap).init(allocator);
+    var all_objects = std.array_list.Managed(*json.ObjectMap).init(arena);
     {
         var it = root_map.iterator();
         it_map: while (it.next()) |kv| {
@@ -692,22 +725,15 @@ pub fn main() anyerror!void {
     // "W" and "Wl,". So we sort this list in order of descending priority.
     std.mem.sort(*json.ObjectMap, all_objects.items, {}, objectLessThan);
 
-    var buffered_stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const stdout = buffered_stdout.writer();
     try stdout.writeAll(
         \\// This file is generated by tools/update_clang_options.zig.
         \\// zig fmt: off
-        \\const clang_options = @import("clang_options.zig");
-        \\const CliArg = clang_options.CliArg;
-        \\const flagpd1 = clang_options.flagpd1;
-        \\const flagpsl = clang_options.flagpsl;
-        \\const joinpd1 = clang_options.joinpd1;
-        \\const jspd1 = clang_options.jspd1;
-        \\const sepd1 = clang_options.sepd1;
-        \\const m = clang_options.m;
-        \\pub const data = blk: { @setEvalBranchQuota(6000); break :blk &[_]CliArg{
         \\
     );
+
+    var serializer: std.zon.Serializer = .{ .writer = stdout };
+    var top = try serializer.beginTuple(.{});
+    serializer.indent_level = 0;
 
     for (all_objects.items) |obj| {
         const name = obj.get("Name").?.string;
@@ -723,117 +749,48 @@ pub fn main() anyerror!void {
             } else if (std.mem.eql(u8, prefix, "/")) {
                 pslash = true;
             } else {
-                std.debug.print("{s} has unrecognized prefix '{s}'\n", .{ name, prefix });
-                std.process.exit(1);
+                fatal("{s} has unrecognized prefix '{s}'", .{ name, prefix });
             }
         }
         const syntax = objSyntax(obj) orelse continue;
+
+        var element: ClangCliParam = .{
+            .name = name,
+            .syntax = syntax,
+            .pd1 = pd1,
+            .pd2 = pd2,
+            .psl = pslash,
+        };
 
         if (std.mem.eql(u8, name, "MT") and syntax == .flag) {
             // `-MT foo` is ambiguous because there is also an -MT flag
             // The canonical way to specify the flag is with `/MT` and so we make this
             // the only way.
-            try stdout.print("flagpsl(\"{s}\"),\n", .{name});
+            element.psl = true;
+            element.pd1 = false;
+            element.pd2 = false;
         } else if (knownOption(name)) |ident| {
-
             // Workaround the fact that in 'Options.td'  -Ofast is listed as 'joined'
-            const final_syntax = if (std.mem.eql(u8, name, "Ofast")) .flag else syntax;
-
-            try stdout.print(
-                \\.{{
-                \\    .name = "{s}",
-                \\    .syntax = {s},
-                \\    .zig_equivalent = .{s},
-                \\    .pd1 = {},
-                \\    .pd2 = {},
-                \\    .psl = {},
-                \\}},
-                \\
-            , .{ name, final_syntax, ident, pd1, pd2, pslash });
+            if (std.mem.eql(u8, name, "Ofast")) element.syntax = .flag;
+            element.ze = std.meta.stringToEnum(ClangCliParam.ZigEquivalent, ident) orelse fatal("unknown known option: {s}", .{ident});
         } else if (pd1 and !pd2 and !pslash and syntax == .flag) {
             if ((std.mem.startsWith(u8, name, "mno-") and
                 llvm_to_zig_cpu_features.contains(name["mno-".len..])) or
                 (std.mem.startsWith(u8, name, "m") and
-                llvm_to_zig_cpu_features.contains(name["m".len..])))
+                    llvm_to_zig_cpu_features.contains(name["m".len..])))
             {
-                try stdout.print("m(\"{s}\"),\n", .{name});
-            } else {
-                try stdout.print("flagpd1(\"{s}\"),\n", .{name});
+                element.ze = .m;
             }
-        } else if (!pd1 and !pd2 and pslash and syntax == .flag) {
-            try stdout.print("flagpsl(\"{s}\"),\n", .{name});
-        } else if (pd1 and !pd2 and !pslash and syntax == .joined) {
-            try stdout.print("joinpd1(\"{s}\"),\n", .{name});
-        } else if (pd1 and !pd2 and !pslash and syntax == .joined_or_separate) {
-            try stdout.print("jspd1(\"{s}\"),\n", .{name});
-        } else if (pd1 and !pd2 and !pslash and syntax == .separate) {
-            try stdout.print("sepd1(\"{s}\"),\n", .{name});
-        } else {
-            try stdout.print(
-                \\.{{
-                \\    .name = "{s}",
-                \\    .syntax = {s},
-                \\    .zig_equivalent = .other,
-                \\    .pd1 = {},
-                \\    .pd2 = {},
-                \\    .psl = {},
-                \\}},
-                \\
-            , .{ name, syntax, pd1, pd2, pslash });
         }
+        try top.field(element, .{ .emit_default_optional_fields = false });
     }
 
-    try stdout.writeAll(
-        \\};};
-        \\
-    );
+    try top.end();
 
-    try buffered_stdout.flush();
+    try stdout.flush();
 }
 
-// TODO we should be able to import clang_options.zig but currently this is problematic because it will
-// import stage2.zig and that causes a bunch of stuff to get exported
-const Syntax = union(enum) {
-    /// A flag with no values.
-    flag,
-
-    /// An option which prefixes its (single) value.
-    joined,
-
-    /// An option which is followed by its value.
-    separate,
-
-    /// An option which is either joined to its (non-empty) value, or followed by its value.
-    joined_or_separate,
-
-    /// An option which is both joined to its (first) value, and followed by its (second) value.
-    joined_and_separate,
-
-    /// An option followed by its values, which are separated by commas.
-    comma_joined,
-
-    /// An option which consumes an optional joined argument and any other remaining arguments.
-    remaining_args_joined,
-
-    /// An option which is which takes multiple (separate) arguments.
-    multi_arg: u8,
-
-    pub fn format(
-        self: Syntax,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        out_stream: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-        switch (self) {
-            .multi_arg => |n| return out_stream.print(".{{.{s}={}}}", .{ @tagName(self), n }),
-            else => return out_stream.print(".{s}", .{@tagName(self)}),
-        }
-    }
-};
-
-fn objSyntax(obj: *json.ObjectMap) ?Syntax {
+fn objSyntax(obj: *json.ObjectMap) ?ClangCliParam.Syntax {
     const num_args = @as(u8, @intCast(obj.get("NumArgs").?.integer));
     for (obj.get("!superclasses").?.array.items) |superclass_json| {
         const superclass = superclass_json.string;
@@ -894,7 +851,7 @@ fn objSyntax(obj: *json.ObjectMap) ?Syntax {
     return null;
 }
 
-fn syntaxMatchesWithEql(syntax: Syntax) bool {
+fn syntaxMatchesWithEql(syntax: ClangCliParam.Syntax) bool {
     return switch (syntax) {
         .flag,
         .separate,
@@ -939,13 +896,18 @@ fn objectLessThan(context: void, a: *json.ObjectMap, b: *json.ObjectMap) bool {
     return std.mem.lessThan(u8, a_key, b_key);
 }
 
-fn usageAndExit(file: fs.File, arg0: []const u8, code: u8) noreturn {
-    file.writer().print(
+fn printUsageAndExit(arg0: []const u8) noreturn {
+    const stderr = std.debug.lockStderr(&.{});
+    const w = &stderr.file_writer.interface;
+    printUsage(w, arg0) catch std.process.exit(2);
+    std.process.exit(1);
+}
+
+fn printUsage(w: *std.Io.Writer, arg0: []const u8) std.Io.Writer.Error!void {
+    try w.print(
         \\Usage: {s} /path/to/llvm-tblgen /path/to/git/llvm/llvm-project
-        \\Alternative Usage: zig run /path/to/git/zig/tools/update_clang_options.zig -- /path/to/llvm-tblgen /path/to/git/llvm/llvm-project
         \\
-        \\Prints to stdout Zig code which you can use to replace the file src/clang_options_data.zig.
+        \\Prints to stdout Zig code which you can use to replace the file src/clang_options.zon.
         \\
-    , .{arg0}) catch std.process.exit(1);
-    std.process.exit(code);
+    , .{arg0});
 }

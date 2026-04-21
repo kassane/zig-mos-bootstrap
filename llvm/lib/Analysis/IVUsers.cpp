@@ -130,10 +130,10 @@ static bool IVUseShouldUsePostIncValue(Instruction *User, Value *Operand,
   return true;
 }
 
-/// AddUsersImpl - Inspect the specified instruction.  If it is a
-/// reducible SCEV, recursively add its users to the IVUsesByStride set and
-/// return true.  Otherwise, return false.
-bool IVUsers::AddUsersImpl(Instruction *I, bool AllowNonNative) {
+/// Inspect the specified instruction.  If it is a reducible SCEV, recursively
+/// add its users to the IVUsesByStride set and return true.  Otherwise, return
+/// false.
+bool IVUsers::AddUsersIfInteresting(Instruction *I) {
   const DataLayout &DL = I->getDataLayout();
 
   // Add this IV user to the Processed set before returning false to ensure that
@@ -141,8 +141,7 @@ bool IVUsers::AddUsersImpl(Instruction *I, bool AllowNonNative) {
   if (!Processed.insert(I).second)
     return true;    // Instruction already handled.
 
-  Type *Ty = I->getType();
-  if (!SE->isSCEVable(Ty))
+  if (!SE->isSCEVable(I->getType()))
     return false;   // Void and FP expressions cannot be reduced.
 
   // IVUsers is used by LSR which assumes that all SCEV expressions are safe to
@@ -153,15 +152,10 @@ bool IVUsers::AddUsersImpl(Instruction *I, bool AllowNonNative) {
 
   // LSR is not APInt clean, do not touch integers bigger than 64-bits.
   // Also avoid creating IVs of non-native types. For example, we don't want a
-  // 64-bit IV in 32-bit code just because the loop has one 64-bit cast. We
-  // do consider the address space 0 index type legal; otherwise there's likely
-  // no way for LSR to intelligently apply addressing modes.
-  uint64_t Width = SE->getTypeSizeInBits(Ty);
-  bool IsNative = DL.isLegalInteger(Width) || Width == DL.getIndexSizeInBits(0);
-  if (Width > 64 || (!AllowNonNative && !IsNative))
+  // 64-bit IV in 32-bit code just because the loop has one 64-bit cast.
+  uint64_t Width = SE->getTypeSizeInBits(I->getType());
+  if (Width > 64 || !DL.isLegalInteger(Width))
     return false;
-  if (IsNative)
-    AllowNonNative = false;
 
   // Don't attempt to promote ephemeral values to indvars. They will be removed
   // later anyway.
@@ -195,12 +189,12 @@ bool IVUsers::AddUsersImpl(Instruction *I, bool AllowNonNative) {
     bool AddUserToIVUsers = false;
     if (LI->getLoopFor(User->getParent()) != L) {
       if (isa<PHINode>(User) || Processed.count(User) ||
-          !AddUsersImpl(User, AllowNonNative)) {
+          !AddUsersIfInteresting(User)) {
         LLVM_DEBUG(dbgs() << "FOUND USER in other loop: " << *User << '\n'
                           << "   OF SCEV: " << *ISE << '\n');
         AddUserToIVUsers = true;
       }
-    } else if (Processed.count(User) || !AddUsersImpl(User, AllowNonNative)) {
+    } else if (Processed.count(User) || !AddUsersIfInteresting(User)) {
       LLVM_DEBUG(dbgs() << "FOUND USER: " << *User << '\n'
                         << "   OF SCEV: " << *ISE << '\n');
       AddUserToIVUsers = true;
@@ -247,10 +241,6 @@ bool IVUsers::AddUsersImpl(Instruction *I, bool AllowNonNative) {
     }
   }
   return true;
-}
-
-bool IVUsers::AddUsersIfInteresting(Instruction *I) {
-  return AddUsersImpl(I, /*AllowNonNative=*/true);
 }
 
 IVStrideUse &IVUsers::AddUser(Instruction *User, Value *Operand) {

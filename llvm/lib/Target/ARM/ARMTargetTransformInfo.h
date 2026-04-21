@@ -305,8 +305,7 @@ public:
   /// If the AM is not supported, the return value must be negative.
   InstructionCost getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
                                        StackOffset BaseOffset, bool HasBaseReg,
-                                       Type *BaseTy, int64_t Scale,
-                                       Type *ScaleTy, unsigned AddrSpace) const;
+                                       int64_t Scale, unsigned AddrSpace) const;
 
   bool maybeLoweredToCall(Instruction &I);
   bool isLoweredToCall(const Function *F);
@@ -335,6 +334,11 @@ public:
   }
 
   bool hasArmWideBranch(bool Thumb) const;
+
+  bool isProfitableToSinkOperands(Instruction *I,
+                                  SmallVectorImpl<Use *> &Ops) const;
+
+  unsigned getNumBytesToPadGlobalArray(unsigned Size, Type *ArrayType) const;
 
   /// @}
 };

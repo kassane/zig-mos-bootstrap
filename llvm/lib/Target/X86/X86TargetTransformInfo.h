@@ -169,7 +169,8 @@ public:
   InstructionCost getScalarizationOverhead(VectorType *Ty,
                                            const APInt &DemandedElts,
                                            bool Insert, bool Extract,
-                                           TTI::TargetCostKind CostKind);
+                                           TTI::TargetCostKind CostKind,
+                                           ArrayRef<Value *> VL = {});
   InstructionCost getReplicationShuffleCost(Type *EltTy, int ReplicationFactor,
                                             int VF,
                                             const APInt &DemandedDstElts,
@@ -249,7 +250,6 @@ public:
   InstructionCost getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx,
                                       const APInt &Imm, Type *Ty,
                                       TTI::TargetCostKind CostKind);
-
   /// Return the cost of the scaling factor used in the addressing
   /// mode represented by AM for this target, for a load/store
   /// of the specified type.
@@ -257,8 +257,7 @@ public:
   /// If the AM is not supported, it returns a negative value.
   InstructionCost getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
                                        StackOffset BaseOffset, bool HasBaseReg,
-                                       Type *BaseTy, int64_t Scale,
-                                       Type *ScaleTy, unsigned AddrSpace) const;
+                                       int64_t Scale, unsigned AddrSpace) const;
 
   bool isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
                      const TargetTransformInfo::LSRCost &C2);
@@ -298,6 +297,14 @@ public:
   bool enableInterleavedAccessVectorization();
 
   InstructionCost getBranchMispredictPenalty() const;
+
+  bool isProfitableToSinkOperands(Instruction *I,
+                                  SmallVectorImpl<Use *> &Ops) const;
+
+  bool isVectorShiftByScalarCheap(Type *Ty) const;
+
+  unsigned getStoreMinimumVF(unsigned VF, Type *ScalarMemTy,
+                             Type *ScalarValTy) const;
 
 private:
   bool supportsGather() const;

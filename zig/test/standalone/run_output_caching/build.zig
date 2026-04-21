@@ -1,17 +1,22 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Test it");
     b.default_step = test_step;
 
+    if (builtin.os.tag == .windows) return; // https://codeberg.org/ziglang/zig/issues/31564
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
         .name = "create-file",
-        .root_source_file = b.path("main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     {

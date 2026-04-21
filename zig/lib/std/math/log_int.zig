@@ -61,10 +61,11 @@ pub fn log_int(comptime T: type, base: T, x: T) Log2Int(T) {
 }
 
 test "log_int" {
+    @setEvalBranchQuota(2000);
     // Test all unsigned integers with 2, 3, ..., 64 bits.
     // We cannot test 0 or 1 bits since base must be > 1.
     inline for (2..64 + 1) |bits| {
-        const T = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @intCast(bits) } });
+        const T = @Int(.unsigned, @intCast(bits));
 
         // for base = 2, 3, ..., min(maxInt(T),1024)
         var base: T = 1;

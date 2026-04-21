@@ -1,25 +1,23 @@
 const builtin = @import("builtin");
-const common = @import("./common.zig");
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 const intFromFloat = @import("./int_from_float.zig").intFromFloat;
 
-pub const panic = common.panic;
-
 comptime {
-    if (common.want_aeabi) {
-        @export(&__aeabi_f2ulz, .{ .name = "__aeabi_f2ulz", .linkage = common.linkage, .visibility = common.visibility });
+    if (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_f2ulz, "__aeabi_f2ulz");
     } else {
-        @export(&__fixunssfdi, .{ .name = "__fixunssfdi", .linkage = common.linkage, .visibility = common.visibility });
-
-        if (common.want_mingw_arm_abi) {
-            @export(&__fixunssfdi, .{ .name = "__stou64", .linkage = common.linkage, .visibility = common.visibility });
+        if (compiler_rt.want_windows_arm_abi) {
+            symbol(&__fixunssfdi, "__stou64");
         }
+        symbol(&__fixunssfdi, "__fixunssfdi");
     }
 }
 
-pub fn __fixunssfdi(a: f32) callconv(.C) u64 {
+pub fn __fixunssfdi(a: f32) callconv(.c) u64 {
     return intFromFloat(u64, a);
 }
 
-fn __aeabi_f2ulz(a: f32) callconv(.AAPCS) u64 {
+fn __aeabi_f2ulz(a: f32) callconv(.{ .arm_aapcs = .{} }) u64 {
     return intFromFloat(u64, a);
 }

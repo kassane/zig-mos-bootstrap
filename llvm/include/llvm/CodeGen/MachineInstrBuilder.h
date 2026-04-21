@@ -151,8 +151,8 @@ public:
     return *this;
   }
 
-  const MachineInstrBuilder &addFrameIndex(int Idx, int64_t Offset = 0) const {
-    MI->addOperand(*MF, MachineOperand::CreateFI(Idx, Offset));
+  const MachineInstrBuilder &addFrameIndex(int Idx) const {
+    MI->addOperand(*MF, MachineOperand::CreateFI(Idx));
     return *this;
   }
 

@@ -3,10 +3,9 @@ const builtin = @import("builtin");
 const expect = std.testing.expect;
 
 test "@memset on array pointers" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     try testMemsetArray();
     try comptime testMemsetArray();
@@ -32,10 +31,9 @@ fn testMemsetArray() !void {
 }
 
 test "@memset on slices" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     try testMemsetSlice();
@@ -68,10 +66,9 @@ fn testMemsetSlice() !void {
 }
 
 test "memset with bool element" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     var buf: [5]bool = undefined;
     @memset(&buf, true);
@@ -80,10 +77,10 @@ test "memset with bool element" {
 }
 
 test "memset with 1-byte struct element" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_wasm) return error.SkipZigTest;
 
     const S = struct { x: bool };
     var buf: [5]S = undefined;
@@ -93,10 +90,10 @@ test "memset with 1-byte struct element" {
 }
 
 test "memset with 1-byte array element" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_wasm) return error.SkipZigTest;
 
     const A = [1]bool;
     var buf: [5]A = undefined;
@@ -109,7 +106,7 @@ test "memset with large array element, runtime known" {
     if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     const A = [128]u64;
@@ -125,10 +122,9 @@ test "memset with large array element, runtime known" {
 }
 
 test "memset with large array element, comptime known" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     const A = [128]u64;
@@ -143,10 +139,9 @@ test "memset with large array element, comptime known" {
 }
 
 test "@memset provides result type" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     const S = struct { x: u32 };
@@ -162,10 +157,9 @@ test "@memset provides result type" {
 }
 
 test "zero keys with @memset" {
-    if (builtin.zig_backend == .stage2_aarch64) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
-    if (builtin.zig_backend == .stage2_spirv64) return error.SkipZigTest;
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     const Keys = struct {
         up: bool,
@@ -179,4 +173,28 @@ test "zero keys with @memset" {
     try expect(!Keys.keys.down);
     try expect(!Keys.keys.left);
     try expect(!Keys.keys.right);
+}
+
+test "@memset with zero-length array" {
+    var array: [0]usize = undefined;
+    @memset(&array, 0);
+}
+
+test "@memset a global array" {
+    const S = struct {
+        var buf: [1]u32 = .{123};
+    };
+    try expect(S.buf[0] == 123);
+    @memset(&S.buf, 456);
+    try expect(S.buf[0] == 456);
+    @memset(&S.buf, S.buf[0] + 333);
+    try expect(S.buf[0] == 789);
+}
+
+test "@memset array of booleans" {
+    const S = struct {
+        var x: bool = false;
+        var y: [1]bool = undefined;
+    };
+    @memset(&S.y, S.x);
 }

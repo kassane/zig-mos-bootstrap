@@ -1,15 +1,11 @@
 pub const Foo = enum(c_int) {
-    A = Foo.B,
-    C = D,
+    a = 10,
+    b = @intFromEnum(Foo.a) - 1,
 };
 export fn entry() void {
-    const s: Foo = Foo.E;
-    _ = s;
+    _ = @as(Foo, .a);
 }
-const D = 1;
 
 // error
-// backend=stage2
-// target=native
 //
-// :1:5: error: dependency loop detected
+// :3:25: error: type 'tmp.Foo' depends on itself for field usage here

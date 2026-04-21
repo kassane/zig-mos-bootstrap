@@ -113,7 +113,7 @@ for.end:                                          ; preds = %for.body
 define void @ptr_of_ptr_addrec(ptr %ptrptr, i32 %length) {
 ; CHECK-LABEL: @ptr_of_ptr_addrec(
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[START_PTRPTR:%.*]] = getelementptr ptr, ptr [[PTRPTR:%.*]]
+; CHECK-NEXT:    [[START_PTRPTR1:%.*]] = getelementptr inbounds ptr, ptr [[START_PTRPTR:%.*]]
 ; CHECK-NEXT:    [[TMP0:%.*]] = add i32 [[LENGTH:%.*]], -1
 ; CHECK-NEXT:    [[TMP1:%.*]] = zext i32 [[TMP0]] to i64
 ; CHECK-NEXT:    [[TMP2:%.*]] = shl nuw nsw i64 [[TMP1]], 3
@@ -121,7 +121,7 @@ define void @ptr_of_ptr_addrec(ptr %ptrptr, i32 %length) {
 ; CHECK-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[START_PTRPTR]], i64 [[TMP3]]
 ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
 ; CHECK:       for.body:
-; CHECK-NEXT:    [[IT_04:%.*]] = phi ptr [ [[INCDEC_PTR:%.*]], [[FOR_BODY]] ], [ [[START_PTRPTR]], [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[IT_04:%.*]] = phi ptr [ [[INCDEC_PTR:%.*]], [[FOR_BODY]] ], [ [[START_PTRPTR1]], [[ENTRY:%.*]] ]
 ; CHECK-NEXT:    [[TMP4:%.*]] = load ptr, ptr [[IT_04]], align 8
 ; CHECK-NEXT:    tail call void @foo(ptr [[TMP4]])
 ; CHECK-NEXT:    [[INCDEC_PTR]] = getelementptr ptr, ptr [[IT_04]], i64 1
@@ -484,12 +484,12 @@ define void @profiled_short_tc(ptr %a, i32 %offset, i32 %n) {
 ; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[A:%.*]], i64 84
 ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
 ; CHECK:       for.body:
-; CHECK-NEXT:    [[LSR_IV2:%.*]] = phi i32 [ [[LSR_IV_NEXT3:%.*]], [[FOR_BODY]] ], [ [[N:%.*]], [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY]] ]
+; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[LSR_IV:%.*]] = phi i32 [ [[LSR_IV_NEXT:%.*]], [[FOR_BODY]] ], [ 0, [[ENTRY]] ]
 ; CHECK-NEXT:    store i32 1, ptr [[LSR_IV1]], align 4
+; CHECK-NEXT:    [[LSR_IV_NEXT]] = add nsw i32 [[LSR_IV]], 1
 ; CHECK-NEXT:    [[UGLYGEP2]] = getelementptr i8, ptr [[LSR_IV1]], i32 [[OFFSET_NONZERO]]
-; CHECK-NEXT:    [[LSR_IV_NEXT3]] = add i32 [[LSR_IV2]], -1
-; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT3]], 0
+; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT]], [[N:%.*]]
 ; CHECK-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_END:%.*]], label [[FOR_BODY]], !prof [[PROF0:![0-9]+]]
 ; CHECK:       for.end:
 ; CHECK-NEXT:    ret void
@@ -634,12 +634,12 @@ define void @small_tc_trivial_loop(ptr %a, i32 %offset) {
 ; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[A:%.*]], i64 84
 ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
 ; CHECK:       for.body:
-; CHECK-NEXT:    [[LSR_IV2:%.*]] = phi i32 [ [[LSR_IV_NEXT3:%.*]], [[FOR_BODY]] ], [ 1, [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY]] ]
+; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[LSR_IV:%.*]] = phi i32 [ [[LSR_IV_NEXT:%.*]], [[FOR_BODY]] ], [ 0, [[ENTRY]] ]
 ; CHECK-NEXT:    store i32 1, ptr [[LSR_IV1]], align 4
+; CHECK-NEXT:    [[LSR_IV_NEXT]] = add nsw i32 [[LSR_IV]], 1
 ; CHECK-NEXT:    [[UGLYGEP2]] = getelementptr i8, ptr [[LSR_IV1]], i32 [[OFFSET_NONZERO]]
-; CHECK-NEXT:    [[LSR_IV_NEXT3]] = add nsw i32 [[LSR_IV2]], -1
-; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT3]], 0
+; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT]], 1
 ; CHECK-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_END:%.*]], label [[FOR_BODY]]
 ; CHECK:       for.end:
 ; CHECK-NEXT:    ret void
@@ -669,12 +669,12 @@ define void @small_tc_below_threshold(ptr %a, i32 %offset) {
 ; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[A:%.*]], i64 84
 ; CHECK-NEXT:    br label [[FOR_BODY:%.*]]
 ; CHECK:       for.body:
-; CHECK-NEXT:    [[LSR_IV2:%.*]] = phi i32 [ [[LSR_IV_NEXT3:%.*]], [[FOR_BODY]] ], [ 2, [[ENTRY:%.*]] ]
-; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY]] ]
+; CHECK-NEXT:    [[LSR_IV1:%.*]] = phi ptr [ [[UGLYGEP2:%.*]], [[FOR_BODY]] ], [ [[UGLYGEP]], [[ENTRY:%.*]] ]
+; CHECK-NEXT:    [[LSR_IV:%.*]] = phi i32 [ [[LSR_IV_NEXT:%.*]], [[FOR_BODY]] ], [ 0, [[ENTRY]] ]
 ; CHECK-NEXT:    store i32 1, ptr [[LSR_IV1]], align 4
+; CHECK-NEXT:    [[LSR_IV_NEXT]] = add nsw i32 [[LSR_IV]], 1
 ; CHECK-NEXT:    [[UGLYGEP2]] = getelementptr i8, ptr [[LSR_IV1]], i32 [[OFFSET_NONZERO]]
-; CHECK-NEXT:    [[LSR_IV_NEXT3]] = add nsw i32 [[LSR_IV2]], -1
-; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT3]], 0
+; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i32 [[LSR_IV_NEXT]], 2
 ; CHECK-NEXT:    br i1 [[EXITCOND_NOT]], label [[FOR_END:%.*]], label [[FOR_BODY]]
 ; CHECK:       for.end:
 ; CHECK-NEXT:    ret void

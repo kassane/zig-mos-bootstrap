@@ -8,28 +8,27 @@
 const std = @import("std");
 const math = std.math;
 const expect = std.testing.expect;
-const common = @import("common.zig");
-
-pub const panic = common.panic;
+const compiler_rt = @import("../compiler_rt.zig");
+const symbol = compiler_rt.symbol;
 
 comptime {
-    @export(&__fmah, .{ .name = "__fmah", .linkage = common.linkage, .visibility = common.visibility });
-    @export(&fmaf, .{ .name = "fmaf", .linkage = common.linkage, .visibility = common.visibility });
-    @export(&fma, .{ .name = "fma", .linkage = common.linkage, .visibility = common.visibility });
-    @export(&__fmax, .{ .name = "__fmax", .linkage = common.linkage, .visibility = common.visibility });
-    if (common.want_ppc_abi) {
-        @export(&fmaq, .{ .name = "fmaf128", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&__fmah, "__fmah");
+    symbol(&fmaf, "fmaf");
+    symbol(&fma, "fma");
+    symbol(&__fmax, "__fmax");
+    if (compiler_rt.want_ppc_abi) {
+        symbol(&fmaq, "fmaf128");
     }
-    @export(&fmaq, .{ .name = "fmaq", .linkage = common.linkage, .visibility = common.visibility });
-    @export(&fmal, .{ .name = "fmal", .linkage = common.linkage, .visibility = common.visibility });
+    symbol(&fmaq, "fmaq");
+    symbol(&fmal, "fmal");
 }
 
-pub fn __fmah(x: f16, y: f16, z: f16) callconv(.C) f16 {
+pub fn __fmah(x: f16, y: f16, z: f16) callconv(.c) f16 {
     // TODO: more efficient implementation
     return @floatCast(fmaf(x, y, z));
 }
 
-pub fn fmaf(x: f32, y: f32, z: f32) callconv(.C) f32 {
+pub fn fmaf(x: f32, y: f32, z: f32) callconv(.c) f32 {
     const xy = @as(f64, x) * y;
     const xy_z = xy + z;
     const u = @as(u64, @bitCast(xy_z));
@@ -44,7 +43,7 @@ pub fn fmaf(x: f32, y: f32, z: f32) callconv(.C) f32 {
 }
 
 /// NOTE: Upstream fma.c has been rewritten completely to raise fp exceptions more accurately.
-pub fn fma(x: f64, y: f64, z: f64) callconv(.C) f64 {
+pub fn fma(x: f64, y: f64, z: f64) callconv(.c) f64 {
     if (!math.isFinite(x) or !math.isFinite(y)) {
         return x * y + z;
     }
@@ -91,7 +90,7 @@ pub fn fma(x: f64, y: f64, z: f64) callconv(.C) f64 {
     }
 }
 
-pub fn __fmax(a: f80, b: f80, c: f80) callconv(.C) f80 {
+pub fn __fmax(a: f80, b: f80, c: f80) callconv(.c) f80 {
     // TODO: more efficient implementation
     return @floatCast(fmaq(a, b, c));
 }
@@ -103,7 +102,7 @@ pub fn __fmax(a: f80, b: f80, c: f80) callconv(.C) f80 {
 ///
 ///      Dekker, T.  A Floating-Point Technique for Extending the
 ///      Available Precision.  Numer. Math. 18, 224-242 (1971).
-pub fn fmaq(x: f128, y: f128, z: f128) callconv(.C) f128 {
+pub fn fmaq(x: f128, y: f128, z: f128) callconv(.c) f128 {
     if (!math.isFinite(x) or !math.isFinite(y)) {
         return x * y + z;
     }
@@ -150,10 +149,8 @@ pub fn fmaq(x: f128, y: f128, z: f128) callconv(.C) f128 {
     }
 }
 
-pub fn fmal(x: c_longdouble, y: c_longdouble, z: c_longdouble) callconv(.C) c_longdouble {
+pub fn fmal(x: c_longdouble, y: c_longdouble, z: c_longdouble) callconv(.c) c_longdouble {
     switch (@typeInfo(c_longdouble).float.bits) {
-        16 => return __fmah(x, y, z),
-        32 => return fmaf(x, y, z),
         64 => return fma(x, y, z),
         80 => return __fmax(x, y, z),
         128 => return fmaq(x, y, z),
@@ -203,7 +200,7 @@ fn add_adjusted(a: f64, b: f64) f64 {
         if (uhii & 1 == 0) {
             // hibits += copysign(1.0, sum.hi, sum.lo)
             const uloi: u64 = @bitCast(sum.lo);
-            uhii += 1 - ((uhii ^ uloi) >> 62);
+            uhii = uhii + 1 - ((uhii ^ uloi) >> 62);
             sum.hi = @bitCast(uhii);
         }
     }
@@ -217,7 +214,7 @@ fn add_and_denorm(a: f64, b: f64, scale: i32) f64 {
         const bits_lost = -@as(i32, @intCast((uhii >> 52) & 0x7FF)) - scale + 1;
         if ((bits_lost != 1) == (uhii & 1 != 0)) {
             const uloi: u64 = @bitCast(sum.lo);
-            uhii += 1 - (((uhii ^ uloi) >> 62) & 2);
+            uhii = uhii + 1 - (((uhii ^ uloi) >> 62) & 2);
             sum.hi = @bitCast(uhii);
         }
     }
@@ -259,7 +256,7 @@ fn add_adjusted128(a: f128, b: f128) f128 {
         if (uhii & 1 == 0) {
             // hibits += copysign(1.0, sum.hi, sum.lo)
             const uloi: u128 = @bitCast(sum.lo);
-            uhii += 1 - ((uhii ^ uloi) >> 126);
+            uhii = uhii + 1 - ((uhii ^ uloi) >> 126);
             sum.hi = @bitCast(uhii);
         }
     }
@@ -284,7 +281,7 @@ fn add_and_denorm128(a: f128, b: f128, scale: i32) f128 {
         const bits_lost = -@as(i32, @intCast((uhii >> 112) & 0x7FFF)) - scale + 1;
         if ((bits_lost != 1) == (uhii & 1 != 0)) {
             const uloi: u128 = @bitCast(sum.lo);
-            uhii += 1 - (((uhii ^ uloi) >> 126) & 2);
+            uhii = uhii + 1 - (((uhii ^ uloi) >> 126) & 2);
             sum.hi = @bitCast(uhii);
         }
     }

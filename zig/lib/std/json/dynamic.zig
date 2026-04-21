@@ -1,23 +1,17 @@
 const std = @import("std");
 const debug = std.debug;
 const ArenaAllocator = std.heap.ArenaAllocator;
-const ArrayList = std.ArrayList;
-const StringArrayHashMap = std.StringArrayHashMap;
+const StringArrayHashMap = std.array_hash_map.String;
 const Allocator = std.mem.Allocator;
-
-const StringifyOptions = @import("./stringify.zig").StringifyOptions;
-const stringify = @import("./stringify.zig").stringify;
+const json = std.json;
 
 const ParseOptions = @import("./static.zig").ParseOptions;
 const ParseError = @import("./static.zig").ParseError;
 
-const JsonScanner = @import("./scanner.zig").Scanner;
-const AllocWhen = @import("./scanner.zig").AllocWhen;
-const Token = @import("./scanner.zig").Token;
-const isNumberFormattedLikeAnInteger = @import("./scanner.zig").isNumberFormattedLikeAnInteger;
+const isNumberFormattedLikeAnInteger = @import("Scanner.zig").isNumberFormattedLikeAnInteger;
 
 pub const ObjectMap = StringArrayHashMap(Value);
-pub const Array = ArrayList(Value);
+pub const Array = std.array_list.Managed(Value);
 
 /// Represents any JSON value, potentially containing other JSON values.
 /// A .float value may be an approximation of the original value.
@@ -52,12 +46,10 @@ pub const Value = union(enum) {
         }
     }
 
-    pub fn dump(self: Value) void {
-        std.debug.lockStdErr();
-        defer std.debug.unlockStdErr();
-
-        const stderr = std.io.getStdErr().writer();
-        stringify(self, .{}, stderr) catch return;
+    pub fn dump(v: Value) void {
+        const stderr = std.debug.lockStderr(&.{});
+        defer std.debug.unlockStderr();
+        json.Stringify.value(v, .{}, &stderr.file_writer.interface) catch return;
     }
 
     pub fn jsonStringify(value: @This(), jws: anytype) !void {
@@ -111,10 +103,10 @@ pub const Value = union(enum) {
 
                 .object_begin => {
                     switch (try source.nextAllocMax(allocator, .alloc_always, options.max_value_len.?)) {
-                        .object_end => return try handleCompleteValue(&stack, allocator, source, Value{ .object = ObjectMap.init(allocator) }, options) orelse continue,
+                        .object_end => return try handleCompleteValue(&stack, allocator, source, Value{ .object = .empty }, options) orelse continue,
                         .allocated_string => |key| {
                             try stack.appendSlice(&[_]Value{
-                                Value{ .object = ObjectMap.init(allocator) },
+                                Value{ .object = .empty },
                                 Value{ .string = key },
                             });
                         },
@@ -124,7 +116,7 @@ pub const Value = union(enum) {
                 .array_begin => {
                     try stack.append(Value{ .array = Array.init(allocator) });
                 },
-                .array_end => return try handleCompleteValue(&stack, allocator, source, stack.pop(), options) orelse continue,
+                .array_end => return try handleCompleteValue(&stack, allocator, source, stack.pop().?, options) orelse continue,
 
                 else => unreachable,
             }
@@ -153,7 +145,7 @@ fn handleCompleteValue(stack: *Array, allocator: Allocator, source: anytype, val
                 // stack: [..., .object]
                 var object = &stack.items[stack.items.len - 1].object;
 
-                const gop = try object.getOrPut(key);
+                const gop = try object.getOrPut(allocator, key);
                 if (gop.found_existing) {
                     switch (options.duplicate_field_behavior) {
                         .use_first => {},
@@ -171,7 +163,7 @@ fn handleCompleteValue(stack: *Array, allocator: Allocator, source: anytype, val
                 switch (try source.nextAllocMax(allocator, .alloc_always, options.max_value_len.?)) {
                     .object_end => {
                         // This object is complete.
-                        value = stack.pop();
+                        value = stack.pop().?;
                         // Effectively recurse now that we have a complete value.
                         if (stack.items.len == 0) return value;
                         continue;
