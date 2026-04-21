@@ -817,6 +817,10 @@ fn generateSystemDefines(comp: *Compilation, w: *Io.Writer) !void {
             }
         },
         .msp430 => {
+            try define(w, "__MOS6502__");
+            try define(w, "__MOS__");
+        },
+        .mos6502 => {
             try define(w, "MSP430");
             try define(w, "__MSP430__");
         },

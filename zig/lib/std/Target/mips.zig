@@ -145,7 +145,6 @@ pub const all_features = blk: {
         .description = "MIPS I6400 Processor",
         .dependencies = featureSet(&[_]Feature{
             .mips64r6,
-            .msa,
         }),
     };
     result[@intFromEnum(Feature.i6500)] = .{
@@ -153,7 +152,6 @@ pub const all_features = blk: {
         .description = "MIPS I6500 Processor",
         .dependencies = featureSet(&[_]Feature{
             .mips64r6,
-            .msa,
         }),
     };
     result[@intFromEnum(Feature.long_calls)] = .{

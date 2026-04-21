@@ -5,7 +5,6 @@ const CpuFeature = std.Target.Cpu.Feature;
 const CpuModel = std.Target.Cpu.Model;
 
 pub const Feature = enum {
-    crypto,
     deprecated_v8,
     detectroundchange,
     fix_tn0009,
@@ -23,7 +22,6 @@ pub const Feature = enum {
     leonpwrpsr,
     no_fmuls,
     no_fsmuld,
-    osa2011,
     popc,
     reserve_g1,
     reserve_g2,
@@ -73,13 +71,6 @@ pub const all_features = blk: {
     const len = @typeInfo(Feature).@"enum".fields.len;
     std.debug.assert(len <= CpuFeature.Set.needed_bit_count);
     var result: [len]CpuFeature = undefined;
-    result[@intFromEnum(Feature.crypto)] = .{
-        .llvm_name = "crypto",
-        .description = "Enable cryptographic extensions",
-        .dependencies = featureSet(&[_]Feature{
-            .osa2011,
-        }),
-    };
     result[@intFromEnum(Feature.deprecated_v8)] = .{
         .llvm_name = "deprecated-v8",
         .description = "Enable deprecated V8 instructions in V9 mode",
@@ -164,15 +155,6 @@ pub const all_features = blk: {
         .llvm_name = "no-fsmuld",
         .description = "Disable the fsmuld instruction.",
         .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.osa2011)] = .{
-        .llvm_name = "osa2011",
-        .description = "Enable Oracle SPARC Architecture 2011 extensions",
-        .dependencies = featureSet(&[_]Feature{
-            .vis,
-            .vis2,
-            .vis3,
-        }),
     };
     result[@intFromEnum(Feature.popc)] = .{
         .llvm_name = "popc",
@@ -334,18 +316,12 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.ua2005)] = .{
         .llvm_name = "ua2005",
         .description = "Enable UltraSPARC Architecture 2005 extensions",
-        .dependencies = featureSet(&[_]Feature{
-            .vis,
-            .vis2,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.ua2007)] = .{
         .llvm_name = "ua2007",
         .description = "Enable UltraSPARC Architecture 2007 extensions",
-        .dependencies = featureSet(&[_]Feature{
-            .vis,
-            .vis2,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.v8plus)] = .{
         .llvm_name = "v8plus",
@@ -360,23 +336,17 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.vis)] = .{
         .llvm_name = "vis",
         .description = "Enable UltraSPARC Visual Instruction Set extensions",
-        .dependencies = featureSet(&[_]Feature{
-            .v9,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.vis2)] = .{
         .llvm_name = "vis2",
         .description = "Enable Visual Instruction Set extensions II",
-        .dependencies = featureSet(&[_]Feature{
-            .v9,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.vis3)] = .{
         .llvm_name = "vis3",
         .description = "Enable Visual Instruction Set extensions III",
-        .dependencies = featureSet(&[_]Feature{
-            .v9,
-        }),
+        .dependencies = featureSet(&[_]Feature{}),
     };
     const ti = @typeInfo(Feature);
     for (&result, 0..) |*elem, i| {
@@ -587,6 +557,9 @@ pub const cpu = struct {
         .features = featureSet(&[_]Feature{
             .deprecated_v8,
             .ua2005,
+            .v9,
+            .vis,
+            .vis2,
         }),
     };
     pub const niagara2: CpuModel = .{
@@ -596,6 +569,9 @@ pub const cpu = struct {
             .deprecated_v8,
             .popc,
             .ua2005,
+            .v9,
+            .vis,
+            .vis2,
         }),
     };
     pub const niagara3: CpuModel = .{
@@ -606,6 +582,9 @@ pub const cpu = struct {
             .popc,
             .ua2005,
             .ua2007,
+            .v9,
+            .vis,
+            .vis2,
             .vis3,
         }),
     };
@@ -613,11 +592,14 @@ pub const cpu = struct {
         .name = "niagara4",
         .llvm_name = "niagara4",
         .features = featureSet(&[_]Feature{
-            .crypto,
             .deprecated_v8,
             .popc,
             .ua2005,
             .ua2007,
+            .v9,
+            .vis,
+            .vis2,
+            .vis3,
         }),
     };
     pub const sparclet: CpuModel = .{

@@ -379,6 +379,7 @@ pub fn dataLayout(target: *const std.Target) []const u8 {
             .gnuabin32, .muslabin32 => "e-m:e-p:32:32-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
             else => "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
         },
+        .mos6502 => "e-m:e-p:16:8-p1:8:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-Fi8-n8",
         .m68k => "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16",
         .powerpc => "E-m:e-p:32:32-Fn32-i64:64-n32",
         .powerpcle => "e-m:e-p:32:32-Fn32-i64:64-n32",
@@ -4844,6 +4845,15 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
             bindings.LLVMInitializeXCoreTargetMC();
             bindings.LLVMInitializeXCoreAsmPrinter();
             // There is no LLVMInitializeXCoreAsmParser function.
+        },
+        .mos6502 => {
+            if (build_options.llvm_has_mos6502) {
+                bindings.LLVMInitializeMOSTarget();
+                bindings.LLVMInitializeMOSTargetInfo();
+                bindings.LLVMInitializeMOSTargetMC();
+                bindings.LLVMInitializeMOSAsmPrinter();
+                bindings.LLVMInitializeMOSAsmParser();
+            }
         },
         .m68k => {
             if (build_options.llvm_has_m68k) {

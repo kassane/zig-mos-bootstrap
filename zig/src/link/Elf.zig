@@ -237,6 +237,7 @@ pub fn createEmpty(
         .loongarch64,
         => 0x4000,
         .arc,
+        .mos6502,
         .m68k,
         => 0x2000,
         .msp430,

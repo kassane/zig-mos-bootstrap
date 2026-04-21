@@ -459,6 +459,7 @@ pub const Os = struct {
                                 .arm,
                                 .armeb,
                                 .csky,
+                                .mos6502,
                                 .m68k,
                                 .mips,
                                 .mipsel,
@@ -751,6 +752,7 @@ pub const kvx = @import("Target/kvx.zig");
 pub const lanai = @import("Target/lanai.zig");
 pub const loongarch = @import("Target/loongarch.zig");
 pub const m68k = @import("Target/m68k.zig");
+pub const mos6502 = @import("Target/mos.zig");
 pub const microblaze = @import("Target/generic.zig");
 pub const mips = @import("Target/mips.zig");
 pub const msp430 = @import("Target/msp430.zig");
@@ -1087,6 +1089,7 @@ pub fn toElfMachine(target: *const Target) std.elf.EM {
         .kvx => .KVX,
         .lanai => .LANAI,
         .loongarch32, .loongarch64 => .LOONGARCH,
+        .mos6502 => .EM_MOS,
         .m68k => .@"68K",
         .microblaze, .microblazeel => .MICROBLAZE,
         .mips, .mips64, .mipsel, .mips64el => .MIPS,
@@ -1150,6 +1153,7 @@ pub fn toCoffMachine(target: *const Target) std.coff.IMAGE.FILE.MACHINE {
         .kalimba,
         .kvx,
         .lanai,
+        .mos6502,
         .m68k,
         .microblaze,
         .microblazeel,
@@ -1359,6 +1363,7 @@ pub const Cpu = struct {
         lanai,
         loongarch32,
         loongarch64,
+        mos6502,
         m68k,
         microblaze,
         microblazeel,
@@ -1434,6 +1439,7 @@ pub const Cpu = struct {
             kvx,
             lanai,
             loongarch,
+            mos6502,
             m68k,
             microblaze,
             mips,
@@ -1472,6 +1478,7 @@ pub const Cpu = struct {
                 .kvx => .kvx,
                 .lanai => .lanai,
                 .loongarch32, .loongarch64 => .loongarch,
+                .mos6502 => .mos6502,
                 .m68k => .m68k,
                 .microblaze, .microblazeel => .microblaze,
                 .mips, .mipsel, .mips64, .mips64el => .mips,
@@ -1705,6 +1712,7 @@ pub const Cpu = struct {
                 .hppa,
                 .hppa64,
                 .lanai,
+                .mos6502,
                 .m68k,
                 .microblaze,
                 .mips,
@@ -1912,6 +1920,8 @@ pub const Cpu = struct {
                 .loongarch32_ilp32,
                 => &.{.loongarch32},
 
+                // TODO: add mos6502
+
                 .m68k_sysv,
                 .m68k_gnu,
                 .m68k_rtd,
@@ -2056,6 +2066,7 @@ pub const Cpu = struct {
                 .kvx => &kvx.cpu.coolidge_v2,
                 .lanai => &lanai.cpu.v11, // clang does not have a generic lanai model.
                 .loongarch64 => &loongarch.cpu.la64v1_0,
+                .mos6502 => &mos6502.cpu.mos6502,
                 .m68k => &m68k.cpu.M68000,
                 .mips => &mips.cpu.mips32r2,
                 .mipsel => switch (os.tag) {
@@ -2452,6 +2463,7 @@ pub const DynamicLinker = struct {
             .haiku => switch (cpu.arch) {
                 .arm,
                 .aarch64,
+                .mos6502,
                 .m68k,
                 .powerpc,
                 .riscv64,
@@ -2530,6 +2542,7 @@ pub const DynamicLinker = struct {
                     .aarch64_be,
                     .hexagon,
                     .kvx,
+                    .mos6502,
                     .m68k,
                     .microblaze,
                     .microblazeel,
@@ -2637,6 +2650,7 @@ pub const DynamicLinker = struct {
                     }}),
 
                     .hppa,
+                    .mos6502,
                     .m68k,
                     .microblaze,
                     .microblazeel,
@@ -2762,6 +2776,7 @@ pub const DynamicLinker = struct {
                 .aarch64,
                 .aarch64_be,
                 .hppa,
+                .mos6502,
                 .m68k,
                 .mips,
                 .mipsel,
@@ -2889,6 +2904,7 @@ pub fn ptrBitWidth_arch_abi(cpu_arch: Cpu.Arch, abi: Abi) u16 {
         .kalimba,
         .lanai,
         .loongarch32,
+        .mos6502,
         .m68k,
         .microblaze,
         .microblazeel,
@@ -2949,7 +2965,7 @@ pub fn stackAlignment(target: *const Target) u16 {
     switch (target.cpu.arch) {
         .ez80,
         => return 1,
-        .m68k,
+        .m68k, .mos6502,
         => return 2,
         .amdgcn,
         => return 4,
@@ -3426,7 +3442,7 @@ pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
             },
             else => {},
         },
-        .m68k => switch (c_type) {
+        .mos6502, .m68k => switch (c_type) {
             .int, .uint, .long, .ulong => return 2,
             else => {},
         },
@@ -3474,6 +3490,7 @@ pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
             .hexagon,
             .hppa,
             .lanai,
+            .mos6502,
             .m68k,
             .mips,
             .mipsel,
@@ -3538,7 +3555,7 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
                 else => {},
             },
         },
-        .m68k => switch (c_type) {
+        .mos6502, .m68k => switch (c_type) {
             .int, .uint, .long, .ulong => return 2,
             else => {},
         },
@@ -3583,6 +3600,7 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
             .hexagon,
             .hppa,
             .lanai,
+            .mos6502,
             .m68k,
             .mips,
             .mipsel,
@@ -3654,6 +3672,7 @@ pub fn cMaxIntAlignment(target: *const Target) u16 {
         .hppa,
         .lanai,
         .loongarch32,
+        .mos6502,
         .m68k,
         .mips,
         .mipsel,
@@ -3754,6 +3773,7 @@ pub fn cCallingConvention(target: *const Target) ?std.builtin.CallingConvention 
         .lanai => .{ .lanai_sysv = .{} },
         .loongarch64 => .{ .loongarch64_lp64 = .{} },
         .loongarch32 => .{ .loongarch32_ilp32 = .{} },
+        // TODO: add mos6502
         .m68k => if (target.abi.isGnu() or target.abi.isMusl())
             .{ .m68k_gnu = .{} }
         else

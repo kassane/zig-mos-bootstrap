@@ -173,6 +173,7 @@ int main(int argc, char **argv) {
         int written = fprintf(f,
             "pub const have_llvm = false;\n"
             "pub const llvm_has_m68k = false;\n"
+            "pub const llvm_has_mos6502 = false;\n"
             "pub const llvm_has_csky = false;\n"
             "pub const llvm_has_arc = false;\n"
             "pub const llvm_has_xtensa = false;\n"

@@ -115,6 +115,11 @@ pub fn build(b: *std.Build) !void {
         "llvm-has-m68k",
         "Whether LLVM has the experimental target m68k enabled",
     ) orelse false;
+    const llvm_has_mos6502 = b.option(
+        bool,
+        "llvm-has-mos6502",
+        "Whether LLVM has the experimental target mos6502 enabled",
+    ) orelse false;
     const llvm_has_csky = b.option(
         bool,
         "llvm-has-csky",
@@ -234,6 +239,7 @@ pub fn build(b: *std.Build) !void {
     exe_options.addOption(bool, "skip_non_native", skip_non_native);
     exe_options.addOption(bool, "have_llvm", enable_llvm);
     exe_options.addOption(bool, "llvm_has_m68k", llvm_has_m68k);
+    exe_options.addOption(bool, "llvm_has_mos6502", llvm_has_mos6502);
     exe_options.addOption(bool, "llvm_has_csky", llvm_has_csky);
     exe_options.addOption(bool, "llvm_has_arc", llvm_has_arc);
     exe_options.addOption(bool, "llvm_has_xtensa", llvm_has_xtensa);
@@ -340,6 +346,7 @@ pub fn build(b: *std.Build) !void {
             // Here we are -Denable-llvm but no cmake integration.
             try addStaticLlvmOptionsToModule(exe.root_module, .{
                 .llvm_has_m68k = llvm_has_m68k,
+                .llvm_has_mos6502 = llvm_has_mos6502,
                 .llvm_has_csky = llvm_has_csky,
                 .llvm_has_arc = llvm_has_arc,
                 .llvm_has_xtensa = llvm_has_xtensa,
@@ -897,6 +904,7 @@ fn addCmakeCfgOptionsToExe(
 
 fn addStaticLlvmOptionsToModule(mod: *std.Build.Module, options: struct {
     llvm_has_m68k: bool,
+    llvm_has_mos6502: bool,
     llvm_has_csky: bool,
     llvm_has_arc: bool,
     llvm_has_xtensa: bool,
@@ -927,6 +935,10 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module, options: struct {
     }
 
     if (options.llvm_has_m68k) for (llvm_libs_m68k) |lib_name| {
+        mod.linkSystemLibrary(lib_name, lsl_options);
+    };
+
+    if (options.llvm_has_mos6502) for (llvm_libs_mos) |lib_name| {
         mod.linkSystemLibrary(lib_name, lsl_options);
     };
 
@@ -1446,6 +1458,13 @@ const llvm_libs_m68k = [_][]const u8{
     "LLVMM68kCodeGen",
     "LLVMM68kDesc",
     "LLVMM68kInfo",
+};
+const llvm_libs_mos = [_][]const u8{
+    "LLVMMOSDisassembler",
+    "LLVMMOSAsmParser",
+    "LLVMMOSCodeGen",
+    "LLVMMOSDesc",
+    "LLVMMOSInfo",
 };
 const llvm_libs_csky = [_][]const u8{
     "LLVMCSKYDisassembler",

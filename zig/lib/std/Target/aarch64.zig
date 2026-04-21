@@ -212,8 +212,6 @@ pub const Feature = enum {
     sve_bfscale,
     sve_bitperm,
     sve_f16f32mm,
-    sve_sha3,
-    sve_sm4,
     tagged_globals,
     the,
     tlb_rmi,
@@ -251,10 +249,7 @@ pub const Feature = enum {
     vh,
     wfxt,
     xs,
-    zcm_fpr32,
-    zcm_fpr64,
-    zcm_gpr32,
-    zcm_gpr64,
+    zcm,
     zcz,
     zcz_fp_workaround,
     zcz_gp,
@@ -1419,18 +1414,18 @@ pub const all_features = blk: {
     };
     result[@intFromEnum(Feature.sve2_sha3)] = .{
         .llvm_name = "sve2-sha3",
-        .description = "Shorthand for +sve2+sve-sha3",
+        .description = "Enable SHA3 SVE2 instructions",
         .dependencies = featureSet(&[_]Feature{
+            .sha3,
             .sve2,
-            .sve_sha3,
         }),
     };
     result[@intFromEnum(Feature.sve2_sm4)] = .{
         .llvm_name = "sve2-sm4",
-        .description = "Shorthand for +sve2+sve-sm4",
+        .description = "Enable SM4 SVE2 instructions",
         .dependencies = featureSet(&[_]Feature{
+            .sm4,
             .sve2,
-            .sve_sm4,
         }),
     };
     result[@intFromEnum(Feature.sve2p1)] = .{
@@ -1479,20 +1474,6 @@ pub const all_features = blk: {
         .description = "Enable Armv9.6-A FP16 to FP32 Matrix Multiply instructions",
         .dependencies = featureSet(&[_]Feature{
             .sve,
-        }),
-    };
-    result[@intFromEnum(Feature.sve_sha3)] = .{
-        .llvm_name = "sve-sha3",
-        .description = "Enable SVE SHA3 instructions",
-        .dependencies = featureSet(&[_]Feature{
-            .sha3,
-        }),
-    };
-    result[@intFromEnum(Feature.sve_sm4)] = .{
-        .llvm_name = "sve-sm4",
-        .description = "Enable SVE SM4 instructions",
-        .dependencies = featureSet(&[_]Feature{
-            .sm4,
         }),
     };
     result[@intFromEnum(Feature.tagged_globals)] = .{
@@ -1778,8 +1759,10 @@ pub const all_features = blk: {
         .description = "Support ARM v9.6a architecture",
         .dependencies = featureSet(&[_]Feature{
             .cmpbr,
+            .fprcvt,
             .lsui,
             .occmo,
+            .sve2p2,
             .v9_5a,
         }),
     };
@@ -1808,24 +1791,9 @@ pub const all_features = blk: {
         .description = "Enable Armv8.7-A limited-TLB-maintenance instruction",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.zcm_fpr32)] = .{
-        .llvm_name = "zcm-fpr32",
-        .description = "Has zero-cycle register moves for FPR32 registers",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.zcm_fpr64)] = .{
-        .llvm_name = "zcm-fpr64",
-        .description = "Has zero-cycle register moves for FPR64 registers",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.zcm_gpr32)] = .{
-        .llvm_name = "zcm-gpr32",
-        .description = "Has zero-cycle register moves for GPR32 registers",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
-    result[@intFromEnum(Feature.zcm_gpr64)] = .{
-        .llvm_name = "zcm-gpr64",
-        .description = "Has zero-cycle register moves for GPR64 registers",
+    result[@intFromEnum(Feature.zcm)] = .{
+        .llvm_name = "zcm",
+        .description = "Has zero-cycle register moves",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.zcz)] = .{
@@ -1971,8 +1939,7 @@ pub const cpu = struct {
             .store_pair_suppress,
             .v8a,
             .vh,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -1992,8 +1959,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8_2a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2013,8 +1979,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8_3a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2034,8 +1999,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2067,8 +2031,7 @@ pub const cpu = struct {
             .ssbs,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2094,8 +2057,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2122,8 +2084,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2150,8 +2111,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2179,8 +2139,7 @@ pub const cpu = struct {
             .sme_f64f64,
             .sme_i16i64,
             .v8_7a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2199,8 +2158,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
             .zcz_fp_workaround,
         }),
@@ -2220,8 +2178,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
             .zcz_fp_workaround,
         }),
@@ -2241,8 +2198,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
             .zcz_fp_workaround,
         }),
@@ -2275,8 +2231,7 @@ pub const cpu = struct {
             .ssbs,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2302,8 +2257,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2330,8 +2284,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2359,8 +2312,7 @@ pub const cpu = struct {
             .sme_f64f64,
             .sme_i16i64,
             .v8_7a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2387,8 +2339,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2408,8 +2359,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8_3a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2429,8 +2379,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8_3a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2450,8 +2399,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2471,8 +2419,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2492,8 +2439,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_4a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -2520,8 +2466,7 @@ pub const cpu = struct {
             .sha3,
             .store_pair_suppress,
             .v8_6a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
         }),
     };
@@ -3204,8 +3149,7 @@ pub const cpu = struct {
             .sha2,
             .store_pair_suppress,
             .v8a,
-            .zcm_fpr64,
-            .zcm_gpr64,
+            .zcm,
             .zcz,
             .zcz_fp_workaround,
         }),
@@ -3363,36 +3307,11 @@ pub const cpu = struct {
             .perfmon,
             .rand,
             .specres2,
+            .sve2_sha3,
+            .sve2_sm4,
             .sve_aes,
             .sve_bitperm,
-            .sve_sha3,
-            .sve_sm4,
             .v9_3a,
-        }),
-    };
-    pub const gb10: CpuModel = .{
-        .name = "gb10",
-        .llvm_name = "gb10",
-        .features = featureSet(&[_]Feature{
-            .alu_lsl_fast,
-            .avoid_ldapur,
-            .enable_select_opt,
-            .ete,
-            .fp16fml,
-            .fpac,
-            .fuse_adrp_add,
-            .fuse_aes,
-            .mte,
-            .perfmon,
-            .predictable_select_expensive,
-            .spe,
-            .sve_aes,
-            .sve_bitperm,
-            .sve_sha3,
-            .sve_sm4,
-            .use_fixed_over_scalable_if_equal_cost,
-            .use_postra_scheduler,
-            .v9_2a,
         }),
     };
     pub const generic: CpuModel = .{
@@ -3415,7 +3334,6 @@ pub const cpu = struct {
             .avoid_ldapur,
             .bf16,
             .cmp_bcc_fusion,
-            .disable_latency_sched_heuristic,
             .enable_select_opt,
             .ete,
             .fp16fml,
@@ -3428,10 +3346,10 @@ pub const cpu = struct {
             .predictable_select_expensive,
             .rand,
             .spe,
+            .sve2_sha3,
+            .sve2_sm4,
             .sve_aes,
             .sve_bitperm,
-            .sve_sha3,
-            .sve_sm4,
             .use_fixed_over_scalable_if_equal_cost,
             .use_postra_scheduler,
             .v9a,
@@ -3595,7 +3513,6 @@ pub const cpu = struct {
             .avoid_ldapur,
             .bf16,
             .cmp_bcc_fusion,
-            .disable_latency_sched_heuristic,
             .enable_select_opt,
             .ete,
             .fp16fml,
@@ -3682,10 +3599,10 @@ pub const cpu = struct {
             .perfmon,
             .rand,
             .spe,
+            .sve2_sha3,
+            .sve2_sm4,
             .sve_aes,
             .sve_bitperm,
-            .sve_sha3,
-            .sve_sm4,
             .v9_2a,
         }),
     };
