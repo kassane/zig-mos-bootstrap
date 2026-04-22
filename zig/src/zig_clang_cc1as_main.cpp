@@ -658,9 +658,9 @@ int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   InitializeAllAsmParsers();
 
   // Construct our diagnostic client.
-  DiagnosticOptions DiagOpts;
+  llvm::IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
   TextDiagnosticPrinter *DiagClient =
-      new TextDiagnosticPrinter(errs(), DiagOpts);
+      new TextDiagnosticPrinter(errs(), DiagOpts.get());
   DiagClient->setPrefix("clang -cc1as");
   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
   DiagnosticsEngine Diags(DiagID, DiagOpts, DiagClient);

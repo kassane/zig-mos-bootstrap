@@ -74,6 +74,7 @@ pub fn targetTriple(allocator: Allocator, target: *const std.Target) ![]const u8
         .mipsel => if (target.cpu.has(.mips, .mips32r6)) "mipsisa32r6el" else "mipsel",
         .mips64 => if (target.cpu.has(.mips, .mips64r6)) "mipsisa64r6" else "mips64",
         .mips64el => if (target.cpu.has(.mips, .mips64r6)) "mipsisa64r6el" else "mips64el",
+        .mos => "mos",
         .msp430 => "msp430",
         .powerpc => "powerpc",
         .powerpcle => "powerpcle",
@@ -238,13 +239,21 @@ pub fn targetTriple(allocator: Allocator, target: *const std.Target) ![]const u8
         .managarm => "managarm",
 
         .@"3ds",
+        .atari8,
+        .c64,
         .contiki,
+        .cx16,
         .freestanding,
+        .lynx,
+        .mega65,
+        .nes,
         .opencl, // https://llvm.org/docs/SPIRVUsage.html#target-triples
         .opengl,
         .other,
+        .pce,
         .plan9,
         .psp,
+        .sim,
         .tios,
         .vita,
         => "unknown",
@@ -379,7 +388,7 @@ pub fn dataLayout(target: *const std.Target) []const u8 {
             .gnuabin32, .muslabin32 => "e-m:e-p:32:32-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
             else => "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
         },
-        .mos6502 => "e-m:e-p:16:8-p1:8:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-Fi8-n8",
+        .mos => "e-m:e-p:16:8-p1:8:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-Fi8-n8",
         .m68k => "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16",
         .powerpc => "E-m:e-p:32:32-Fn32-i64:64-n32",
         .powerpcle => "e-m:e-p:32:32-Fn32-i64:64-n32",
@@ -2771,11 +2780,12 @@ pub const Object = struct {
                 // clang sets both the function's calling convention and the function attributes
                 // in its backend, so future patches to the AVR backend could end up checking only one,
                 // possibly breaking our support. it's safer to just emit both.
-                .avr_interrupt, .avr_signal, .csky_interrupt => {
+                .avr_interrupt, .avr_signal, .csky_interrupt, .mos_interrupt => {
                     try attributes.addFnAttr(.{ .string = .{
                         .kind = try o.builder.string(switch (fn_info.cc) {
                             .avr_interrupt,
                             .csky_interrupt,
+                            .mos_interrupt,
                             => "interrupt",
                             .avr_signal => "signal",
                             else => unreachable,
@@ -4462,6 +4472,7 @@ pub fn toLlvmCallConvTag(cc_tag: std.builtin.CallingConvention.Tag, target: *con
         .mips64_interrupt,
         .mips_interrupt,
         .csky_interrupt,
+        .mos_interrupt,
         => .ccc,
 
         // All the calling conventions which LLVM does not have a general representation for.
@@ -4513,6 +4524,7 @@ pub fn toLlvmCallConvTag(cc_tag: std.builtin.CallingConvention.Tag, target: *con
         .loongarch32_ilp32,
         .m68k_sysv,
         .m68k_gnu,
+        .mos_sysv,
         .msp430_eabi,
         .or1k_sysv,
         .propeller_sysv,
@@ -4846,7 +4858,7 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
             bindings.LLVMInitializeXCoreAsmPrinter();
             // There is no LLVMInitializeXCoreAsmParser function.
         },
-        .mos6502 => {
+        .mos => {
             if (build_options.llvm_has_mos6502) {
                 bindings.LLVMInitializeMOSTarget();
                 bindings.LLVMInitializeMOSTargetInfo();

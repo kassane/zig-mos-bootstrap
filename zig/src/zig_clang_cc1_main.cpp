@@ -232,7 +232,7 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
 
   // Buffer diagnostics from argument parsing so that we can output them using a
   // well formed diagnostic object.
-  DiagnosticOptions DiagOpts;
+  llvm::IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
   TextDiagnosticBuffer *DiagsBuffer = new TextDiagnosticBuffer;
   DiagnosticsEngine Diags(DiagID, DiagOpts, DiagsBuffer);
 

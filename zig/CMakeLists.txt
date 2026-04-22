@@ -224,6 +224,7 @@ set(ZIG_STAGE2_SOURCES
     lib/std/Target/hexagon.zig
     lib/std/Target/loongarch.zig
     lib/std/Target/mips.zig
+    lib/std/Target/mos.zig
     lib/std/Target/msp430.zig
     lib/std/Target/nvptx.zig
     lib/std/Target/powerpc.zig

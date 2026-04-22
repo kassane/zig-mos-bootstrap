@@ -296,6 +296,10 @@ pub const CallingConvention = union(enum(u8)) {
     microblaze_std: CommonOptions,
     microblaze_interrupt: MicroblazeInterruptOptions,
 
+    // Calling conventions for the \`mos\` architecture.
+    mos_sysv: CommonOptions,
+    mos_interrupt: CommonOptions,
+
     /// The standard `msp430` calling convention.
     msp430_eabi: CommonOptions,
     msp430_interrupt: CommonOptions,

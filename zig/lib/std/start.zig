@@ -65,7 +65,8 @@ comptime {
             // case it's not required to provide an entrypoint such as main.
             if (!@hasDecl(root, start_sym_name) and @hasDecl(root, "main")) @export(&wasm_freestanding_start, .{ .name = start_sym_name });
         } else switch (native_os) {
-            .other, .freestanding, .@"3ds", .psp, .vita => {},
+            .other, .freestanding, .@"3ds", .psp, .vita,
+            .nes, .c64, .atari8, .cx16, .lynx, .mega65, .pce, .sim => {},
             else => if (!@hasDecl(root, start_sym_name)) @export(&_start, .{ .name = start_sym_name }),
         }
     }
@@ -169,6 +170,8 @@ fn _start() callconv(.naked) noreturn {
             .sparc, .sparc64 => ".cfi_undefined %%i7",
             .x86 => ".cfi_undefined %%eip",
             .x86_64 => ".cfi_undefined %%rip",
+            // MOS 6502 has no link register; the PC is saved on the hardware stack by JSR.
+            .mos => "",
             else => @compileError("unsupported arch"),
         });
 
@@ -760,7 +763,8 @@ inline fn wrapMain(result: anytype) u8 {
     const unwrapped_result = result catch |err| {
         std.log.err("{t}", .{err});
         switch (native_os) {
-            .freestanding, .other => {},
+            .freestanding, .other,
+            .nes, .c64, .atari8, .cx16, .lynx, .mega65, .pce, .sim => {},
             else => if (@errorReturnTrace()) |trace| std.debug.dumpErrorReturnTrace(trace),
         }
         return 1;
