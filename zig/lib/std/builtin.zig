@@ -296,7 +296,7 @@ pub const CallingConvention = union(enum(u8)) {
     microblaze_std: CommonOptions,
     microblaze_interrupt: MicroblazeInterruptOptions,
 
-    // Calling conventions for the \`mos\` architecture.
+    // Calling conventions for the `mos6502` architecture.
     mos_sysv: CommonOptions,
     mos_interrupt: CommonOptions,
 

@@ -400,12 +400,29 @@ fn generateSystemDefines(comp: *Compilation, w: *Io.Writer) !void {
         .@"3ds" => try define(w, "__3DS__"),
         .vita => try define(w, "__vita__"),
         .nes => try define(w, "__NES__"),
+        .fds => try define(w, "__FDS__"),
         .c64 => try define(w, "__C64__"),
+        .c128 => try define(w, "__C128__"),
+        .atari2600 => try define(w, "__ATARI2600__"),
+        .atari5200 => try define(w, "__ATARI5200__"),
         .atari8 => try define(w, "__ATARI8__"),
         .cx16 => try define(w, "__CX16__"),
+        .dodo => try define(w, "__DODO__"),
+        .eater => try define(w, "__EATER__"),
+        .geos_cbm => try define(w, "__GEOS_CBM__"),
         .lynx => try define(w, "__LYNX__"),
         .mega65 => try define(w, "__MEGA65__"),
+        .osi_c1p => try define(w, "__OSI_C1P__"),
         .pce => try define(w, "__PCE__"),
+        .pce_cd => try define(w, "__PCE_CD__"),
+        .pet => try define(w, "__PET__"),
+        .rp6502 => try define(w, "__RP6502__"),
+        .rpc8e => try define(w, "__RPC8E__"),
+        .snes => try define(w, "__SNES__"),
+        .supervision => try define(w, "__SUPERVISION__"),
+        .vic20 => try define(w, "__VIC20__"),
+        .cpm65 => try define(w, "__CPM65__"),
+        .appleii => try define(w, "__APPLE2__"),
         .sim => {},
         else => {},
     }
@@ -848,6 +865,14 @@ fn generateSystemDefines(comp: *Compilation, w: *Io.Writer) !void {
                 try define(w, "__mos65ce02__");
             if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_huc6280)))
                 try define(w, "__moshuc6280__");
+            if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_6502x)))
+                try define(w, "__mos6502x__");
+            if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_65dtv02)))
+                try define(w, "__mos65dtv02__");
+            if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_4510)))
+                try define(w, "__mos4510__");
+            if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_45gs02)))
+                try define(w, "__mos45gs02__");
             if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_65el02)))
                 try define(w, "__mos65el02__");
             if (target.cpu.features.isEnabled(@intFromEnum(MosFeature.mos_insns_sweet16)))

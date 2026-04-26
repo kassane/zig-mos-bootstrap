@@ -7898,6 +7898,20 @@ pub const Stat = switch (native_os) {
     else => void,
 };
 
+pub const pthread_spinlock_t = switch (native_os) {
+    .openbsd => openbsd.pthread_spinlock_t,
+    .freebsd => extern struct {
+        inner: ?*anyopaque = null,
+    },
+    .netbsd => extern struct {
+        pts_magic: c_uint,
+        spin: pthread_spin_t,
+        pts_flags: c_int,
+    },
+    .windows => isize,
+    else => c_int,
+};
+
 pub const pthread_mutex_t = switch (native_os) {
     .linux => extern struct {
         data: [data_len]u8 align(@alignOf(usize)) = [_]u8{0} ** data_len,
@@ -10956,6 +10970,19 @@ pub extern "c" fn dn_expand(
     length: c_int,
 ) c_int;
 
+pub const PTHREAD_PROCESS_PRIVATE: c_int = if (native_os.isDarwin())
+    2
+else
+    0;
+
+pub const PTHREAD_PROCESS_SHARED: c_int = 1;
+
+pub extern "c" fn pthread_spin_init(spin: *pthread_spinlock_t, pshared: c_int) c_int;
+pub extern "c" fn pthread_spin_lock(spin: *pthread_spinlock_t) c_int;
+pub extern "c" fn pthread_spin_unlock(spin: *pthread_spinlock_t) c_int;
+pub extern "c" fn pthread_spin_trylock(spin: *pthread_spinlock_t) c_int;
+pub extern "c" fn pthread_spin_destroy(spin: *pthread_spinlock_t) c_int;
+
 pub const PTHREAD_MUTEX_INITIALIZER: pthread_mutex_t = .{};
 pub extern "c" fn pthread_mutex_lock(mutex: *pthread_mutex_t) E;
 pub extern "c" fn pthread_mutex_unlock(mutex: *pthread_mutex_t) E;
@@ -11109,6 +11136,9 @@ pub extern "c" fn swab(noalias from: *const anyopaque, noalias to: *anyopaque, n
 pub extern "c" fn strncmp(a: [*:0]const c_char, b: [*:0]const c_char, max: usize) c_int;
 pub extern "c" fn strcasecmp(a: [*:0]const c_char, b: [*:0]const c_char) c_int;
 pub extern "c" fn strncasecmp(a: [*:0]const c_char, b: [*:0]const c_char, max: usize) c_int;
+pub extern "c" fn strdup(s: [*:0]const c_char) ?[*:0]c_char;
+pub extern "c" fn strndup(s: [*:0]const c_char, n: usize) ?[*:0]c_char;
+pub extern "c" fn wcsdup(s: [*:0]const wchar_t) ?[*:0]wchar_t;
 
 pub extern "c" fn ffs(i: c_int) c_int;
 pub extern "c" fn ffsl(i: c_long) c_long;
@@ -11135,6 +11165,13 @@ pub extern "c" fn lldiv(a: c_longlong, b: c_longlong) lldiv_t;
 pub extern "c" fn atoi(str: [*:0]const c_char) c_int;
 pub extern "c" fn atol(str: [*:0]const c_char) c_long;
 pub extern "c" fn atoll(str: [*:0]const c_char) c_longlong;
+
+pub extern "c" fn strtol(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) c_long;
+pub extern "c" fn strtoll(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) c_longlong;
+pub extern "c" fn strtoul(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) c_ulong;
+pub extern "c" fn strtoull(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) c_ulonglong;
+pub extern "c" fn strtoimax(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) intmax_t;
+pub extern "c" fn strtoumax(noalias str: [*:0]const c_char, noalias str_end: ?*[*:0]c_char, base: c_int) callconv(.c) uintmax_t;
 
 pub extern "c" fn bsearch(
     key: *const anyopaque,
@@ -11268,7 +11305,6 @@ pub const login_getcaptime = openbsd.login_getcaptime;
 pub const login_getclass = openbsd.login_getclass;
 pub const login_getstyle = openbsd.login_getstyle;
 pub const pledge = openbsd.pledge;
-pub const pthread_spinlock_t = openbsd.pthread_spinlock_t;
 pub const pw_dup = openbsd.pw_dup;
 pub const setclasscontext = openbsd.setclasscontext;
 pub const setpassent = openbsd.setpassent;

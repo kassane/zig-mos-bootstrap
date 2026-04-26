@@ -65,8 +65,18 @@ comptime {
             // case it's not required to provide an entrypoint such as main.
             if (!@hasDecl(root, start_sym_name) and @hasDecl(root, "main")) @export(&wasm_freestanding_start, .{ .name = start_sym_name });
         } else switch (native_os) {
-            .other, .freestanding, .@"3ds", .psp, .vita,
-            .nes, .c64, .atari8, .cx16, .lynx, .mega65, .pce, .sim => {},
+            .other, .freestanding, .@"3ds", .psp, .vita => {},
+            // MOS platforms: the llvm-mos linker script places .call_main after crt0 init.
+            // Emit a naked trampoline in that section so the user's main() is invoked
+            // without a hand-written call_main.s in each example.
+            .appleii, .atari2600, .atari5200, .nes, .c64, .c128, .cpm65, .cx16, .dodo, .eater, .fds, .geos_cbm, .atari8, .lynx, .mega65, .osi_c1p, .pce, .pce_cd, .pet, .rp6502, .rpc8e, .sim, .snes, .supervision, .vic20 => {
+                if (native_arch == .mos and @hasDecl(root, "main")) {
+                    if (!@typeInfo(@TypeOf(root.main)).@"fn".calling_convention.eql(.c)) {
+                        @export(&mosMain, .{ .name = "main" });
+                    }
+                    @export(&mosCallMainSection, .{ .name = "__zig_call_main_section" });
+                }
+            },
             else => if (!@hasDecl(root, start_sym_name)) @export(&_start, .{ .name = start_sym_name }),
         }
     }
@@ -134,6 +144,19 @@ fn EfiMain(handle: uefi.Handle, system_table: *uefi.tables.SystemTable) callconv
                 "'uefi.Status', or 'uefi.Error!void'",
         ),
     }
+}
+
+fn mosMain() callconv(.c) void {
+    root.main();
+}
+
+// Placed in .call_main section so the llvm-mos linker script invokes main()
+// after crt0 initialisation. Naked: no prologue/epilogue, no implicit RTS.
+fn mosCallMainSection() linksection(".call_main") callconv(.naked) void {
+    asm volatile (
+        \\ jsr main
+        ::: .{ .memory = true }
+    );
 }
 
 fn _start() callconv(.naked) noreturn {
@@ -764,7 +787,7 @@ inline fn wrapMain(result: anytype) u8 {
         std.log.err("{t}", .{err});
         switch (native_os) {
             .freestanding, .other,
-            .nes, .c64, .atari8, .cx16, .lynx, .mega65, .pce, .sim => {},
+            .appleii, .atari2600, .atari5200, .nes, .c64, .c128, .cpm65, .cx16, .dodo, .eater, .fds, .geos_cbm, .atari8, .lynx, .mega65, .osi_c1p, .pce, .pce_cd, .pet, .rp6502, .rpc8e, .sim, .snes, .supervision, .vic20 => {},
             else => if (@errorReturnTrace()) |trace| std.debug.dumpErrorReturnTrace(trace),
         }
         return 1;

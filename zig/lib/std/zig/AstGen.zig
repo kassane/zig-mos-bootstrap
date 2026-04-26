@@ -243,10 +243,13 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         }
     }
 
+    try astgen.extra.shrinkToLen(gpa);
+    try astgen.string_bytes.shrinkToLen(gpa);
+
     return .{
         .instructions = if (fatal) .empty else astgen.instructions.toOwnedSlice(),
-        .string_bytes = try astgen.string_bytes.toOwnedSlice(gpa),
-        .extra = try astgen.extra.toOwnedSlice(gpa),
+        .string_bytes = astgen.string_bytes.toOwnedSliceAssert(),
+        .extra = astgen.extra.toOwnedSliceAssert(),
     };
 }
 
@@ -4998,6 +5001,10 @@ fn structDeclInner(
     );
     if (field_comptime_bits) |bits| @memset(bits.get(astgen), 0);
 
+    const old_hasher = astgen.src_hasher;
+    defer astgen.src_hasher = old_hasher;
+    astgen.src_hasher = .init(.{});
+
     // Before any field bodies comes the backing int type, if specified.
     const backing_int_type_body_len: ?u32 = if (maybe_backing_int_node.unwrap()) |backing_int_node| len: {
         if (layout != .@"packed") return astgen.failNode(
@@ -5005,6 +5012,7 @@ fn structDeclInner(
             "non-packed struct does not support backing integer type",
             .{},
         );
+        astgen.src_hasher.update(astgen.tree.getNodeSource(backing_int_node));
         const type_ref = try typeExpr(&block_scope, &namespace.base, backing_int_node);
         if (!block_scope.endsWithNoReturn()) {
             _ = try block_scope.addBreak(.break_inline, decl_inst, type_ref);
@@ -5013,10 +5021,6 @@ fn structDeclInner(
         block_scope.instructions.items.len = block_scope.instructions_top;
         break :len body_len;
     } else null;
-
-    const old_hasher = astgen.src_hasher;
-    defer astgen.src_hasher = old_hasher;
-    astgen.src_hasher = .init(.{});
 
     var next_field_idx: u32 = 0;
     for (container_decl.ast.members) |member_node| {
@@ -5278,8 +5282,13 @@ fn unionDeclInner(
     const field_align_body_lens = try scratch.addOptionalSlice(scan_result.any_field_aligns, scan_result.fields_len);
     const field_value_body_lens = try scratch.addOptionalSlice(scan_result.any_field_values, scan_result.fields_len);
 
+    const old_hasher = astgen.src_hasher;
+    defer astgen.src_hasher = old_hasher;
+    astgen.src_hasher = .init(.{});
+
     // Before any field bodies comes the tag/backing type, if specified.
     const arg_type_body_len: ?u32 = if (opt_arg_node.unwrap()) |arg_node| len: {
+        astgen.src_hasher.update(astgen.tree.getNodeSource(arg_node));
         const type_ref = try typeExpr(&block_scope, &namespace.base, arg_node);
         if (!block_scope.endsWithNoReturn()) {
             _ = try block_scope.addBreak(.break_inline, decl_inst, type_ref);
@@ -5288,10 +5297,6 @@ fn unionDeclInner(
         block_scope.instructions.items.len = block_scope.instructions_top;
         break :len body_len;
     } else null;
-
-    const old_hasher = astgen.src_hasher;
-    defer astgen.src_hasher = old_hasher;
-    astgen.src_hasher = .init(.{});
 
     var next_field_idx: u32 = 0;
     for (members) |member_node| {
@@ -5483,8 +5488,13 @@ fn containerDecl(
             const field_names = try scratch.addSlice(fields_len);
             const field_value_body_lens = try scratch.addOptionalSlice(scan_result.any_field_values, fields_len);
 
+            const old_hasher = astgen.src_hasher;
+            defer astgen.src_hasher = old_hasher;
+            astgen.src_hasher = .init(.{});
+
             // Before any field bodies comes the tag type, if specified.
             const tag_type_body_len: ?u32 = if (container_decl.ast.arg.unwrap()) |tag_type_node| len: {
+                astgen.src_hasher.update(astgen.tree.getNodeSource(tag_type_node));
                 const type_ref = try typeExpr(&block_scope, &namespace.base, tag_type_node);
                 if (!block_scope.endsWithNoReturn()) {
                     _ = try block_scope.addBreak(.break_inline, decl_inst, type_ref);
@@ -5493,10 +5503,6 @@ fn containerDecl(
                 block_scope.instructions.items.len = block_scope.instructions_top;
                 break :len body_len;
             } else null;
-
-            const old_hasher = astgen.src_hasher;
-            defer astgen.src_hasher = old_hasher;
-            astgen.src_hasher = .init(.{});
 
             var next_field_idx: u32 = 0;
             var opt_nonexhaustive_node: Ast.Node.OptionalIndex = .none;
@@ -6656,9 +6662,16 @@ fn whileExpr(
                 .operand = undefined,
             } },
         });
+        if (!continue_scope.is_comptime) {
+            _ = try continue_scope.addRestoreErrRetIndex(.{ .block = continue_block }, .always, then_node);
+        }
         _ = try continue_scope.addBreak(break_tag, continue_block, .void_value);
     }
     try continue_scope.setBlockBody(continue_block);
+    if (!then_scope.is_comptime) {
+        const cont_node = while_full.ast.cont_expr.unwrap() orelse then_node;
+        _ = try then_scope.addRestoreErrRetIndex(.{ .block = cond_block }, .always, cont_node);
+    }
     _ = try then_scope.addBreak(break_tag, cond_block, .void_value);
 
     var else_scope = parent_gz.makeSubBlock(&cond_scope.base);
@@ -6703,6 +6716,9 @@ fn whileExpr(
 
         try checkUsed(parent_gz, &else_scope.base, sub_scope);
         if (!else_scope.endsWithNoReturn()) {
+            if (!else_scope.is_comptime) {
+                _ = try else_scope.addRestoreErrRetIndex(.{ .block = loop_block }, .always, else_node);
+            }
             _ = try else_scope.addBreakWithSrcNode(break_tag, loop_block, else_result, else_node);
         }
     } else {
@@ -6973,6 +6989,9 @@ fn forExpr(
     });
 
     const break_tag: Zir.Inst.Tag = if (is_inline) .break_inline else .@"break";
+    if (!then_scope.is_comptime) {
+        _ = try then_scope.addRestoreErrRetIndex(.{ .block = cond_block }, .always, then_node);
+    }
     _ = try then_scope.addBreak(break_tag, cond_block, .void_value);
 
     var else_scope = parent_gz.makeSubBlock(&cond_scope.base);
@@ -6990,6 +7009,9 @@ fn forExpr(
             _ = try addEnsureResult(&else_scope, else_result, else_node);
         }
         if (!else_scope.endsWithNoReturn()) {
+            if (!else_scope.is_comptime) {
+                _ = try else_scope.addRestoreErrRetIndex(.{ .block = loop_block }, .always, else_node);
+            }
             _ = try else_scope.addBreakWithSrcNode(break_tag, loop_block, else_result, else_node);
         }
     } else {

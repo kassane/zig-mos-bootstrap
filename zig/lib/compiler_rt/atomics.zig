@@ -32,6 +32,10 @@ const largest_atomic_size = switch (arch) {
     // every atomic memory access to go through the lock.
     .sparc => if (builtin.cpu.has(.sparc, .hasleoncasa)) @sizeOf(usize) else 0,
 
+    // MOS (6502/65816) has no atomic instructions at all; force everything
+    // through spinlocks regardless of size.
+    .mos => 0,
+
     // XXX: On x86/x86_64 we could check the presence of cmpxchg8b/cmpxchg16b
     // and set this parameter accordingly.
     else => @sizeOf(usize),
