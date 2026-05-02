@@ -166,6 +166,7 @@ fn formatRelocType(ctx: FormatRelocTypeCtx, writer: *std.Io.Writer) std.Io.Write
         .x86_64 => try writer.print("R_X86_64_{s}", .{@tagName(@as(elf.R_X86_64, @enumFromInt(r_type)))}),
         .aarch64, .aarch64_be => try writer.print("R_AARCH64_{s}", .{@tagName(@as(elf.R_AARCH64, @enumFromInt(r_type)))}),
         .riscv64, .riscv64be => try writer.print("R_RISCV_{s}", .{@tagName(@as(elf.R_RISCV, @enumFromInt(r_type)))}),
+        .mos => try writer.print("R_MOS_{s}", .{@tagName(@as(elf.R_MOS, @enumFromInt(r_type)))}),
         else => unreachable,
     }
 }

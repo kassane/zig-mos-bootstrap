@@ -796,6 +796,9 @@ pub fn openExecutable(io: Io, flags: File.OpenFlags) OpenExecutableError!File {
 /// Invokes the current signal handler for SIGABRT, if any.
 pub fn abort() noreturn {
     @branchHint(.cold);
+    // MOS 6502/65C02/65816: no OS, no POSIX signals. @trap() lowers to a C abort() call;
+    // the bare-metal sdk provides abort as a halt loop (jmp abort).
+    if (builtin.cpu.arch == .mos) @trap();
     // MSVCRT abort() sometimes opens a popup window which is undesirable, so
     // even when linking libc on Windows we use our own abort implementation.
     // See https://github.com/ziglang/zig/issues/2071 for more details.

@@ -717,6 +717,11 @@ const page_size_min_default: ?usize = switch (builtin.os.tag) {
         .aarch64, .aarch64_be => 4 << 10,
         else => null,
     },
+    // MOS 6502/65C02/65816: bare-metal ROM targets, no MMU. Natural page granularity is 256 bytes.
+    .appleii, .atari2600, .atari5200, .nes, .c64, .c128, .cpm65, .cx16, .dodo, .eater, .fds, .geos_cbm, .atari8, .lynx, .mega65, .osi_c1p, .pce, .pce_cd, .pet, .rp6502, .rpc8e, .sim, .snes, .supervision, .vic20 => switch (builtin.cpu.arch) {
+        .mos => 1 << 8,
+        else => null,
+    },
     else => null,
 };
 
@@ -876,6 +881,11 @@ const page_size_max_default: ?usize = switch (builtin.os.tag) {
     },
     .freestanding => switch (builtin.cpu.arch) {
         .wasm32, .wasm64 => 64 << 10,
+        else => null,
+    },
+    // MOS 6502/65C02/65816: bare-metal ROM targets, no MMU. Natural page granularity is 256 bytes.
+    .appleii, .atari2600, .atari5200, .nes, .c64, .c128, .cpm65, .cx16, .dodo, .eater, .fds, .geos_cbm, .atari8, .lynx, .mega65, .osi_c1p, .pce, .pce_cd, .pet, .rp6502, .rpc8e, .sim, .snes, .supervision, .vic20 => switch (builtin.cpu.arch) {
+        .mos => 1 << 8,
         else => null,
     },
     else => null,

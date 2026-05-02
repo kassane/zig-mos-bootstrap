@@ -14,6 +14,7 @@ else switch (native_arch) {
     .loongarch32, .loongarch64 => LoongArch,
     .m68k => M68k,
     .mips, .mipsel, .mips64, .mips64el => Mips,
+    .mos => Mos,
     .or1k => Or1k,
     .powerpc, .powerpcle, .powerpc64, .powerpc64le => Powerpc,
     .sparc, .sparc64 => Sparc,
@@ -2697,6 +2698,100 @@ const signal_ucontext_t = switch (native_os) {
         },
     },
     else => void,
+};
+
+/// MOS 6502 / 65C02 / 65816 register context for DWARF stack unwinding.
+///
+/// DWARF register numbers follow the llvm-mos assignment in MOSRegisterInfo.td:
+///   A=0  X=2  Y=4  S=6  P=12
+///   RC_i (imaginary 8-bit):  DWARF = 0x10 + i*2  (i = 0..255; odd = LSB sub-reg)
+///   RS_i (imaginary 16-bit): DWARF = 0x210 + i   (i = 0..127)
+///
+/// RC0:RC1 = RS0 = soft stack pointer (always allocated).
+/// RC2:RC3 = RS1 = soft frame pointer (allocated per-function when needed).
+/// All imaginary registers are zero-page memory; `current()` leaves them zeroed.
+const Mos = struct {
+    a: u8 = 0,
+    x: u8 = 0,
+    y: u8 = 0,
+    s: u8 = 0,
+    p: u8 = 0,
+    /// First 32 imaginary byte registers rc0–rc31. DWARF 0x10, 0x12, … 0x4E.
+    rc: [32]u8 = [_]u8{0} ** 32,
+    /// First 16 imaginary pointer registers rs0–rs15. DWARF 0x210–0x21F.
+    rs: [16]u16 = [_]u16{0} ** 16,
+
+    pub inline fn current() Mos {
+        var ctx: Mos = .{};
+        // Capture the real registers in an order that avoids clobbering already-saved values.
+        ctx.a = asm volatile (""
+            : [r] "={a}" (-> u8),
+        );
+        ctx.x = asm volatile (""
+            : [r] "={x}" (-> u8),
+        );
+        ctx.y = asm volatile (""
+            : [r] "={y}" (-> u8),
+        );
+        // tsx writes S into X; X was already captured above.
+        ctx.s = asm volatile ("tsx"
+            : [r] "={x}" (-> u8),
+        );
+        // php/pla: push P to hardware stack, pull into A; A was already captured above.
+        ctx.p = asm volatile (
+            \\ php
+            \\ pla
+            : [r] "={a}" (-> u8),
+            :
+            : .{ .memory = true });
+        // rc[] and rs[] are zero-page memory with linker-assigned addresses;
+        // they cannot be captured via inline assembly here and remain zeroed.
+        return ctx;
+    }
+
+    /// Returns the soft frame pointer: RS1 = rc2 (lo) | rc3 (hi) << 8.
+    /// RS1 is allocated as a frame pointer on functions that need one.
+    pub fn getFp(ctx: *const Mos) usize {
+        return @as(usize, ctx.rc[2]) | (@as(usize, ctx.rc[3]) << 8);
+    }
+
+    /// PC is not directly readable on MOS 6502. Always returns 0.
+    pub fn getPc(_: *const Mos) usize {
+        return 0;
+    }
+
+    pub fn dwarfRegisterBytes(ctx: *Mos, register_num: u16) DwarfRegisterError![]u8 {
+        return switch (register_num) {
+            0 => std.mem.asBytes(&ctx.a),
+            1 => error.UnsupportedRegister, // ALSB  (1-bit LSB sub-reg of A)
+            2 => std.mem.asBytes(&ctx.x),
+            3 => error.UnsupportedRegister, // XLSB
+            4 => std.mem.asBytes(&ctx.y),
+            5 => error.UnsupportedRegister, // YLSB
+            6 => std.mem.asBytes(&ctx.s),
+            7 => error.UnsupportedRegister, // C (carry flag bit)
+            8 => error.UnsupportedRegister, // N (negative flag bit)
+            9 => error.UnsupportedRegister, // V (overflow flag bit)
+            10 => error.UnsupportedRegister, // Z (zero flag bit)
+            11 => error.UnsupportedRegister, // NZ (N+Z combined sub-reg)
+            12 => std.mem.asBytes(&ctx.p),
+            13 => error.UnsupportedRegister, // Fake pseudo-register
+            else => blk: {
+                // RC0..RC31: DWARF = 0x10 + i*2 (even). Odd = LSB sub-reg → unsupported.
+                if (register_num >= 0x10 and register_num <= 0x4E) {
+                    if (register_num & 1 != 0) break :blk error.UnsupportedRegister;
+                    const i: usize = (register_num - 0x10) / 2;
+                    break :blk std.mem.asBytes(&ctx.rc[i]);
+                }
+                // RS0..RS15: DWARF = 0x210 + i. Little-endian u16 in zero page.
+                if (register_num >= 0x210 and register_num <= 0x21F) {
+                    const i: usize = register_num - 0x210;
+                    break :blk std.mem.asBytes(&ctx.rs[i]);
+                }
+                break :blk error.InvalidRegister;
+            },
+        };
+    }
 };
 
 const std = @import("../std.zig");

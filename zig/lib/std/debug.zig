@@ -491,6 +491,9 @@ pub fn defaultPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
 
     if (use_trap_panic) @trap();
 
+    // MOS 6502/65C02/65816: no OS, no POSIX. @trap() lowers to abort(); sdk provides halt loop.
+    if (builtin.cpu.arch == .mos) @trap();
+
     switch (builtin.os.tag) {
         .freestanding, .other, .@"3ds", .vita => {
             @trap();

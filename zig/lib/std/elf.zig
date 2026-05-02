@@ -2287,6 +2287,9 @@ pub const SHF_MIPS_STRING = 0x80000000;
 /// Make code section unreadable when in execute-only mode
 pub const SHF_ARM_PURECODE = 0x2000000;
 
+/// MOS: section placed in zero page / direct page address space
+pub const SHF_MOS_ZEROPAGE = 0x10000000;
+
 pub const SHF = packed struct(Word) {
     /// Section data should be writable during execution.
     WRITE: bool = false,
@@ -2984,6 +2987,29 @@ pub const R_PPC64 = enum(u32) {
     REL16_LO = 250,
     REL16_HI = 251,
     REL16_HA = 252,
+    _,
+};
+
+/// MOS Technology 6502 / 65816 relocations (ELF spec v0.3.1).
+pub const R_MOS = enum(u32) {
+    NONE = 0,
+    IMM8 = 1,
+    ADDR8 = 2,
+    ADDR16 = 3,
+    ADDR16_LO = 4,
+    ADDR16_HI = 5,
+    PCREL_8 = 6,
+    ADDR24 = 7,
+    ADDR24_BANK = 8,
+    ADDR24_SEGMENT = 9,
+    ADDR24_SEGMENT_LO = 10,
+    ADDR24_SEGMENT_HI = 11,
+    PCREL_16 = 12,
+    FK_DATA_4 = 13,
+    FK_DATA_8 = 14,
+    ADDR_ASCIZ = 15,
+    IMM16 = 16,
+    ADDR13 = 17,
     _,
 };
 

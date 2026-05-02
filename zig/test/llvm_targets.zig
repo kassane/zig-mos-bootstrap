@@ -126,6 +126,12 @@ const targets = [_]std.Target.Query{
     .{ .cpu_arch = .m68k, .os_tag = .rtems, .abi = .none },
 
     .{ .cpu_arch = .mos, .os_tag = .freestanding, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .nes, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .c64, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .cx16, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .snes, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .mega65, .abi = .none },
+    .{ .cpu_arch = .mos, .os_tag = .atari8, .abi = .none },
 
     .{ .cpu_arch = .mips, .os_tag = .freestanding, .abi = .eabi },
     .{ .cpu_arch = .mips, .os_tag = .freestanding, .abi = .eabihf },

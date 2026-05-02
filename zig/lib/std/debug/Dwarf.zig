@@ -1469,6 +1469,10 @@ pub fn fpRegNum(arch: std.Target.Cpu.Arch) u16 {
         .loongarch32, .loongarch64 => 22,
         .m68k => 14,
         .mips, .mipsel, .mips64, .mips64el => 30,
+        // MOS: RS1 = soft frame pointer (rc2:rc3). Current LLVM-MOS: Imag16RegsOffset+1 = 0x211.
+        // TODO: llvm-mos DWARF spec v0.1.1 (unmerged PR #519) redefines this as 0x00030001 (u32).
+        // When that lands, fpRegNum/spRegNum return types must change from u16 to u32.
+        .mos => 0x211,
         .or1k => 2,
         .powerpc, .powerpcle, .powerpc64, .powerpc64le => 1,
         .riscv32, .riscv32be, .riscv64, .riscv64be => 8,
@@ -1493,6 +1497,9 @@ pub fn spRegNum(arch: std.Target.Cpu.Arch) u16 {
         .loongarch32, .loongarch64 => 3,
         .m68k => 15,
         .mips, .mipsel, .mips64, .mips64el => 29,
+        // MOS: RS0 = soft stack pointer (rc0:rc1). Current LLVM-MOS: Imag16RegsOffset+0 = 0x210.
+        // TODO: llvm-mos DWARF spec v0.1.1 (unmerged PR #519) redefines this as 0x00030000 (u32).
+        .mos => 0x210,
         .or1k => 1,
         .powerpc, .powerpcle, .powerpc64, .powerpc64le => 1,
         .riscv32, .riscv32be, .riscv64, .riscv64be => 2,
