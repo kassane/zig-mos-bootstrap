@@ -3111,6 +3111,18 @@ pub const Clobbers = switch (@import("builtin").cpu.arch) {
 
         dsr: bool = false,
     },
+    .mos => packed struct {
+        /// Whether the inline assembly code may perform stores to memory
+        /// addresses other than those derived from input pointer provenance.
+        memory: bool = false,
+
+        a: bool = false,
+        x: bool = false,
+        y: bool = false,
+        c: bool = false,
+        v: bool = false,
+        p: bool = false,
+    },
     else => packed struct {
         /// Whether the inline assembly code may perform stores to memory
         /// addresses other than those derived from input pointer provenance.
