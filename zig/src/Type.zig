@@ -1204,9 +1204,10 @@ pub fn abiSize(ty: Type, zcu: *const Zcu) u64 {
 }
 
 pub fn ptrAbiAlignment(target: *const Target) Alignment {
-    // The eZ80 has 24-bit pointers, which aren't exact powers of two, tripping
-    // the assert. The alignment of eZ80 pointers is 1, so we bypass the check.
-    if (target.cpu.arch == .ez80) return .@"1";
+    // eZ80 has 24-bit pointers (not a power of two); MOS 6502 has 16-bit pointers
+    // with 8-bit ABI alignment (datalayout: p:16:8 — no alignment requirement on 6502).
+    // Both need an explicit override to bypass the divExact formula.
+    if (target.cpu.arch == .ez80 or target.cpu.arch == .mos) return .@"1";
     return .fromNonzeroByteUnits(@divExact(target.ptrBitWidth(), 8));
 }
 pub fn ptrAbiSize(target: *const Target) u64 {

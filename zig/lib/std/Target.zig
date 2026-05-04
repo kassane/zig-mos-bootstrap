@@ -2455,6 +2455,7 @@ pub fn supportsAddressSpace(
         .flash, .flash1, .flash2, .flash3, .flash4, .flash5 => arch == .avr, // TODO this should also check how many flash banks the cpu has
         .cog, .hub => arch == .propeller,
         .lut => arch == .propeller and std.Target.propeller.featureSetHas(target.cpu.features, .p2),
+        .zp => arch == .mos,
 
         .global, .local, .shared => is_gpu,
         .constant => is_gpu and (context == null or context == .constant),

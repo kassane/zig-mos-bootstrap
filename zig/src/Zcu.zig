@@ -4584,6 +4584,8 @@ pub fn callconvSupported(zcu: *Zcu, cc: std.builtin.CallingConvention) union(enu
                 .m68k_rtd,
                 .m68k_interrupt,
                 .msp430_interrupt,
+                .mos_interrupt,
+                .mos_sysv,
                 => |opts| opts.incoming_stack_alignment == null,
 
                 .arm_aapcs_vfp,

@@ -4651,6 +4651,10 @@ fn llvmAddrSpaceInfo(target: *const std.Target) []const AddrSpaceInfo {
         .m68k => &.{
             .{ .zig = .generic, .llvm = .default, .abi = 16, .pref = 32 },
         },
+        .mos => &.{
+            .{ .zig = .generic, .llvm = .default, .abi = 8 },
+            .{ .zig = .zp, .llvm = Builder.AddrSpace.mos.zeropage, .size = 8, .abi = 8 },
+        },
         else => &.{
             .{ .zig = .generic, .llvm = .default },
         },

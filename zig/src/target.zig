@@ -590,6 +590,7 @@ pub fn addrSpaceCastIsValid(
             const from_generic = target.supportsAddressSpace(to, null) and from == .generic;
             return to_generic or from_generic;
         },
+        .mos => return target.supportsAddressSpace(from, null) and target.supportsAddressSpace(to, null),
         else => return from == .generic and to == .generic,
     }
 }

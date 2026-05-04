@@ -1916,6 +1916,12 @@ pub const AddrSpace = enum(u24) {
     };
     pub const x86_64 = x86;
 
+    // See llvm/lib/Target/MOS/MOS.h
+    pub const mos = struct {
+        pub const data: AddrSpace = @enumFromInt(0);
+        pub const zeropage: AddrSpace = @enumFromInt(1);
+    };
+
     // See llvm/lib/Target/AVR/AVR.h
     pub const avr = struct {
         pub const data: AddrSpace = @enumFromInt(0);

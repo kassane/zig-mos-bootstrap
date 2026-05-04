@@ -537,6 +537,9 @@ pub const AddressSpace = enum(u5) {
 
     /// This address space only addresses the "lookup" ram
     lut,
+
+    /// This address space only addresses the zero page (first 256 bytes; 8-bit pointer).
+    zp,
 };
 
 /// This data structure is used by the Zig language code generation and
