@@ -1076,7 +1076,7 @@ pub fn abiSize(ty: Type, zcu: *const Zcu) u64 {
         .int_type => |int_type| std.zig.target.intByteSize(target, int_type.bits),
         .ptr_type => |ptr_type| switch (ptr_type.flags.size) {
             .slice => ptrAbiSize(target) * 2,
-            .one, .many, .c => ptrAbiSize(target),
+            .one, .many, .c => @divExact(addrSpacePtrBitWidth(target, ptr_type.flags.address_space), 8),
         },
         .anyframe_type => ptrAbiSize(target),
         .array_type => |arr| arr.lenIncludingSentinel() * Type.fromInterned(arr.child).abiSize(zcu),
@@ -1213,6 +1213,12 @@ pub fn ptrAbiAlignment(target: *const Target) Alignment {
 pub fn ptrAbiSize(target: *const Target) u64 {
     return @divExact(target.ptrBitWidth(), 8);
 }
+/// Returns the pointer bit-width for a specific address space.
+/// On MOS 6502, zero-page pointers are 8-bit (1 byte); all others are 16-bit (2 bytes).
+pub fn addrSpacePtrBitWidth(target: *const Target, addr_space: std.builtin.AddressSpace) u16 {
+    if (target.cpu.arch == .mos and addr_space == .zp) return 8;
+    return target.ptrBitWidth();
+}
 pub fn errorAbiAlignment(zcu: *const Zcu) Alignment {
     return .fromNonzeroByteUnits(std.zig.target.intAlignment(zcu.getTarget(), zcu.errorSetBits()));
 }
@@ -1230,7 +1236,7 @@ pub fn bitSize(ty: Type, zcu: *const Zcu) u64 {
         .int_type => |int_type| int_type.bits,
         .ptr_type => |ptr_type| switch (ptr_type.flags.size) {
             .slice => target.ptrBitWidth() * 2,
-            else => target.ptrBitWidth(),
+            else => addrSpacePtrBitWidth(target, ptr_type.flags.address_space),
         },
         .anyframe_type => target.ptrBitWidth(),
         .array_type => |array_type| {
