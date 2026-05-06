@@ -8,11 +8,10 @@
 
 #include "MOSToolchain.h"
 
-#include "CommonArgs.h"
-
+#include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
-#include "clang/Driver/Options.h"
+#include "clang/Options/Options.h"
 #include "llvm/Support/Path.h"
 
 using namespace llvm::opt;
@@ -50,8 +49,8 @@ void MOSToolChain::addClangTargetOptions(const ArgList &DriverArgs,
 
 static bool hasLTOEmitAsm(const ArgList &Args) {
   for (Arg *A : Args) {
-    if (!A->getOption().matches(options::OPT_Wl_COMMA) &&
-        !A->getOption().matches(options::OPT_Xlinker))
+    if (!A->getOption().matches(clang::options::OPT_Wl_COMMA) &&
+        !A->getOption().matches(clang::options::OPT_Xlinker))
       continue;
     if (A->containsValue("--lto-emit-asm"))
       return true;
@@ -70,7 +69,10 @@ void mos::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Pass defaults before AddLinkerInputs, since that includes -Wl
   // options, which should override these.
-  CmdArgs.push_back("--gc-sections");
+  // Don't use --gc-sections for relocatable links (-r) since we're just
+  // combining objects, not producing a final executable.
+  if (!Args.hasArg(options::OPT_r))
+    CmdArgs.push_back("--gc-sections");
   CmdArgs.push_back("--sort-section=alignment");
 
   AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
@@ -104,8 +106,9 @@ void mos::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   // No matter what's included in the link, the default linker script is
   // nonsense for the 6502. Accordingly, use one named "link.ld" if none is
-  // specified.
-  if (!Args.hasArg(options::OPT_T))
+  // specified. However, relocatable linking (-r) should not use a linker
+  // script since it's just combining object files without final layout.
+  if (!Args.hasArg(options::OPT_T) && !Args.hasArg(options::OPT_r))
     CmdArgs.push_back("-Tlink.ld");
 
   CmdArgs.push_back("-o");
@@ -137,7 +140,7 @@ void mos::Linker::AddLTOOptions(const toolchains::MOSToolChain &TC, const ArgLis
                                 const InputInfoList &Inputs,
                                 ArgStringList &CmdArgs) const {
   assert(!Inputs.empty() && "Must have at least one input.");
-  addLTOOptions(TC, Args, CmdArgs, Output, Inputs[0],
+  addLTOOptions(TC, Args, CmdArgs, Output, Inputs,
                 TC.getDriver().getLTOMode() == LTOK_Thin);
   addMOSCodeGenArgs(CmdArgs);
   unsigned ZPBytes = 0;

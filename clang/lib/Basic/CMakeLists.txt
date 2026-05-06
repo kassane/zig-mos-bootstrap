@@ -88,6 +88,7 @@ add_clang_library(clangBasic
   SanitizerSpecialCaseList.cpp
   Sanitizers.cpp
   Sarif.cpp
+  SimpleTypoCorrection.cpp
   SourceLocation.cpp
   SourceManager.cpp
   SourceMgrAdapter.cpp
@@ -113,7 +114,6 @@ add_clang_library(clangBasic
   Targets/Mips.cpp
   Targets/NVPTX.cpp
   Targets/OSTargets.cpp
-  Targets/PNaCl.cpp
   Targets/PPC.cpp
   Targets/RISCV.cpp
   Targets/SPIR.cpp

@@ -41,7 +41,7 @@ void MOSMCELFStreamer::initSections(bool NoExecStack,
   emitCodeAlignment(Align(1), &STI);
 
   if (NoExecStack)
-    switchSection(Ctx.getAsmInfo()->getNonexecutableStackSection(Ctx));
+    switchSection(Ctx.getAsmInfo()->getStackSection(Ctx, false));
 }
 
 static bool HasPrefix(StringRef Name, StringRef Prefix) {
@@ -86,20 +86,17 @@ void MOSMCELFStreamer::emitMosAddrAsciz(const MCExpr *Value, unsigned Size,
                                         SMLoc Loc) {
   visitUsedExpr(*Value);
   MCDwarfLineEntry::make(this, getCurrentSectionOnly());
-  MCDataFragment *DF = getOrCreateDataFragment();
-
-  DF->getFixups().push_back(MCFixup::create(DF->getContents().size(), Value,
-                                            (MCFixupKind)MOS::AddrAsciz, Loc));
-  DF->getContents().resize(DF->getContents().size() + Size, 0);
+  addFixup(Value, (MCFixupKind)MOS::AddrAsciz);
+  SmallVector<char> Zeroes(Size, 0);
+  appendContents(Zeroes);
 }
 
 void MOSMCELFStreamer::emitMappingSymbol(StringRef Name) {
-  auto *Symbol = cast<MCSymbolELF>(getContext().getOrCreateSymbol(
+  auto *Symbol = static_cast<MCSymbolELF *>(getContext().getOrCreateSymbol(
       Name + "." + Twine(MappingSymbolCounter++)));
   emitLabel(Symbol);
   Symbol->setType(ELF::STT_NOTYPE);
   Symbol->setBinding(ELF::STB_LOCAL);
-  Symbol->setExternal(false);
 }
 
 void MOSMCELFStreamer::emit816MXState(bool IsMLow, bool IsMHigh, bool IsXLow,

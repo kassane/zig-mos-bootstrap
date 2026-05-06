@@ -12,18 +12,20 @@
 #include "MCTargetDesc/MOSMCTargetDesc.h"
 #include "MCTargetDesc/MOSTargetStreamer.h"
 #include "MOS.h"
+#include "MOSModifierNames.h"
 #include "MOSRegisterInfo.h"
 #include "MOSSubtarget.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAsmMacro.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
-#include "llvm/MC/MCParser/MCAsmLexer.h"
+#include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCStreamer.h"
@@ -47,13 +49,13 @@ class MOSOperand : public MCParsedAsmOperand {
 public:
   MOSOperand() = delete;
   /// Create an immediate MOSOperand.
-  MOSOperand(const MOSSubtarget &STI, const MCExpr *Val, SMLoc S, SMLoc E)
+  MOSOperand(const MCSubtargetInfo &STI, const MCExpr *Val, SMLoc S, SMLoc E)
       : Kind(k_Immediate), Imm(Val), Start(S), End(E), STI(STI) {};
   /// Create a register MOSOperand.
-  MOSOperand(const MOSSubtarget &STI, unsigned RegNum, SMLoc S, SMLoc E)
+  MOSOperand(const MCSubtargetInfo &STI, unsigned RegNum, SMLoc S, SMLoc E)
       : Kind(k_Register), Reg(RegNum), Start(S), End(E), STI(STI) {};
   /// Create a token MOSOperand.
-  MOSOperand(const MOSSubtarget &STI, StringRef Str, SMLoc S)
+  MOSOperand(const MCSubtargetInfo &STI, StringRef Str, SMLoc S)
       : Kind(k_Token), Tok(Str), Start(S), STI(STI) {};
 
 private:
@@ -68,7 +70,7 @@ private:
   unsigned int Reg{};
   StringRef Tok;
   SMLoc Start, End;
-  const MOSSubtarget &STI;
+  const MCSubtargetInfo &STI;
 
 public:
   template <int64_t Low, int64_t High> bool isImmediate() const {
@@ -205,21 +207,21 @@ public:
   }
 
   static std::unique_ptr<MOSOperand>
-  createImm(const MOSSubtarget &STI, const MCExpr *Val, SMLoc S, SMLoc E) {
+  createImm(const MCSubtargetInfo &STI, const MCExpr *Val, SMLoc S, SMLoc E) {
     return std::make_unique<MOSOperand>(STI, Val, S, E);
   }
 
   static std::unique_ptr<MOSOperand>
-  createReg(const MOSSubtarget &STI, unsigned RegNum, SMLoc S, SMLoc E) {
+  createReg(const MCSubtargetInfo &STI, unsigned RegNum, SMLoc S, SMLoc E) {
     return std::make_unique<MOSOperand>(STI, RegNum, S, E);
   }
 
-  static std::unique_ptr<MOSOperand> createToken(const MOSSubtarget &STI,
+  static std::unique_ptr<MOSOperand> createToken(const MCSubtargetInfo &STI,
                                                  StringRef Str, SMLoc S) {
     return std::make_unique<MOSOperand>(STI, Str, S);
   }
 
-  void print(raw_ostream &O) const override {
+  void print(raw_ostream &O, const MCAsmInfo &MAI) const override {
     switch (Kind) {
     case k_None:
       O << "None";
@@ -231,7 +233,9 @@ public:
       O << "Register: " << getReg();
       break;
     case k_Immediate:
-      O << "Immediate: \"" << *getImm() << "\"";
+      O << "Immediate: \"";
+      MAI.printExpr(O, *getImm());
+      O << "\"";
       break;
     }
     O << "\n";
@@ -240,7 +244,6 @@ public:
 
 /// Parses MOS assembly from a stream.
 class MOSAsmParser : public MCTargetAsmParser {
-  const MOSSubtarget &STI;
   MCAsmParser &Parser;
   const MCRegisterInfo *MRI;
   const std::string GenerateStubs = "gs";
@@ -258,8 +261,7 @@ public:
 
   MOSAsmParser(const MCSubtargetInfo &STI, MCAsmParser &Parser,
                const MCInstrInfo &MII, const MCTargetOptions &Options)
-      : MCTargetAsmParser(Options, STI, MII),
-        STI(static_cast<const MOSSubtarget &>(STI)), Parser(Parser) {
+      : MCTargetAsmParser(Options, STI, MII), Parser(Parser) {
     MCAsmParserExtension::Initialize(Parser);
     MRI = getContext().getRegisterInfo();
 
@@ -268,13 +270,136 @@ public:
     Parser.addAliasForDirective(".dword", ".4byte");
     Parser.addAliasForDirective(".xword", ".8byte");
 
-    setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
+    setAvailableFeatures(ComputeAvailableFeatures(getSTI().getFeatureBits()));
   }
-  MCAsmLexer &getLexer() const { return Parser.getLexer(); }
+  AsmLexer &getLexer() const { return Parser.getLexer(); }
   MCAsmParser &getParser() const { return Parser; }
 
   bool parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) override {
-    return MCTargetAsmParser::parsePrimaryExpr(Res, EndLoc);
+    /*
+      This is the one place we can hook the generic directive parser (.byte,
+      .2byte, etc). Those directives parse "expr" lists using the generic
+      expression parser, which calls parsePrimaryExpr() to parse the first
+      "atom" of an expression.
+
+      We want WDC 65816-style shorthands to work in directives too:
+
+        <expr  -> mos16lo(expr)
+        >expr  -> mos16hi(expr)
+        ^expr  -> mos24bank(expr)
+
+      (Instruction operands already handle these in tryParseRelocExpression().)
+    */
+    const AsmToken &Tok = Parser.getTok();
+    if (Tok.getKind() == AsmToken::Less || Tok.getKind() == AsmToken::Greater ||
+        Tok.getKind() == AsmToken::Caret) {
+
+      AsmToken::TokenKind OpTok = Tok.getKind();
+      Parser.Lex(); // Eat '<', '>', or '^'
+
+      const MCExpr *Inner = nullptr;
+      if (Parser.parseExpression(Inner))
+        return true;
+
+      MOSMCExpr::VariantKind VK = MOSMCExpr::VK_NONE;
+      switch (OpTok) {
+      case AsmToken::Less:
+        VK = MOSMCExpr::VK_ADDR16_LO;
+        break;
+      case AsmToken::Greater:
+        VK = MOSMCExpr::VK_ADDR16_HI;
+        break;
+      case AsmToken::Caret:
+        VK = MOSMCExpr::VK_ADDR24_BANK;
+        break;
+      default:
+        assert(false);
+      }
+
+      Res = MOSMCExpr::create(VK, Inner, /*Negated=*/false, getContext());
+
+      // EndLoc is "one char before the next token" (same style as elsewhere).
+      EndLoc = SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
+      return false;
+    }
+
+    // Accept mos16lo(expr), mos16hi(expr), mos24bank(expr) in directives.
+    // The generic MC expression parser does not support function-call syntax,
+    // so we translate these into MOSMCExpr variants here.
+    if (Tok.getKind() == AsmToken::Identifier) {
+      StringRef Name = Tok.getString();
+
+      MOSMCExpr::VariantKind VK = MOSMCExpr::VK_NONE;
+
+      const auto &Modifier = llvm::find_if(
+          MOS::modifierNames(), [&Name](MOS::ModifierEntry const &Mod) {
+            return Mod.Spelling == Name;
+          });
+
+      if (Modifier != std::end(MOS::modifierNames()))
+        VK = Modifier->VariantKind;
+
+      if (VK != MOSMCExpr::VK_NONE) {
+        Parser.Lex(); // Eat identifier
+
+        if (Parser.getTok().getKind() != AsmToken::LParen)
+          return Error(Parser.getTok().getLoc(), "expected '(' after modifier");
+        Parser.Lex(); // Eat '('
+
+        const MCExpr *Inner = nullptr;
+        if (Parser.parseExpression(Inner))
+          return true;
+
+        if (Parser.getTok().getKind() != AsmToken::RParen)
+          return Error(Parser.getTok().getLoc(),
+                       "expected ')' after expression");
+        EndLoc = Parser.getTok().getLoc();
+        Parser.Lex(); // Eat ')'
+
+        Res = MOSMCExpr::create(VK, Inner, /*Negated=*/false, getContext());
+        // Match file style: EndLoc = char before next token
+        EndLoc =
+            SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
+        return false;
+      }
+    }
+
+    // Parse the primary expression normally first.
+    if (MCTargetAsmParser::parsePrimaryExpr(Res, EndLoc))
+      return true;
+
+    // Accept constant@mos... in directives by translating it into MOSMCExpr.
+    // LLVM's built-in @modifier path rejects constants with:
+    // "invalid modifier 'X' (no symbols present)".
+    if (Parser.getTok().getKind() == AsmToken::At) {
+      if (isa<MCConstantExpr>(Res)) {
+        Parser.Lex(); // Eat '@'
+
+        if (Parser.getTok().getKind() != AsmToken::Identifier)
+          return Error(Parser.getTok().getLoc(),
+                       "expected modifier name after '@'");
+
+        StringRef ModifierName = Parser.getTok().getString();
+
+        MOSMCExpr::VariantKind VK =
+            MOSMCExpr::getKindByName(ModifierName.str(),
+                                     /*IsImmediate=*/true);
+        if (VK == MOSMCExpr::VK_NONE)
+          return Error(Parser.getTok().getLoc(), "unknown modifier");
+
+        Parser.Lex(); // Eat modifier identifier
+
+        Res = MOSMCExpr::create(VK, Res, /*Negated=*/false, getContext());
+
+        // Keep EndLoc consistent with the rest of this file.
+        EndLoc =
+            SMLoc::getFromPointer(Parser.getTok().getLoc().getPointer() - 1);
+      }
+      // If it's not a constant, leave it alone so symbol@modifier keeps using
+      // LLVM's normal handling (which already works).
+    }
+
+    return false;
   }
 
   bool invalidOperand(SMLoc const &Loc, OperandVector const &Operands,
@@ -304,7 +429,7 @@ public:
 
   bool emit(MCInst &Inst, SMLoc const &Loc, MCStreamer &Out) const {
     Inst.setLoc(Loc);
-    Out.emitInstruction(Inst, STI);
+    Out.emitInstruction(Inst, getSTI());
 
     return false;
   }
@@ -459,7 +584,7 @@ public:
 
   void eatThatToken(OperandVector &Operands) {
     Operands.push_back(MOSOperand::createToken(
-        STI, getLexer().getTok().getString(), getLexer().getLoc()));
+        getSTI(), getLexer().getTok().getString(), getLexer().getLoc()));
     Lex();
   }
 
@@ -471,10 +596,10 @@ public:
       if ((SE->getSymbol().getName().equals_insensitive("x") ||
            SE->getSymbol().getName().equals_insensitive("y")) &&
           BE->getOpcode() == MCBinaryExpr::Add) {
-        Operands.push_back(MOSOperand::createImm(STI, LHS, S, E));
-        Operands.push_back(MOSOperand::createToken(STI, "+", BE->getLoc()));
+        Operands.push_back(MOSOperand::createImm(getSTI(), LHS, S, E));
+        Operands.push_back(MOSOperand::createToken(getSTI(), "+", BE->getLoc()));
         Operands.push_back(MOSOperand::createToken(
-            STI, SE->getSymbol().getName(), SE->getLoc()));
+            getSTI(), SE->getSymbol().getName(), SE->getLoc()));
         return false;
       }
     }
@@ -482,7 +607,7 @@ public:
   }
 
   void pushExpr(OperandVector &Operands, const MCExpr *Val, SMLoc S, SMLoc E) {
-    if (STI.hasFeature(MOS::FeatureSPC700)) {
+    if (getSTI().hasFeature(MOS::FeatureSPC700)) {
       // Detect mos...(expr+x)
       if (const auto *ME = dyn_cast<MOSMCExpr>(Val)) {
         if (const auto *BE = dyn_cast<MCBinaryExpr>(ME->getSubExpr())) {
@@ -500,7 +625,7 @@ public:
         }
       }
     }
-    Operands.push_back(MOSOperand::createImm(STI, Val, S, E));
+    Operands.push_back(MOSOperand::createImm(getSTI(), Val, S, E));
   }
 
   enum ExpressionType { ExprTypeOther, ExprTypeImmediate, ExprTypeAddress };
@@ -698,7 +823,7 @@ public:
     SMLoc S = getLexer().getLoc();
     SMLoc E = getLexer().getTok().getEndLoc();
     if (tryParseRegister(Reg, S, E).isSuccess()) {
-      Operands.push_back(MOSOperand::createReg(STI, Reg, S, E));
+      Operands.push_back(MOSOperand::createReg(getSTI(), Reg, S, E));
       return ParseStatus::Success;
     }
     return ParseStatus::NoMatch;
@@ -726,14 +851,14 @@ public:
             .CaseLower("psw", "psw") // SPC700
             .Default(nullptr);
     if (LowerStr != nullptr) {
-      Operands.push_back(MOSOperand::createToken(STI, LowerStr, S));
+      Operands.push_back(MOSOperand::createToken(getSTI(), LowerStr, S));
       return ParseStatus::Success;
     }
 
     MCRegister Reg = 0;
     SMLoc E = getLexer().getTok().getEndLoc();
     if (tryParseRegister(Reg, S, E).isSuccess()) {
-      Operands.push_back(MOSOperand::createReg(STI, Reg, S, E));
+      Operands.push_back(MOSOperand::createReg(getSTI(), Reg, S, E));
       return ParseStatus::Success;
     }
     return ParseStatus::NoMatch;
@@ -766,12 +891,12 @@ public:
 
     */
     // First, the mnemonic goes on the stack.
-    Operands.push_back(MOSOperand::createToken(STI, Mnemonic, NameLoc));
+    Operands.push_back(MOSOperand::createToken(getSTI(), Mnemonic, NameLoc));
     AsmToken::TokenKind RightHandSide = AsmToken::Eof;
     while (getLexer().isNot(AsmToken::EndOfStatement) &&
            getLexer().isNot(AsmToken::Eof)) {
       // Handle SPC700-specific syntax quirks.
-      if (STI.hasFeature(MOS::FeatureSPC700)) {
+      if (getSTI().hasFeature(MOS::FeatureSPC700)) {
         // Handle bit indexes ($xx.n).
         if (getLexer().is(AsmToken::Dot)) {
           eatThatToken(Operands);
@@ -800,7 +925,7 @@ public:
         eatThatToken(Operands);
         if (!tryParseExpr(
                 Operands, ExprTypeImmediate,
-                STI.hasW65816Or65EL02()
+(getSTI().hasFeature(MOS::FeatureW65816) || getSTI().hasFeature(MOS::Feature65EL02))
                     ? "immediate operand must be an expression evaluating "
                       "to a value between 0 and 65535 inclusive"
                     : "immediate operand must be an expression evaluating "
@@ -812,7 +937,7 @@ public:
       if (getLexer().is(AsmToken::LParen)) {
         eatThatToken(Operands);
         // Handle SPC700 (x), (y)
-        if (STI.hasFeature(MOS::FeatureSPC700)) {
+        if (getSTI().hasFeature(MOS::FeatureSPC700)) {
           if (tryParseAsmParamRegClass(Operands).isSuccess()) {
             Parser.Lex();
             RightHandSide = AsmToken::RParen;
@@ -825,9 +950,9 @@ public:
           continue;
         }
       }
-      if ((STI.hasFeature(MOS::FeatureW65816) ||
-           STI.hasFeature(MOS::FeatureSPC700) ||
-           STI.hasFeature(MOS::Feature45GS02)) &&
+      if ((getSTI().hasFeature(MOS::FeatureW65816) ||
+           getSTI().hasFeature(MOS::FeatureSPC700) ||
+           getSTI().hasFeature(MOS::Feature45GS02)) &&
           getLexer().is(AsmToken::LBrac)) {
         eatThatToken(Operands);
         if (!tryParseExpr(Operands, ExprTypeAddress,

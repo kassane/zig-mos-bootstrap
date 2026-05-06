@@ -47,19 +47,11 @@ using namespace llvm;
 #define GET_INSTRINFO_CTOR_DTOR
 #include "MOSGenInstrInfo.inc"
 
-MOSInstrInfo::MOSInstrInfo()
-    : MOSGenInstrInfo(/*CFSetupOpcode=*/MOS::ADJCALLSTACKDOWN,
-                      /*CFDestroyOpcode=*/MOS::ADJCALLSTACKUP) {}
-
-bool MOSInstrInfo::isReallyTriviallyReMaterializable(
-    const MachineInstr &MI) const {
-  switch (MI.getOpcode()) {
-  default:
-    return TargetInstrInfo::isReallyTriviallyReMaterializable(MI);
-  case MOS::LDImm16:
-    return true;
-  }
-}
+MOSInstrInfo::MOSInstrInfo(const MOSSubtarget &STI)
+    : MOSGenInstrInfo(STI, *STI.getRegisterInfo(),
+                      /*CFSetupOpcode=*/MOS::ADJCALLSTACKDOWN,
+                      /*CFDestroyOpcode=*/MOS::ADJCALLSTACKUP),
+      STI(&STI) {}
 
 Register MOSInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
                                            int &FrameIndex) const {
@@ -96,8 +88,8 @@ Register MOSInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
 void MOSInstrInfo::reMaterialize(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator I,
                                  Register DestReg, unsigned SubIdx,
-                                 const MachineInstr &Orig,
-                                 const TargetRegisterInfo &TRI) const {
+                                 const MachineInstr &Orig) const {
+  const TargetRegisterInfo &TRI = *STI->getRegisterInfo();
   if (Orig.getOpcode() == MOS::LDImm16) {
     MachineInstr *MI = MBB.getParent()->CloneMachineInstr(&Orig);
     MI->removeOperand(1);
@@ -105,7 +97,7 @@ void MOSInstrInfo::reMaterialize(MachineBasicBlock &MBB,
     MI->setDesc(get(MOS::LDImm16Remat));
     MBB.insert(I, MI);
   } else {
-    TargetInstrInfo::reMaterialize(MBB, I, DestReg, SubIdx, Orig, TRI);
+    TargetInstrInfo::reMaterialize(MBB, I, DestReg, SubIdx, Orig);
   }
 }
 
@@ -145,10 +137,8 @@ MachineInstr *MOSInstrInfo::commuteInstructionImpl(MachineInstr &MI, bool NewMI,
     return RC;
   };
 
-  const TargetRegisterClass *RegClass1 =
-      getRegClass(MI.getDesc(), Idx1, &TRI, MF);
-  const TargetRegisterClass *RegClass2 =
-      getRegClass(MI.getDesc(), Idx2, &TRI, MF);
+  const TargetRegisterClass *RegClass1 = getRegClass(MI.getDesc(), Idx1);
+  const TargetRegisterClass *RegClass2 = getRegClass(MI.getDesc(), Idx2);
   Register Reg1 = MI.getOperand(Idx1).getReg();
   Register Reg2 = MI.getOperand(Idx2).getReg();
 
@@ -213,18 +203,17 @@ unsigned MOSInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
 
   const MachineFunction &MF = *MI.getParent()->getParent();
   const MCAsmInfo &MCAI = *MF.getTarget().getMCAsmInfo();
-  const TargetSubtargetInfo &STI = MF.getSubtarget();
 
   switch (MI.getOpcode()) {
   default: {
     unsigned Size = get(MI.getOpcode()).getSize();
     if (!Size)
-      Size = MCAI.getMaxInstLength(&STI);
+      Size = MCAI.getMaxInstLength(STI);
     return Size;
   }
   case MOS::INLINEASM:
   case MOS::INLINEASM_BR:
-    return getInlineAsmLength(MI.getOperand(0).getSymbolName(), MCAI, &STI);
+    return getInlineAsmLength(MI.getOperand(0).getSymbolName(), MCAI, STI);
   }
 }
 
@@ -462,7 +451,6 @@ unsigned MOSInstrInfo::insertBranch(MachineBasicBlock &MBB,
                                     ArrayRef<MachineOperand> Cond,
                                     const DebugLoc &DL, int *BytesAdded) const {
   MachineFunction &MF = *MBB.getParent();
-  const MOSSubtarget &STI = MF.getSubtarget<MOSSubtarget>();
 
   MachineIRBuilder Builder(MBB, MBB.end());
   unsigned NumAdded = 0;
@@ -500,7 +488,7 @@ unsigned MOSInstrInfo::insertBranch(MachineBasicBlock &MBB,
     // For 65C02/65DTV02, assume BRA and relax into JMP in
     // insertIndirectBranch if necessary.
     auto JMP =
-        Builder.buildInstr(STI.hasBRA() ? MOS::BRA : MOS::JMP).addMBB(UBB);
+        Builder.buildInstr(STI->hasBRA() ? MOS::BRA : MOS::JMP).addMBB(UBB);
     ++NumAdded;
     if (BytesAdded)
       *BytesAdded += getInstSizeInBytes(*JMP);
@@ -612,8 +600,7 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
   if (!Force && isCopyRedundant(Builder, DestReg, SrcReg))
     return;
 
-  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
-  const TargetRegisterInfo &TRI = *STI.getRegisterInfo();
+  const TargetRegisterInfo &TRI = *STI->getRegisterInfo();
 
   const auto &IsClass = [&](Register Reg, const TargetRegisterClass &RC) {
     if (Reg.isPhysical() && !RC.contains(Reg))
@@ -636,11 +623,11 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
     } else if (IsClass(DestReg, MOS::AcRegClass)) {
       assert(MOS::XYRegClass.contains(SrcReg));
       Builder.buildInstr(MOS::T_A).addDef(DestReg).addUse(SrcReg);
-    } else if (STI.hasW65816Or65EL02()) {
+    } else if (STI->hasW65816Or65EL02()) {
       assert(MOS::XYRegClass.contains(SrcReg));
       assert(MOS::XYRegClass.contains(DestReg));
       Builder.buildInstr(MOS::TX).addDef(DestReg).addUse(SrcReg);
-    } else if (STI.hasHUC6280() && KillSrc) {
+    } else if (STI->hasHUC6280() && KillSrc) {
       // The HuC6280 does not have an X->Y or Y->X transfer function, but if
       // the source register is being killed, it can be modeled using a swap.
       assert(MOS::XYRegClass.contains(SrcReg));
@@ -651,13 +638,13 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
           .addDef(SrcReg)
           .addUse(SrcReg, RegState::Kill)
           .addUse(DestReg, RegState::Kill | RegState::Undef);
-    } else if (STI.hasGPRStackRegs()) {
+    } else if (STI->hasGPRStackRegs()) {
       // The 65C02 can emit a PHX/PLY or PHY/PLX pair.
       assert(MOS::XYRegClass.contains(SrcReg));
       assert(MOS::XYRegClass.contains(DestReg));
       Builder.buildInstr(MOS::PH, {}, {SrcReg});
       auto I = Builder.buildInstr(MOS::PL, {DestReg}, {});
-      if (!STI.hasSPC700())
+      if (!STI->hasSPC700())
         I.addDef(MOS::NZ, RegState::Implicit);
     } else {
       copyPhysRegImpl(Builder, DestReg,
@@ -668,7 +655,7 @@ void MOSInstrInfo::copyPhysRegImpl(MachineIRBuilder &Builder, Register DestReg,
   } else if (AreClasses(MOS::GPRRegClass, MOS::Imag8RegClass)) {
     Builder.buildInstr(MOS::LDImag8).addDef(DestReg).addUse(SrcReg);
   } else if (AreClasses(MOS::Imag8RegClass, MOS::Imag8RegClass)) {
-    if (STI.hasSPC700()) {
+    if (STI->hasSPC700()) {
       Builder.buildInstr(MOS::MOVImag8).addDef(DestReg).addUse(SrcReg);
     } else {
       copyPhysRegImpl(Builder, DestReg,
@@ -827,20 +814,16 @@ const TargetRegisterClass *MOSInstrInfo::canFoldCopy(const MachineInstr &MI,
 void MOSInstrInfo::storeRegToStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
     bool isKill, int FrameIndex, const TargetRegisterClass *RC,
-    const TargetRegisterInfo *TRI, Register VReg,
-    MachineInstr::MIFlag Flags) const {
-  loadStoreRegStackSlot(MBB, MI, SrcReg, isKill, FrameIndex, RC, TRI, Flags,
+    Register VReg, MachineInstr::MIFlag Flags) const {
+  loadStoreRegStackSlot(MBB, MI, SrcReg, isKill, FrameIndex, RC, Flags,
                         /*IsLoad=*/false);
 }
 
-void MOSInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
-                                        MachineBasicBlock::iterator MI,
-                                        Register DestReg, int FrameIndex,
-                                        const TargetRegisterClass *RC,
-                                        const TargetRegisterInfo *TRI,
-                                        Register VReg,
-                                        MachineInstr::MIFlag Flags) const {
-  loadStoreRegStackSlot(MBB, MI, DestReg, false, FrameIndex, RC, TRI, Flags,
+void MOSInstrInfo::loadRegFromStackSlot(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register DestReg,
+    int FrameIndex, const TargetRegisterClass *RC, Register VReg,
+    MachineInstr::MIFlag Flags) const {
+  loadStoreRegStackSlot(MBB, MI, DestReg, false, FrameIndex, RC, Flags,
                         /*IsLoad=*/true);
 }
 
@@ -912,13 +895,13 @@ static void loadStoreByteStaticStackSlot(MachineIRBuilder &Builder,
 void MOSInstrInfo::loadStoreRegStackSlot(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register Reg,
     bool IsKill, int FrameIndex, const TargetRegisterClass *RC,
-    const TargetRegisterInfo *TRI, MachineInstr::MIFlag Flags,
-    bool IsLoad) const {
+    MachineInstr::MIFlag Flags, bool IsLoad) const {
   MachineFunction &MF = *MBB.getParent();
   MachineFrameInfo &MFI = MF.getFrameInfo();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const MOSFrameLowering &TFL =
       *MF.getSubtarget<MOSSubtarget>().getFrameLowering();
+  const TargetRegisterInfo *TRI = STI->getRegisterInfo();
 
   MachinePointerInfo PtrInfo =
       MachinePointerInfo::getFixedStack(MF, FrameIndex);
@@ -991,14 +974,11 @@ void MOSInstrInfo::loadStoreRegStackSlot(
 }
 
 const TargetRegisterClass *
-MOSInstrInfo::getRegClass(const MCInstrDesc &MCID, unsigned OpNum,
-                          const TargetRegisterInfo *TRI,
-                          const MachineFunction &MF) const {
-  auto *RC = TargetInstrInfo::getRegClass(MCID, OpNum, TRI, MF);
-  const MOSSubtarget &STI = MF.getSubtarget<MOSSubtarget>();
+MOSInstrInfo::getRegClass(const MCInstrDesc &MCID, unsigned OpNum) const {
+  auto *RC = TargetInstrInfo::getRegClass(MCID, OpNum);
 
   // On SPC700, LDImm can be used for imaginary registers.
-  if (STI.hasSPC700() && MCID.getOpcode() == MOS::LDImm && OpNum == 0) {
+  if (STI->hasSPC700() && MCID.getOpcode() == MOS::LDImm && OpNum == 0) {
     return &MOS::Anyi8RegClass;
   }
 
@@ -1068,12 +1048,11 @@ bool MOSInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
 
 void MOSInstrInfo::expandLDIdx(MachineIRBuilder &Builder, bool ZP) const {
   auto &MI = *Builder.getInsertPt();
-  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
   auto DestReg = MI.getOperand(0).getReg();
   auto IndexReg = MI.getOperand(2).getReg();
 
   if (DestReg == IndexReg ||
-      (STI.hasSPC700() && (DestReg == MOS::X || DestReg == MOS::Y))) {
+      (STI->hasSPC700() && (DestReg == MOS::X || DestReg == MOS::Y))) {
     // A direct load does not exist for when X or Y is both the destination and
     // index register. Since the 6502 has no instruction for this, use A as the
     // destination instead, then transfer to the real destination.
@@ -1107,7 +1086,6 @@ void MOSInstrInfo::expandLDIdx(MachineIRBuilder &Builder, bool ZP) const {
 }
 
 void MOSInstrInfo::expandLDImm1(MachineIRBuilder &Builder) const {
-  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
   auto &MI = *Builder.getInsertPt();
   Register DestReg = MI.getOperand(0).getReg();
   int64_t Val = MI.getOperand(1).getImm();
@@ -1115,8 +1093,8 @@ void MOSInstrInfo::expandLDImm1(MachineIRBuilder &Builder) const {
   unsigned Opcode;
   switch (DestReg) {
   default: {
-    DestReg = STI.getRegisterInfo()->getMatchingSuperReg(DestReg, MOS::sublsb,
-                                                         &MOS::Anyi8RegClass);
+    DestReg = STI->getRegisterInfo()->getMatchingSuperReg(DestReg, MOS::sublsb,
+                                                          &MOS::Anyi8RegClass);
     assert(DestReg && "Unexpected destination for LDImm1");
     assert(MOS::GPRRegClass.contains(DestReg));
     Opcode = MOS::LDImm;
@@ -1129,7 +1107,7 @@ void MOSInstrInfo::expandLDImm1(MachineIRBuilder &Builder) const {
     break;
   case MOS::V:
     if (Val) {
-      if (STI.hasSPC700()) {
+      if (STI->hasSPC700()) {
         // SPC700 does not have BIT, so we use stack operations to specifically
         // set V.
         Register ACopy = createVReg(Builder, MOS::AcRegClass);
@@ -1142,7 +1120,7 @@ void MOSInstrInfo::expandLDImm1(MachineIRBuilder &Builder) const {
         return;
       }
 
-      auto Instr = STI.hasHUC6280()
+      auto Instr = STI->hasHUC6280()
                        ? Builder.buildInstr(MOS::BITImmHUC6280, {MOS::V}, {})
                              .addUse(MOS::A, RegState::Undef)
                              .addImm(0xFF)
@@ -1218,12 +1196,11 @@ void MOSInstrInfo::expandLDImm16Remat(MachineIRBuilder &Builder) const {
 void MOSInstrInfo::expandLDZ(MachineIRBuilder &Builder) const {
   auto &MI = *Builder.getInsertPt();
   Register DestReg = MI.getOperand(0).getReg();
-  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
 
   if (MOS::Imag8RegClass.contains(DestReg)) {
     MI.setDesc(Builder.getTII().get(MOS::STZImag8));
   } else if (MOS::GPRRegClass.contains(DestReg)) {
-    if (STI.hasHUC6280()) {
+    if (STI->hasHUC6280()) {
       MI.setDesc(Builder.getTII().get(MOS::CL));
     } else {
       MI.setDesc(Builder.getTII().get(MOS::LDImm));

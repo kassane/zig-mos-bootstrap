@@ -12,10 +12,9 @@
 
 #include "MCTargetDesc/MOSFixupKinds.h"
 #include "llvm/MC/MCAsmBackend.h"
-#include "llvm/MC/MCFixupKindInfo.h"
 
 namespace llvm {
-MCFixupKindInfo 
+MCFixupKindInfo
 MOSFixupKinds::getFixupKindInfo(const MOS::Fixups Kind,
                                 const MCAsmBackend *Alternative) {
   const static MCFixupKindInfo Infos[MOS::NumTargetFixupKinds] = {
@@ -35,13 +34,10 @@ MOSFixupKinds::getFixupKindInfo(const MOS::Fixups Kind,
       {"Addr24_Segment_Low", 0, 8,
        0}, // The low byte of the segment of a 24-bit addr
       {"Addr24_Segment_High", 0, 8,
-       0}, // The high byte of the segment of a 24-bit addr
-      {"Addr13", 0, 13, 0},         // A 13-bit address.
-      // PCRel* is pc-relative and requires target specific handling
-      {"PCRel8", 0, 8,
-       MCFixupKindInfo::FKF_IsPCRel | MCFixupKindInfo::FKF_IsTarget},
-      {"PCRel16", 0, 16,
-       MCFixupKindInfo::FKF_IsPCRel | MCFixupKindInfo::FKF_IsTarget}};
+       0},                  // The high byte of the segment of a 24-bit addr
+      {"Addr13", 0, 13, 0}, // A 13-bit address.
+      {"PCRel8", 0, 8, 0},
+      {"PCRel16", 0, 16, 0}};
   if (Kind < static_cast<MOS::Fixups>(FirstTargetFixupKind)) {
     assert(Alternative &&
            "Alternative MOS backend expected, but none was given!");

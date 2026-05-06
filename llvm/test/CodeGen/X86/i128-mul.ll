@@ -112,8 +112,8 @@ define i64 @mul1(i64 %n, ptr nocapture %z, ptr nocapture %x, i64 %y) nounwind {
 ; X86-NOBMI-NEXT:    orl %edi, %eax
 ; X86-NOBMI-NEXT:    je .LBB1_3
 ; X86-NOBMI-NEXT:  # %bb.1: # %for.body.preheader
-; X86-NOBMI-NEXT:    xorl %ecx, %ecx
 ; X86-NOBMI-NEXT:    xorl %eax, %eax
+; X86-NOBMI-NEXT:    xorl %ecx, %ecx
 ; X86-NOBMI-NEXT:    xorl %edx, %edx
 ; X86-NOBMI-NEXT:    .p2align 4
 ; X86-NOBMI-NEXT:  .LBB1_2: # %for.body
@@ -198,8 +198,8 @@ define i64 @mul1(i64 %n, ptr nocapture %z, ptr nocapture %x, i64 %y) nounwind {
 ; X86-BMI-NEXT:    orl %esi, %eax
 ; X86-BMI-NEXT:    je .LBB1_3
 ; X86-BMI-NEXT:  # %bb.1: # %for.body.preheader
-; X86-BMI-NEXT:    xorl %ebx, %ebx
 ; X86-BMI-NEXT:    xorl %ecx, %ecx
+; X86-BMI-NEXT:    xorl %ebx, %ebx
 ; X86-BMI-NEXT:    xorl %edx, %edx
 ; X86-BMI-NEXT:    .p2align 4
 ; X86-BMI-NEXT:  .LBB1_2: # %for.body

@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MOSELFObjectWriter.h"
+
 #include "MCTargetDesc/MOSFixupKinds.h"
 #include "MCTargetDesc/MOSMCExpr.h"
 #include "MCTargetDesc/MOSMCTargetDesc.h"
@@ -22,22 +24,13 @@
 
 namespace llvm {
 
-/// Writes MOS machine code into an ELF32 object file.
-class MOSELFObjectWriter : public MCELFObjectTargetWriter {
-public:
-  explicit MOSELFObjectWriter(uint8_t OSABI);
-
-  unsigned getRelocType(MCContext &Ctx, const MCValue &Target,
-                        const MCFixup &Fixup, bool IsPCRel) const override;
-};
-
 MOSELFObjectWriter::MOSELFObjectWriter(uint8_t OSABI)
     : MCELFObjectTargetWriter(false, OSABI, ELF::EM_MOS, true) {}
 
-unsigned MOSELFObjectWriter::getRelocType(MCContext &Ctx, const MCValue &Target,
-                                          const MCFixup &Fixup,
+unsigned MOSELFObjectWriter::getRelocType(const MCFixup &Fixup,
+                                          const MCValue &Target,
                                           bool IsPCRel) const {
-  unsigned Kind = Fixup.getTargetKind();
+  unsigned Kind = Fixup.getKind();
   auto Specifier = static_cast<MOSMCExpr::VariantKind>(Target.getSpecifier());
   switch (Kind) {
   case FK_Data_1:
@@ -97,9 +90,9 @@ unsigned MOSELFObjectWriter::getRelocType(MCContext &Ctx, const MCValue &Target,
     return ELF::R_MOS_PCREL_8;
   case MOS::PCRel16:
     return ELF::R_MOS_PCREL_16;
-  case MCFixupKind::FK_Data_4:
+  case FK_Data_4:
     return ELF::R_MOS_FK_DATA_4;
-  case MCFixupKind::FK_Data_8:
+  case FK_Data_8:
     return ELF::R_MOS_FK_DATA_8;
   case MOS::AddrAsciz:
     return ELF::R_MOS_ADDR_ASCIZ;

@@ -119,7 +119,6 @@ static Register findForwardedCopy(MachineInstr &MI,
 
 static bool findLdImm(MachineInstr &MI,
                       SmallVectorImpl<MachineInstr *> &LdImms) {
-  const TargetRegisterInfo &TRI = *MI.getMF()->getSubtarget().getRegisterInfo();
   const TargetInstrInfo &TII = *MI.getMF()->getSubtarget().getInstrInfo();
   Register Dst = MI.getOperand(0).getReg();
   Register Src = MI.getOperand(1).getReg();
@@ -128,8 +127,7 @@ static bool findLdImm(MachineInstr &MI,
       return false;
     if (Def.getOperand(0).getReg() != Src)
       return false;
-    const TargetRegisterClass *RC =
-        TII.getRegClass(Def.getDesc(), 0, &TRI, *MI.getMF());
+    const TargetRegisterClass *RC = TII.getRegClass(Def.getDesc(), 0);
     if (!RC->contains(Dst))
       return false;
     if (LdImms.empty())
@@ -200,7 +198,8 @@ bool MOSCopyOpt::runOnMachineFunction(MachineFunction &MF) {
       LLVM_DEBUG(dbgs() << "Found candidate: " << printReg(NewSrc, &TRI)
                         << '\n');
 
-      if (TRI.copyCost(Dst, NewSrc, STI).value(CostMode) > TRI.copyCost(Dst, Src, STI).value(CostMode)) {
+      if (TRI.copyCost(Dst, NewSrc, STI).value(CostMode) >
+          TRI.copyCost(Dst, Src, STI).value(CostMode)) {
         LLVM_DEBUG(dbgs() << "New copy is more expensive.\n");
         continue;
       }
@@ -250,7 +249,7 @@ bool MOSCopyOpt::runOnMachineFunction(MachineFunction &MF) {
       for (MachineInstr *LdImm : LdImms)
         LdImm->clearRegisterKills(Src, &TRI);
       LdImms.front()->clearRegisterKills(Src, &TRI);
-      TII.reMaterialize(MBB, MI, Dst, 0, *LdImms.front(), TRI);
+      TII.reMaterialize(MBB, MI, Dst, 0, *LdImms.front());
       MI.eraseFromParent();
     }
   }

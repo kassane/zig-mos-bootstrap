@@ -73,3 +73,5 @@ def MOS : Target {
                                 MOSAsmParserVariantCA65,
                                 MOSAsmParserVariantXA65];
 }
+
+defm : RemapAllTargetPseudoPointerOperands<Imag16>;

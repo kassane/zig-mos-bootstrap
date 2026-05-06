@@ -136,16 +136,14 @@ void InstructionSelect::getAnalysisUsage(AnalysisUsage &AU) const {
 
 bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
   // If the ISel pipeline failed, do not bother running that pass.
-  if (MF.getProperties().hasProperty(
-          MachineFunctionProperties::Property::FailedISel))
+  if (MF.getProperties().hasFailedISel())
     return false;
 
   ISel = MF.getSubtarget().getInstructionSelector();
-  ISel->TPC = &getAnalysis<TargetPassConfig>();
 
   // FIXME: Properly override OptLevel in TargetMachine. See OptLevelChanger
   CodeGenOptLevel OldOptLevel = OptLevel;
-  auto RestoreOptLevel = make_scope_exit([=]() { OptLevel = OldOptLevel; });
+  llvm::scope_exit RestoreOptLevel([=]() { OptLevel = OldOptLevel; });
   OptLevel = MF.getFunction().hasOptNone() ? CodeGenOptLevel::None
                                            : MF.getTarget().getOptLevel();
 
@@ -155,6 +153,11 @@ bool InstructionSelect::runOnMachineFunction(MachineFunction &MF) {
     if (PSI && PSI->hasProfileSummary())
       BFI = &getAnalysis<LazyBlockFrequencyInfoPass>().getBFI();
     AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+  } else {
+    // When not optimizing, explicitly clear analysis pointers to avoid stale values
+    AA = nullptr;
+    PSI = nullptr;
+    BFI = nullptr;
   }
 
   return selectMachineFunction(MF);
@@ -164,7 +167,6 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << "Selecting function: " << MF.getName() << '\n');
   assert(ISel && "Cannot work without InstructionSelector");
 
-  const TargetPassConfig &TPC = *ISel->TPC;
   CodeGenCoverage CoverageInfo;
   ISel->setupMF(MF, VT, &CoverageInfo, PSI, BFI, AA);
 
@@ -182,8 +184,8 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
   // property check already is.
   if (!DisableGISelLegalityCheck)
     if (const MachineInstr *MI = machineFunctionIsIllegal(MF)) {
-      reportGISelFailure(MF, TPC, MORE, "gisel-select",
-                         "instruction is not legal", *MI);
+      reportGISelFailure(MF, MORE, "gisel-select", "instruction is not legal",
+                         *MI);
       return false;
     }
   // FIXME: We could introduce new blocks and will need to fix the outer loop.
@@ -220,8 +222,7 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
         if (!selectInstr(MI)) {
           LLVM_DEBUG(dbgs() << "Selection failed!\n";
                      MIIMaintainer.reportFullyCreatedInstrs());
-          reportGISelFailure(MF, TPC, MORE, "gisel-select", "cannot select",
-                             MI);
+          reportGISelFailure(MF, MORE, "gisel-select", "cannot select", MI);
           return false;
         }
         LLVM_DEBUG(MIIMaintainer.reportFullyCreatedInstrs());
@@ -284,7 +285,7 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
 
     const TargetRegisterClass *RC = MRI.getRegClassOrNull(VReg);
     if (!RC) {
-      reportGISelFailure(MF, TPC, MORE, "gisel-select",
+      reportGISelFailure(MF, MORE, "gisel-select",
                          "VReg has no regclass after selection", *MI);
       return false;
     }
@@ -293,7 +294,7 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
     if (Ty.isValid() &&
         TypeSize::isKnownGT(Ty.getSizeInBits(), TRI.getRegSizeInBits(*RC))) {
       reportGISelFailure(
-          MF, TPC, MORE, "gisel-select",
+          MF, MORE, "gisel-select",
           "VReg's low-level type and register class have different sizes", *MI);
       return false;
     }
@@ -304,14 +305,14 @@ bool InstructionSelect::selectMachineFunction(MachineFunction &MF) {
                                       MF.getFunction().getSubprogram(),
                                       /*MBB=*/nullptr);
     R << "inserting blocks is not supported yet";
-    reportGISelFailure(MF, TPC, MORE, R);
+    reportGISelFailure(MF, MORE, R);
     return false;
   }
 #endif
 
   if (!DebugCounter::shouldExecute(GlobalISelCounter)) {
     dbgs() << "Falling back for function " << MF.getName() << "\n";
-    MF.getProperties().set(MachineFunctionProperties::Property::FailedISel);
+    MF.getProperties().setFailedISel();
     return false;
   }
 

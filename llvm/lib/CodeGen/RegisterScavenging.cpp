@@ -276,14 +276,14 @@ RegScavenger::spill(Register Reg, const TargetRegisterClass &RC, int SPAdj,
                          ": Cannot scavenge register without an emergency "
                          "spill slot!");
     }
-    TII->storeRegToStackSlot(*MBB, Before, Reg, true, FI, &RC, TRI, Register());
+    TII->storeRegToStackSlot(*MBB, Before, Reg, true, FI, &RC, Register());
     MachineBasicBlock::iterator II = std::prev(Before);
 
     unsigned FIOperandNum = getFrameIndexOperandNum(*II);
     TRI->eliminateFrameIndex(II, SPAdj, FIOperandNum, this);
 
     // Restore the scavenged register before its use (or first terminator).
-    TII->loadRegFromStackSlot(*MBB, UseMI, Reg, FI, &RC, TRI, Register());
+    TII->loadRegFromStackSlot(*MBB, UseMI, Reg, FI, &RC, Register());
     II = std::prev(UseMI);
 
     FIOperandNum = getFrameIndexOperandNum(*II);
@@ -300,7 +300,6 @@ Register RegScavenger::scavengeRegisterBackwards(const TargetRegisterClass &RC,
   const MachineFunction &MF = *MBB.getParent();
 
   // Find the register whose use is furthest away.
-  MachineBasicBlock::iterator UseMI;
   ArrayRef<MCPhysReg> AllocationOrder = RC.getRawAllocationOrder(MF);
   std::pair<MCPhysReg, MachineBasicBlock::iterator> P = findSurvivorBackwards(
       *MRI, std::prev(MBBI), To, LiveUnits, AllocationOrder, RestoreAfter);
@@ -466,7 +465,7 @@ void llvm::scavengeFrameVirtualRegs(MachineFunction &MF, RegScavenger &RS) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   // Shortcut.
   if (MRI.getNumVirtRegs() == 0) {
-    MF.getProperties().set(MachineFunctionProperties::Property::NoVRegs);
+    MF.getProperties().setNoVRegs();
     return;
   }
 
@@ -488,7 +487,7 @@ void llvm::scavengeFrameVirtualRegs(MachineFunction &MF, RegScavenger &RS) {
   }
 
   MRI.clearVirtRegs();
-  MF.getProperties().set(MachineFunctionProperties::Property::NoVRegs);
+  MF.getProperties().setNoVRegs();
 }
 
 namespace {

@@ -306,11 +306,17 @@ bool MOSRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   case MOS::AddrLostk:
   case MOS::AddrHistk:
   case MOS::LDStk:
-  case MOS::STStk:
-    MI->getOperand(FIOperandNum)
-        .ChangeToRegister(getFrameRegister(MF), /*isDef=*/false);
+  case MOS::STStk: {
+    // During frame setup or teardown, FP is not valid, so SP instead plays the
+    // role of the frame pointer.
+    Register FP = (MI->getFlags() &
+                   (MachineInstr::FrameSetup | MachineInstr::FrameDestroy))
+                      ? MOS::RS0
+                      : getFrameRegister(MF);
+    MI->getOperand(FIOperandNum).ChangeToRegister(FP, /*isDef=*/false);
     MI->getOperand(FIOperandNum + 1).setImm(Offset);
     break;
+  }
   }
 
   switch (MI->getOpcode()) {
@@ -823,7 +829,7 @@ bool MOSRegisterInfo::getRegAllocationHints(Register VirtReg,
   return false;
 }
 
-// If the VirtReg is trivially rematerializable, and the only uses of VirtReg
+// If the VirtReg is rematerializable, and the only uses of VirtReg
 // are copies with exactly one register, returns a hint containing that
 // register. If there are more than one such register, returns Some(0).
 // Otherwise, returns None. This prevents the register allocator from
@@ -840,8 +846,7 @@ MOSRegisterInfo::getStrongCopyHint(Register VirtReg, const MachineFunction &MF,
 
   if (!MRI.hasOneDef(VirtReg))
     return std::nullopt;
-  if (!TII.isReallyTriviallyReMaterializable(
-          *MRI.getOneDef(VirtReg)->getParent()))
+  if (!TII.isReMaterializable(*MRI.getOneDef(VirtReg)->getParent()))
     return std::nullopt;
 
   std::optional<Register> Hint;
@@ -926,8 +931,7 @@ MOSInstrCost MOSRegisterInfo::copyCost(Register DestReg, Register SrcReg,
       XYCopyCost = PushCost + PopCost;
     } else {
       // May need to PHA/PLA around.
-      XYCopyCost = (PushCost + PopCost) / 2 +
-                   copyCost(DestReg, MOS::A, STI) +
+      XYCopyCost = (PushCost + PopCost) / 2 + copyCost(DestReg, MOS::A, STI) +
                    copyCost(MOS::A, SrcReg, STI);
     }
     if (STI.hasHUC6280()) {
@@ -962,9 +966,9 @@ MOSInstrCost MOSRegisterInfo::copyCost(Register DestReg, Register SrcReg,
     Register DestReg8 =
         getMatchingSuperReg(DestReg, MOS::sublsb, &MOS::Anyi8RegClass);
     // BIT imm (HUC6280), BIT abs
-    auto BitCost = STI.hasHUC6280() ? MOSInstrCost(2, 2) :
-                   STI.has65CE02() ? MOSInstrCost(3, 5) :
-                   MOSInstrCost(3, 4);
+    auto BitCost = STI.hasHUC6280()  ? MOSInstrCost(2, 2)
+                   : STI.has65CE02() ? MOSInstrCost(3, 5)
+                                     : MOSInstrCost(3, 4);
 
     if (SrcReg8) {
       SrcReg = SrcReg8;
@@ -994,8 +998,8 @@ MOSInstrCost MOSRegisterInfo::copyCost(Register DestReg, Register SrcReg,
         return PushCost + PopCost + BranchCost + BitCost + JumpCost + ClvCost;
       }
       // [PHA]; COPY; BNE; BIT setv; JMP; CLV; [PLA]
-      return copyCost(MOS::A, SrcReg, STI) + BranchCost + BitCost +
-             JumpCost + ClvCost;
+      return copyCost(MOS::A, SrcReg, STI) + BranchCost + BitCost + JumpCost +
+             ClvCost;
     }
     if (DestReg8) {
       DestReg = DestReg8;
@@ -1011,8 +1015,7 @@ MOSInstrCost MOSRegisterInfo::copyCost(Register DestReg, Register SrcReg,
     }
     if (STI.hasSPC700()) {
       // PHA, PHP, PLA, ORA #imm, PHA, PLP, PLA, BR, CLV
-      return (PushCost + PopCost) * 3 + AluImmCost + BranchCost +
-             ClvCost;
+      return (PushCost + PopCost) * 3 + AluImmCost + BranchCost + ClvCost;
     }
     // BIT setv; BR; CLV;
     return BitCost + BranchCost + ClvCost;

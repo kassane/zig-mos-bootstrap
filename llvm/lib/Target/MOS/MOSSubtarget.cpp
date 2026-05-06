@@ -36,7 +36,7 @@ using namespace llvm;
 
 MOSSubtarget::MOSSubtarget(const Triple &TT, const std::string &CPU,
                            const std::string &FS, const MOSTargetMachine &TM)
-    : MOSGenSubtargetInfo(TT, CPU, /* TuneCPU */ CPU, FS), InstrInfo(),
+    : MOSGenSubtargetInfo(TT, CPU, /* TuneCPU */ CPU, FS), InstrInfo(*this),
       RegInfo(), FrameLowering(),
       TLInfo(TM, initializeSubtargetDependencies(CPU, FS, TM)),
       CallLoweringInfo(&TLInfo), Legalizer(*this),
@@ -53,7 +53,7 @@ MOSSubtarget::initializeSubtargetDependencies(StringRef CPU, StringRef FS,
 }
 
 void MOSSubtarget::overrideSchedPolicy(MachineSchedPolicy &Policy,
-                                       unsigned NumRegionInstrs) const {
+                                       const SchedRegion &Region) const {
   // Force register pressure tracking; by default it's disabled for small
   // regions, but it's the only 6502 scheduling concern.
   Policy.ShouldTrackPressure = true;

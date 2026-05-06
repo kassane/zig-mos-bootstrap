@@ -8,37 +8,15 @@
 
 #include "MOSMCExpr.h"
 #include "MOSFixupKinds.h"
+#include "MOSModifierNames.h"
 
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCValue.h"
 
 namespace llvm {
-
-namespace {
-
-const struct ModifierEntry {
-  const char *const Spelling;
-  MOSMCExpr::VariantKind VariantKind;
-  bool ImmediateOnly = false;
-} ModifierNames[] = {
-    // Define immediate variants of mos8() and mos16() first.
-    {"mos8", MOSMCExpr::VK_IMM8, true},
-    {"mos16", MOSMCExpr::VK_IMM16, true},
-    {"mos8", MOSMCExpr::VK_ADDR8},
-    {"mos16", MOSMCExpr::VK_ADDR16},
-    {"mos16lo", MOSMCExpr::VK_ADDR16_LO},
-    {"mos16hi", MOSMCExpr::VK_ADDR16_HI},
-    {"mos24", MOSMCExpr::VK_ADDR24},
-    {"mos24bank", MOSMCExpr::VK_ADDR24_BANK},
-    {"mos24segment", MOSMCExpr::VK_ADDR24_SEGMENT},
-    {"mos24segmentlo", MOSMCExpr::VK_ADDR24_SEGMENT_LO},
-    {"mos24segmenthi", MOSMCExpr::VK_ADDR24_SEGMENT_HI},
-    {"mos13", MOSMCExpr::VK_ADDR13},
-};
-
-} // end of anonymous namespace
 
 const MOSMCExpr *MOSMCExpr::create(VariantKind Kind, const MCExpr *Expr,
                                    bool Negated, MCContext &Ctx) {
@@ -53,7 +31,7 @@ void MOSMCExpr::printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const {
   }
 
   OS << getName() << '(';
-  getSubExpr()->print(OS, MAI);
+  MAI->printExpr(OS, *getSubExpr());
   OS << ')';
 }
 
@@ -76,7 +54,18 @@ bool MOSMCExpr::evaluateAsConstant(int64_t &Result) const {
 
 bool MOSMCExpr::evaluateAsRelocatableImpl(MCValue &Result,
                                           const MCAssembler *Asm) const {
-  return SubExpr->evaluateAsRelocatable(Result, Asm);
+  if (!SubExpr->evaluateAsRelocatable(Result, Asm))
+    return false;
+
+  // If the subexpression is an absolute constant, apply the variant transform
+  // here so generic directive range checks (e.g. .byte) see the masked value.
+  if (Result.isAbsolute()) {
+    int64_t V = Result.getConstant();
+    V = evaluateAsInt64(V);
+    Result = MCValue::get(V);
+  }
+
+  return true;
 }
 
 int64_t MOSMCExpr::evaluateAsInt64(int64_t Value) const {
@@ -176,11 +165,12 @@ void MOSMCExpr::visitUsedExpr(MCStreamer &Streamer) const {
 }
 
 const char *MOSMCExpr::getName() const {
-  const auto &Modifier = std::find_if(
-      std::begin(ModifierNames), std::end(ModifierNames),
-      [this](ModifierEntry const &Mod) { return Mod.VariantKind == Kind; });
+  const auto &Modifier = llvm::find_if(MOS::modifierNames(),
+                                       [this](MOS::ModifierEntry const &Mod) {
+                                         return Mod.VariantKind == Kind;
+                                       });
 
-  if (Modifier != std::end(ModifierNames)) {
+  if (Modifier != std::end(MOS::modifierNames())) {
     return Modifier->Spelling;
   }
   return nullptr;
@@ -189,14 +179,14 @@ const char *MOSMCExpr::getName() const {
 MOSMCExpr::VariantKind MOSMCExpr::getKindByName(StringRef Name,
                                                 bool IsImmediate) {
   const auto &Modifier =
-      std::find_if(std::begin(ModifierNames), std::end(ModifierNames),
-                   [&Name, IsImmediate](ModifierEntry const &Mod) {
-                     if (Mod.ImmediateOnly && !IsImmediate)
-                       return false;
-                     return Mod.Spelling == Name;
-                   });
+      llvm::find_if(MOS::modifierNames(),
+                    [&Name, IsImmediate](MOS::ModifierEntry const &Mod) {
+                      if (Mod.ImmediateOnly && !IsImmediate)
+                        return false;
+                      return Mod.Spelling == Name;
+                    });
 
-  if (Modifier != std::end(ModifierNames)) {
+  if (Modifier != std::end(MOS::modifierNames())) {
     return Modifier->VariantKind;
   }
   return VK_NONE;

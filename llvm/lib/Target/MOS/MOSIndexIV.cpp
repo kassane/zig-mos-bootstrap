@@ -96,7 +96,7 @@ PreservedAnalyses MOSIndexIV::run(Loop &L, LoopAnalysisManager &AM,
       LLVM_DEBUG(dbgs() << "Rewriting to 8-bit index.\n");
       Changed = true;
 
-      SCEVExpander Rewriter(SE, DL, "mos-indexiv");
+      SCEVExpander Rewriter(SE, "mos-indexiv");
       // The IVs should be computed from already available subexpressions
       // wherever possible. Canonical mode instead expands them fully to make
       // them easier to analyze.

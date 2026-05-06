@@ -308,6 +308,8 @@ static const StringMap<MachineInfo> TargetMap{
     // RISC-V
     {"elf32-littleriscv", {ELF::EM_RISCV, false, true}},
     {"elf64-littleriscv", {ELF::EM_RISCV, true, true}},
+    {"elf32-bigriscv", {ELF::EM_RISCV, false, false}},
+    {"elf64-bigriscv", {ELF::EM_RISCV, true, false}},
     // PowerPC
     {"elf32-powerpc", {ELF::EM_PPC, false, false}},
     {"elf32-powerpcle", {ELF::EM_PPC, false, true}},
@@ -331,6 +333,8 @@ static const StringMap<MachineInfo> TargetMap{
     {"elf64-loongarch", {ELF::EM_LOONGARCH, true, true}},
     // SystemZ
     {"elf64-s390", {ELF::EM_S390, true, false}},
+    // MOS
+    {"elf32-mos", {ELF::EM_MOS, false, true}},
 };
 
 static Expected<TargetInfo>
@@ -809,12 +813,12 @@ objcopy::parseObjcopyOptions(ArrayRef<const char *> ArgsArr,
             .Case("boot_application",
                   COFF::IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION)
             .Case("console", COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI)
-            .Cases("efi_application", "efi-app",
+            .Cases({"efi_application", "efi-app"},
                    COFF::IMAGE_SUBSYSTEM_EFI_APPLICATION)
-            .Cases("efi_boot_service_driver", "efi-bsd",
+            .Cases({"efi_boot_service_driver", "efi-bsd"},
                    COFF::IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER)
             .Case("efi_rom", COFF::IMAGE_SUBSYSTEM_EFI_ROM)
-            .Cases("efi_runtime_driver", "efi-rtd",
+            .Cases({"efi_runtime_driver", "efi-rtd"},
                    COFF::IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER)
             .Case("native", COFF::IMAGE_SUBSYSTEM_NATIVE)
             .Case("posix", COFF::IMAGE_SUBSYSTEM_POSIX_CUI)
@@ -1079,6 +1083,14 @@ objcopy::parseObjcopyOptions(ArrayRef<const char *> ArgsArr,
           errc::invalid_argument,
           "bad format for --dump-section, expected section=file");
     Config.DumpSection.push_back(Value);
+  }
+  for (auto *Arg : InputArgs.filtered(OBJCOPY_extract_section)) {
+    StringRef Value(Arg->getValue());
+    if (Value.split('=').second.empty())
+      return createStringError(
+          errc::invalid_argument,
+          "bad format for --extract-section, expected section=file");
+    Config.ExtractSection.push_back(Value);
   }
   Config.StripAll = InputArgs.hasArg(OBJCOPY_strip_all);
   Config.StripAllGNU = InputArgs.hasArg(OBJCOPY_strip_all_gnu);
