@@ -2717,9 +2717,9 @@ const Mos = struct {
     s:  u8 = 0,
     p:  u8 = 0,
     /// First 32 imaginary byte registers rc0–rc31. DWARF 0x10, 0x12, … 0x4E.
-    rc: [32]u8  = [_]u8{0}  ** 32,
+    rc: [32]u8  = @splat(0),
     /// First 16 imaginary pointer registers rs0–rs15. DWARF 0x210–0x21F.
-    rs: [16]u16 = [_]u16{0} ** 16,
+    rs: [16]u16 = @splat(0),
 
     pub inline fn current() Mos {
         var ctx: Mos = .{};

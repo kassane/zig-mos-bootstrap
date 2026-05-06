@@ -1417,7 +1417,7 @@ const llvm_libs = [_][]const u8{
     "LLVMSandboxIR",
     "LLVMLinker",
     "LLVMFrontendOpenMP",
-    // "LLVMFrontendDirective",
+    "LLVMFrontendDirective",
     "LLVMFrontendAtomic",
     "LLVMFrontendOffloading",
     "LLVMObjectYAML",
