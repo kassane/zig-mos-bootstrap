@@ -90,6 +90,8 @@
 #elif defined (__ez80)
 #define zig_ez80
 #define zig_z80
+#elif defined(__mos__)
+#define zig_mos
 #endif
 
 #if defined(zig_msvc) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -430,6 +432,8 @@
 #define zig_trap() __asm__ volatile("ill")
 #elif defined(zig_z80)
 #define zig_trap() __asm__ volatile("rst 00h")
+#elif defined(zig_mos)
+#define zig_trap() __asm__ volatile("brk")
 #else
 #define zig_trap() zig_trap_unavailable
 #endif
@@ -472,6 +476,8 @@
 #define zig_breakpoint() __asm__ volatile("int $0x3")
 #elif defined(zig_xtensa)
 #define zig_breakpoint() __asm__ volatile("break 1, 1")
+#elif defined(zig_mos)
+#define zig_breakpoint() __asm__ volatile("brk")
 #else
 #define zig_breakpoint() zig_breakpoint_unavailable
 #endif
