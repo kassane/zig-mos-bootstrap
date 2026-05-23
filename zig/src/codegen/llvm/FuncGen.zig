@@ -767,17 +767,36 @@ fn airCall(self: *FuncGen, inst: Air.Inst.Index, modifier: std.lang.CallModifier
         },
     };
 
+    const cc_info = llvm.toLlvmCallConv(fn_info.cc, target).?;
+
     {
         // Add argument attributes.
         it = iterateParamTypes(o, fn_info);
         it.llvm_index += @intFromBool(sret);
         it.llvm_index += @intFromBool(err_return_tracing);
+        var remaining_inreg_int = cc_info.inreg_int_params;
+        var remaining_inreg_float = cc_info.inreg_float_params;
         while (try it.next()) |lowering| switch (lowering) {
             .byval => {
                 const param_index = it.zig_index - 1;
                 const param_ty = Type.fromInterned(fn_info.param_types.get(ip)[param_index]);
                 if (!isByRef(param_ty, zcu)) {
                     try o.addByValParamAttrs(pt, &attributes, param_ty, param_index, fn_info, it.llvm_index - 1);
+                }
+
+                if (remaining_inreg_int > 0 and
+                    (param_ty.isPtrAtRuntime(zcu) or
+                        (param_ty.isAbiInt(zcu) and param_ty.abiSize(zcu) <= Type.usize.abiSize(zcu))))
+                {
+                    try attributes.addParamAttr(it.llvm_index - 1, .inreg, &o.builder);
+                    remaining_inreg_int -= 1;
+                }
+
+                if (remaining_inreg_float > 0 and
+                    param_ty.zigTypeTag(zcu) == .float)
+                {
+                    try attributes.addParamAttr(it.llvm_index - 1, .inreg, &o.builder);
+                    remaining_inreg_float -= 1;
                 }
             },
             .byref => {
@@ -833,7 +852,7 @@ fn airCall(self: *FuncGen, inst: Air.Inst.Index, modifier: std.lang.CallModifier
             .always_tail => .musttail,
             .no_suspend, .always_inline, .compile_time => unreachable,
         },
-        llvm.toLlvmCallConvTag(fn_info.cc, target).?,
+        cc_info.llvm_cc,
         try attributes.finish(&o.builder),
         try o.lowerType(zig_fn_ty),
         llvm_fn,
@@ -7103,8 +7122,8 @@ fn lowerSystemVFnRetTy(o: *Object, fn_info: InternPool.Key.FuncType) Allocator.E
 }
 
 /// This function deliberately does not handle `_BitInt` because it typically
-/// has different ABI than regular integer types, and there is no currently no
-/// way to determine whether a Zig integer type is meant to represent e.g. `int`
+/// has different ABI than regular integer types, and there is currently no way
+/// to determine whether a Zig integer type is meant to represent e.g. `int`
 /// or `_BitInt(32)`.
 pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std.lang.Signedness {
     switch (cc) {
@@ -7112,11 +7131,13 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
         else => {},
     }
 
-    const int_info = switch (ty.zigTypeTag(zcu)) {
+    const ty_tag = ty.zigTypeTag(zcu);
+    const int_info = switch (ty_tag) {
         .bool => Type.u1.intInfo(zcu),
         else => if (ty.isAbiInt(zcu)) ty.intInfo(zcu) else return null,
     };
-    assert(int_info.bits >= 0);
+
+    assert(int_info.bits == 0 or (int_info.bits == 1 and ty_tag == .bool) or std.math.isPowerOfTwo(int_info.bits));
 
     const target = zcu.getTarget();
     return switch (target.cpu.arch) {
@@ -7124,7 +7145,7 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
         .aarch64_be,
         => switch (target.os.tag) {
             .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => switch (int_info.bits) {
-                8, 16 => int_info.signedness,
+                1, 8, 16 => int_info.signedness,
                 else => null,
             },
             else => null,
@@ -7132,7 +7153,7 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
 
         .avr,
         => switch (int_info.bits) {
-            8 => int_info.signedness,
+            1, 8 => int_info.signedness,
             else => null,
         },
 
@@ -7143,7 +7164,7 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
         .riscv64,
         .riscv64be,
         => switch (int_info.bits) {
-            8, 16 => int_info.signedness,
+            1, 8, 16 => int_info.signedness,
             32 => .signed,
             else => null,
         },
@@ -7153,7 +7174,7 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
         .mips64,
         .mips64el,
         => switch (int_info.bits) {
-            8, 16, 64 => int_info.signedness,
+            1, 8, 16, 64 => int_info.signedness,
             32 => .signed,
             else => null,
         },
@@ -7164,12 +7185,12 @@ pub fn ccAbiPromoteInt(cc: std.lang.CallingConvention, zcu: *Zcu, ty: Type) ?std
         .sparc64,
         .ve,
         => switch (int_info.bits) {
-            8, 16, 32 => int_info.signedness,
+            1, 8, 16, 32 => int_info.signedness,
             else => null,
         },
 
         else => switch (int_info.bits) {
-            8, 16 => int_info.signedness,
+            1, 8, 16 => int_info.signedness,
             else => null,
         },
     };

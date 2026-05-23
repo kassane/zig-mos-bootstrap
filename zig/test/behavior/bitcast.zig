@@ -49,8 +49,8 @@ test "@bitCast iX -> uX exotic integers" {
 }
 
 fn testBitCast(comptime N: usize) !void {
-    const iN = std.meta.Int(.signed, N);
-    const uN = std.meta.Int(.unsigned, N);
+    const iN = @Int(.signed, N);
+    const uN = @Int(.unsigned, N);
 
     try expect(conv_iN(N, -1) == maxInt(uN));
     try expect(conv_uN(N, maxInt(uN)) == -1);
@@ -69,12 +69,12 @@ fn testBitCast(comptime N: usize) !void {
     }
 }
 
-fn conv_iN(comptime N: usize, x: std.meta.Int(.signed, N)) std.meta.Int(.unsigned, N) {
-    return @as(std.meta.Int(.unsigned, N), @bitCast(x));
+fn conv_iN(comptime N: usize, x: @Int(.signed, N)) @Int(.unsigned, N) {
+    return @as(@Int(.unsigned, N), @bitCast(x));
 }
 
-fn conv_uN(comptime N: usize, x: std.meta.Int(.unsigned, N)) std.meta.Int(.signed, N) {
-    return @as(std.meta.Int(.signed, N), @bitCast(x));
+fn conv_uN(comptime N: usize, x: @Int(.unsigned, N)) @Int(.signed, N) {
+    return @as(@Int(.signed, N), @bitCast(x));
 }
 
 test "bitcast uX to bytes" {
@@ -101,7 +101,7 @@ fn testBitCastuXToBytes(comptime N: usize) !void {
     // on the platforms we target. If the above behavior is restricted after all,
     // this test should be deleted.
 
-    const T = std.meta.Int(.unsigned, N);
+    const T = @Int(.unsigned, N);
     for ([_]T{ 0, ~@as(T, 0) }) |init_value| {
         var x: T = init_value;
         const bytes = std.mem.asBytes(&x);
@@ -590,4 +590,20 @@ test "@bitCast of float to extern struct" {
 
     try S.doTheTest();
     try comptime S.doTheTest();
+}
+
+test "@bitCast of packed struct with void field to integer" {
+    const S = packed struct(u8) {
+        v: void,
+        x: u8,
+
+        fn doTheTest(x: u8) !void {
+            // Intentionally using `@as` to avoid RLS which masks the bug
+            const foo = @as(@This(), .{ .v = {}, .x = x });
+            const as_int: u8 = @bitCast(foo);
+            try expect(as_int == x);
+        }
+    };
+    try S.doTheTest(123);
+    try comptime S.doTheTest(123);
 }

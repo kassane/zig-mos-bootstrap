@@ -199,7 +199,6 @@ pub const cpu_models = struct {
         E{ .part = 0xac3, .m64 = &A64.ampere1 },
         E{ .part = 0xac4, .m64 = &A64.ampere1a },
         E{ .part = 0xac5, .m64 = &A64.ampere1b },
-        E{ .part = 0xac7, .m64 = &A64.ampere1c },
     };
 
     pub fn isKnown(core: CoreInfo, is_64bit: bool) ?*const Target.Cpu.Model {

@@ -53,7 +53,6 @@ const targets = [_]std.Target.Query{
     .{ .cpu_arch = .arm, .os_tag = .freestanding, .abi = .eabi },
     .{ .cpu_arch = .arm, .os_tag = .freestanding, .abi = .eabihf },
     .{ .cpu_arch = .arm, .os_tag = .fuchsia, .abi = .eabihf },
-    .{ .cpu_arch = .arm, .os_tag = .haiku, .abi = .eabi },
     .{ .cpu_arch = .arm, .os_tag = .haiku, .abi = .eabihf },
     .{ .cpu_arch = .arm, .os_tag = .linux, .abi = .androideabi },
     .{ .cpu_arch = .arm, .os_tag = .linux, .abi = .eabi },
@@ -126,7 +125,6 @@ const targets = [_]std.Target.Query{
     // .{ .cpu_arch = .loongarch64, .os_tag = .uefi, .abi = .none },
 
     .{ .cpu_arch = .m68k, .os_tag = .freestanding, .abi = .none },
-    .{ .cpu_arch = .m68k, .os_tag = .haiku, .abi = .none },
     .{ .cpu_arch = .m68k, .os_tag = .linux, .abi = .gnu },
     .{ .cpu_arch = .m68k, .os_tag = .linux, .abi = .musl },
     .{ .cpu_arch = .m68k, .os_tag = .linux, .abi = .none },
@@ -194,8 +192,6 @@ const targets = [_]std.Target.Query{
 
     .{ .cpu_arch = .powerpc, .os_tag = .freestanding, .abi = .eabi },
     .{ .cpu_arch = .powerpc, .os_tag = .freestanding, .abi = .eabihf },
-    .{ .cpu_arch = .powerpc, .os_tag = .haiku, .abi = .eabi },
-    .{ .cpu_arch = .powerpc, .os_tag = .haiku, .abi = .eabihf },
     .{ .cpu_arch = .powerpc, .os_tag = .linux, .abi = .eabi },
     .{ .cpu_arch = .powerpc, .os_tag = .linux, .abi = .eabihf },
     .{ .cpu_arch = .powerpc, .os_tag = .linux, .abi = .musleabi },
@@ -260,7 +256,6 @@ const targets = [_]std.Target.Query{
     .{ .cpu_arch = .sparc, .os_tag = .rtems, .abi = .none },
 
     .{ .cpu_arch = .sparc64, .os_tag = .freestanding, .abi = .none },
-    .{ .cpu_arch = .sparc64, .os_tag = .haiku, .abi = .none },
     .{ .cpu_arch = .sparc64, .os_tag = .linux, .abi = .gnu },
     .{ .cpu_arch = .sparc64, .os_tag = .linux, .abi = .none },
     .{ .cpu_arch = .sparc64, .os_tag = .netbsd, .abi = .none },

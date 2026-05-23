@@ -113,6 +113,7 @@ pub fn targetTriple(allocator: Allocator, target: *const std.Target) ![]const u8
         .hppa64,
         .kalimba,
         .kvx,
+        .m88k,
         .microblaze,
         .microblazeel,
         .or1k,
@@ -505,6 +506,7 @@ pub fn dataLayout(target: *const std.Target) []const u8 {
         .hppa64,
         .kalimba,
         .kvx,
+        .m88k,
         .microblaze,
         .microblazeel,
         .or1k,
@@ -945,7 +947,7 @@ pub const Object = struct {
         }
 
         const target_triple_sentinel =
-            try o.gpa.dupeZ(u8, o.builder.target_triple.slice(&o.builder).?);
+            try o.gpa.dupeSentinel(u8, o.builder.target_triple.slice(&o.builder).?, 0);
         defer o.gpa.free(target_triple_sentinel);
 
         const emit_asm_msg = options.asm_path orelse "(none)";
@@ -2745,74 +2747,61 @@ pub const Object = struct {
             @panic("TODO: LLVM backend lower async function");
         }
 
-        {
-            const cc_info = toLlvmCallConv(fn_info.cc, target).?;
+        const cc_info = toLlvmCallConv(fn_info.cc, target).?;
 
-            function_index.setCallConv(cc_info.llvm_cc, &o.builder);
+        function_index.setCallConv(cc_info.llvm_cc, &o.builder);
 
-            if (cc_info.align_stack) {
-                try attributes.addFnAttr(.{ .alignstack = .wrap(.fromByteUnits(target.stackAlignment())) }, &o.builder);
-            } else {
-                _ = try attributes.removeFnAttr(.alignstack);
-            }
+        if (cc_info.align_stack) {
+            try attributes.addFnAttr(.{ .alignstack = .wrap(.fromByteUnits(target.stackAlignment())) }, &o.builder);
+        }
 
-            if (cc_info.naked) {
-                try attributes.addFnAttr(.naked, &o.builder);
-            } else {
-                _ = try attributes.removeFnAttr(.naked);
-            }
+        if (cc_info.naked) {
+            try attributes.addFnAttr(.naked, &o.builder);
+        }
 
-            for (0..cc_info.inreg_param_count) |param_idx| {
-                try attributes.addParamAttr(param_idx, .inreg, &o.builder);
-            }
-            for (cc_info.inreg_param_count..std.math.maxInt(u2)) |param_idx| {
-                _ = try attributes.removeParamAttr(param_idx, .inreg);
-            }
-
-            switch (fn_info.cc) {
-                inline .riscv64_interrupt,
-                .riscv32_interrupt,
-                .mips_interrupt,
-                .mips64_interrupt,
-                => |info| {
-                    try attributes.addFnAttr(.{ .string = .{
-                        .kind = try o.builder.string("interrupt"),
-                        .value = try o.builder.string(@tagName(info.mode)),
-                    } }, &o.builder);
-                },
-                .arm_interrupt,
-                => |info| {
-                    try attributes.addFnAttr(.{ .string = .{
-                        .kind = try o.builder.string("interrupt"),
-                        .value = try o.builder.string(switch (info.type) {
-                            .generic => "",
-                            .irq => "IRQ",
-                            .fiq => "FIQ",
-                            .swi => "SWI",
-                            .abort => "ABORT",
-                            .undef => "UNDEF",
-                        }),
-                    } }, &o.builder);
-                },
-                // these function attributes serve as a backup against any mistakes LLVM makes.
-                // clang sets both the function's calling convention and the function attributes
-                // in its backend, so future patches to the AVR backend could end up checking only one,
-                // possibly breaking our support. it's safer to just emit both.
-                .avr_interrupt, .avr_signal, .csky_interrupt, .mos_interrupt => {
-                    try attributes.addFnAttr(.{ .string = .{
-                        .kind = try o.builder.string(switch (fn_info.cc) {
-                            .avr_interrupt,
-                            .csky_interrupt,
-                            .mos_interrupt,
-                            => "interrupt",
-                            .avr_signal => "signal",
-                            else => unreachable,
-                        }),
-                        .value = .empty,
-                    } }, &o.builder);
-                },
-                else => {},
-            }
+        switch (fn_info.cc) {
+            inline .riscv64_interrupt,
+            .riscv32_interrupt,
+            .mips_interrupt,
+            .mips64_interrupt,
+            => |info| {
+                try attributes.addFnAttr(.{ .string = .{
+                    .kind = try o.builder.string("interrupt"),
+                    .value = try o.builder.string(@tagName(info.mode)),
+                } }, &o.builder);
+            },
+            .arm_interrupt,
+            => |info| {
+                try attributes.addFnAttr(.{ .string = .{
+                    .kind = try o.builder.string("interrupt"),
+                    .value = try o.builder.string(switch (info.type) {
+                        .generic => "",
+                        .irq => "IRQ",
+                        .fiq => "FIQ",
+                        .swi => "SWI",
+                        .abort => "ABORT",
+                        .undef => "UNDEF",
+                    }),
+                } }, &o.builder);
+            },
+            // these function attributes serve as a backup against any mistakes LLVM makes.
+            // clang sets both the function's calling convention and the function attributes
+            // in its backend, so future patches to the AVR backend could end up checking only one,
+            // possibly breaking our support. it's safer to just emit both.
+            .avr_interrupt, .avr_signal, .csky_interrupt, .mos_interrupt => {
+                try attributes.addFnAttr(.{ .string = .{
+                    .kind = try o.builder.string(switch (fn_info.cc) {
+                        .avr_interrupt,
+                        .csky_interrupt,
+                        .mos_interrupt,
+                        => "interrupt",
+                        .avr_signal => "signal",
+                        else => unreachable,
+                    }),
+                    .value = .empty,
+                } }, &o.builder);
+            },
+            else => {},
         }
 
         // Function attributes that are independent of analysis results of the function body.
@@ -2849,12 +2838,31 @@ pub const Object = struct {
             try attributes.addParamAttr(it.llvm_index, .nonnull, &o.builder);
             it.llvm_index += 1;
         }
+
+        var remaining_inreg_int = cc_info.inreg_int_params;
+        var remaining_inreg_float = cc_info.inreg_float_params;
+
         while (try it.next()) |lowering| switch (lowering) {
             .byval => {
                 const param_index = it.zig_index - 1;
                 const param_ty: Type = .fromInterned(fn_info.param_types.get(ip)[param_index]);
                 if (!isByRef(param_ty, zcu)) {
                     try o.addByValParamAttrs(pt, &attributes, param_ty, param_index, fn_info, it.llvm_index - 1);
+                }
+
+                if (remaining_inreg_int > 0 and
+                    (param_ty.isPtrAtRuntime(zcu) or
+                        (param_ty.isAbiInt(zcu) and param_ty.abiSize(zcu) <= Type.usize.abiSize(zcu))))
+                {
+                    try attributes.addParamAttr(it.llvm_index - 1, .inreg, &o.builder);
+                    remaining_inreg_int -= 1;
+                }
+
+                if (remaining_inreg_float > 0 and
+                    param_ty.zigTypeTag(zcu) == .float)
+                {
+                    try attributes.addParamAttr(it.llvm_index - 1, .inreg, &o.builder);
+                    remaining_inreg_float -= 1;
                 }
             },
             .byref => {
@@ -4407,15 +4415,19 @@ const CallingConventionInfo = struct {
     align_stack: bool,
     /// Whether the function needs a `naked` attribute.
     naked: bool,
-    /// How many leading parameters to apply the `inreg` attribute to.
-    inreg_param_count: u2 = 0,
+    /// How many leading register-sized integer parameters to apply the `inreg` attribute to.
+    inreg_int_params: u2 = 0,
+    /// How many leading floating-point parameters to apply the `inreg` attribute to.
+    inreg_float_params: u3 = 0,
 };
 
 pub fn toLlvmCallConv(cc: std.lang.CallingConvention, target: *const std.Target) ?CallingConventionInfo {
     const llvm_cc = toLlvmCallConvTag(cc, target) orelse return null;
-    const incoming_stack_alignment: ?u64, const register_params: u2 = switch (cc) {
+    const incoming_stack_alignment: ?u64, const inreg_int_params: u2, const inreg_float_params: u3 = switch (cc) {
+        .x86_fastcall => |opts| .{ opts.incoming_stack_alignment, 2, 0 },
+        .x86_vectorcall => |opts| .{ opts.incoming_stack_alignment, 2, 6 },
         inline else => |pl| switch (@TypeOf(pl)) {
-            void => .{ null, 0 },
+            void => .{ null, 0, 0 },
             std.lang.CallingConvention.ArcInterruptOptions,
             std.lang.CallingConvention.ArmInterruptOptions,
             std.lang.CallingConvention.RiscvInterruptOptions,
@@ -4423,8 +4435,8 @@ pub fn toLlvmCallConv(cc: std.lang.CallingConvention, target: *const std.Target)
             std.lang.CallingConvention.MicroblazeInterruptOptions,
             std.lang.CallingConvention.MipsInterruptOptions,
             std.lang.CallingConvention.CommonOptions,
-            => .{ pl.incoming_stack_alignment, 0 },
-            std.lang.CallingConvention.X86RegparmOptions => .{ pl.incoming_stack_alignment, pl.register_params },
+            => .{ pl.incoming_stack_alignment, 0, 0 },
+            std.lang.CallingConvention.X86RegparmOptions => .{ pl.incoming_stack_alignment, pl.register_params, 0 },
             else => @compileError("TODO: toLlvmCallConv" ++ @tagName(pl)),
         },
     };
@@ -4435,7 +4447,8 @@ pub fn toLlvmCallConv(cc: std.lang.CallingConvention, target: *const std.Target)
             break :need_align a < normal_stack_align;
         } else false,
         .naked = cc == .naked,
-        .inreg_param_count = register_params,
+        .inreg_int_params = inreg_int_params,
+        .inreg_float_params = inreg_float_params,
     };
 }
 pub fn toLlvmCallConvTag(cc_tag: std.lang.CallingConvention.Tag, target: *const std.Target) ?Builder.CallConv {
@@ -4549,6 +4562,7 @@ pub fn toLlvmCallConvTag(cc_tag: std.lang.CallingConvention.Tag, target: *const 
         .loongarch32_ilp32,
         .m68k_sysv,
         .m68k_gnu,
+        .m88k_sysv,
         .mos_sysv,
         .msp430_eabi,
         .or1k_sysv,
@@ -4935,6 +4949,7 @@ pub fn initializeLLVMTarget(arch: std.Target.Cpu.Arch) void {
         .hppa64,
         .kalimba,
         .kvx,
+        .m88k,
         .microblaze,
         .microblazeel,
         .or1k,

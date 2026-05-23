@@ -135,7 +135,7 @@ const TestContext = struct {
         const allocator = self.arena.allocator();
         const transformed_path = try self.transform_fn(allocator, self.io, self.dir, relative_path);
         if (native_os == .windows) {
-            const transformed_sep_path = try allocator.dupeZ(u8, transformed_path);
+            const transformed_sep_path = try allocator.dupeSentinel(u8, transformed_path, 0);
             std.mem.replaceScalar(u8, transformed_sep_path, switch (self.path_sep) {
                 '/' => '\\',
                 '\\' => '/',
@@ -153,7 +153,7 @@ const TestContext = struct {
     pub fn toCanonicalPathSep(self: *TestContext, path: [:0]const u8) ![:0]const u8 {
         if (native_os == .windows) {
             const allocator = self.arena.allocator();
-            const transformed_sep_path = try allocator.dupeZ(u8, path);
+            const transformed_sep_path = try allocator.dupeSentinel(u8, path, 0);
             std.mem.replaceScalar(u8, transformed_sep_path, '/', '\\');
             return transformed_sep_path;
         }
@@ -1070,6 +1070,47 @@ test "Dir.rename file <-> dir" {
             try ctx.dir.createDir(io, test_dir_path, .default_dir);
             try expectError(error.IsDir, ctx.dir.rename(test_file_path, ctx.dir, test_dir_path, io));
             try expectError(error.NotDir, ctx.dir.rename(test_dir_path, ctx.dir, test_file_path, io));
+        }
+    }.impl);
+}
+
+test "Dir.renamePreserve onto existing" {
+    if (native_os == .windows) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/35359
+
+    try testWithAllSupportedPathTypes(struct {
+        fn impl(ctx: *TestContext) !void {
+            const io = ctx.io;
+
+            const test_file_path = try ctx.transformPath("test_file");
+            const target_file_path = try ctx.transformPath("target_file");
+            const test_dir_path = try ctx.transformPath("test_dir");
+            const target_dir_path = try ctx.transformPath("target_dir");
+
+            try ctx.dir.writeFile(io, .{ .sub_path = test_file_path, .data = "" });
+            try ctx.dir.writeFile(io, .{ .sub_path = target_file_path, .data = "" });
+            try ctx.dir.createDir(io, test_dir_path, .default_dir);
+            try ctx.dir.createDir(io, target_dir_path, .default_dir);
+
+            // file -> file
+            try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_file_path, ctx.dir, target_file_path, io));
+            // file -> dir
+            try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_file_path, ctx.dir, target_dir_path, io));
+
+            // TODO: fix dir renaming on non-Linux, non-Windows systems, see https://codeberg.org/ziglang/zig/issues/35340
+            if (native_os != .windows and native_os != .linux) return;
+
+            // dir -> file
+            try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_dir_path, ctx.dir, target_file_path, io));
+            // dir -> dir
+            try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_dir_path, ctx.dir, target_dir_path, io));
+
+            // dir -> non-empty dir
+            {
+                const target_dir = try ctx.dir.openDir(io, target_dir_path, .{});
+                defer target_dir.close(io);
+                try target_dir.writeFile(io, .{ .sub_path = "test_file", .data = "" });
+            }
+            try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_dir_path, ctx.dir, target_dir_path, io));
         }
     }.impl);
 }

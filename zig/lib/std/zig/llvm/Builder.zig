@@ -7663,9 +7663,9 @@ pub const Constant = enum(u32) {
                     .float => {
                         const Float = struct {
                             fn Repr(comptime T: type) type {
-                                return packed struct(std.meta.Int(.unsigned, @bitSizeOf(T))) {
-                                    mantissa: std.meta.Int(.unsigned, std.math.floatMantissaBits(T)),
-                                    exponent: std.meta.Int(.unsigned, std.math.floatExponentBits(T)),
+                                return packed struct(@Int(.unsigned, @bitSizeOf(T))) {
+                                    mantissa: @Int(.unsigned, std.math.floatMantissaBits(T)),
+                                    exponent: @Int(.unsigned, std.math.floatExponentBits(T)),
                                     sign: u1,
                                 };
                             }
@@ -9724,8 +9724,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             metadata_formatter.need_comma = true;
             defer metadata_formatter.need_comma = undefined;
             try w.print(
-                \\{f} ={f}{f}{f}{f}{f}{f}{f}{f} {s} {f}{f}{f}{f}
-                \\
+                \\{f} ={f}{f}{f}{f}{f}{f}{f}{f} {s} {f}{f}
             , .{
                 variable.global.fmt(self),
                 Linkage.fmtOptional(
@@ -9741,6 +9740,14 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                 @tagName(variable.mutability),
                 global.type.fmt(self, .percent),
                 variable.init.fmt(self, .{ .space = true }),
+            });
+            if (variable.section != .none) {
+                try w.print(", section {f}", .{variable.section.fmtQ(self)});
+            }
+            try w.print(
+                \\{f}{f}
+                \\
+            , .{
                 variable.alignment.fmt(", "),
                 try metadata_formatter.fmt("!dbg ", global.dbg, null),
             });
@@ -9834,6 +9841,9 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
         {
             metadata_formatter.need_comma = false;
             defer metadata_formatter.need_comma = undefined;
+            if (function.section != .none) {
+                try w.print(" section {f}", .{function.section.fmtQ(self)});
+            }
             try w.print("{f}{f}", .{
                 function.alignment.fmt(" "),
                 try metadata_formatter.fmt(" !dbg ", global.dbg, null),

@@ -5,6 +5,7 @@ pub const Native = if (@hasDecl(root, "debug") and @hasDecl(root.debug, "CpuCont
     root.debug.CpuContext
 else switch (native_arch) {
     .aarch64, .aarch64_be => Aarch64,
+    .alpha => Alpha,
     .arc, .arceb => Arc,
     .arm, .armeb, .thumb, .thumbeb => Arm,
     .csky => Csky,
@@ -13,6 +14,7 @@ else switch (native_arch) {
     .lanai => Lanai,
     .loongarch32, .loongarch64 => LoongArch,
     .m68k => M68k,
+    .m88k => M88k,
     .mips, .mipsel, .mips64, .mips64el => Mips,
     .mos => Mos,
     .or1k => Or1k,
@@ -62,6 +64,13 @@ pub fn fromPosixSignalContext(ctx_ptr: ?*const anyopaque) ?Native {
             },
             .pc = @truncate(uc.mcontext.pc),
         };
+    } else if (native_arch == .m88k and native_os == .openbsd) {
+        // OpenBSD makes no effort to clear the V and E bits of the SXIP register when presenting it
+        // to user space, so we need to do that here.
+        return .{
+            .r = uc.mcontext.r,
+            .xip = uc.mcontext.xip & ~@as(u32, 0b11),
+        };
     } else if (native_arch.isMIPS32() and native_os == .linux) {
         // The O32 kABI uses 64-bit fields for some reason.
         return .{
@@ -102,6 +111,10 @@ pub fn fromPosixSignalContext(ctx_ptr: ?*const anyopaque) ?Native {
         .aarch64, .aarch64_be => .{
             .x = uc.mcontext.x ++ [_]u64{uc.mcontext.lr},
             .sp = uc.mcontext.sp,
+            .pc = uc.mcontext.pc,
+        },
+        .alpha => .{
+            .r = uc.mcontext.r,
             .pc = uc.mcontext.pc,
         },
         .csky => .{
@@ -288,6 +301,75 @@ const Aarch64 = extern struct {
             48...63 => return error.UnsupportedRegister, // P0 - P15
             64...95 => return error.UnsupportedRegister, // V0 - V31
             96...127 => return error.UnsupportedRegister, // Z0 - Z31
+
+            else => return error.InvalidRegister,
+        }
+    }
+};
+
+const Alpha = extern struct {
+    /// The numbered general-purpose registers R0 - R31.
+    r: [32]u64,
+    pc: u64,
+
+    pub inline fn current() Alpha {
+        var ctx: Alpha = undefined;
+        asm volatile (
+            \\ stq $0 , 0x000($0)
+            \\ stq $1 , 0x008($0)
+            \\ stq $2 , 0x010($0)
+            \\ stq $3 , 0x018($0)
+            \\ stq $4 , 0x020($0)
+            \\ stq $5 , 0x028($0)
+            \\ stq $6 , 0x030($0)
+            \\ stq $7 , 0x038($0)
+            \\ stq $8 , 0x040($0)
+            \\ stq $9 , 0x048($0)
+            \\ stq $10, 0x050($0)
+            \\ stq $11, 0x058($0)
+            \\ stq $12, 0x060($0)
+            \\ stq $13, 0x068($0)
+            \\ stq $14, 0x070($0)
+            \\ stq $15, 0x078($0)
+            \\ stq $16, 0x080($0)
+            \\ stq $17, 0x088($0)
+            \\ stq $18, 0x090($0)
+            \\ stq $19, 0x098($0)
+            \\ stq $20, 0x0a0($0)
+            \\ stq $21, 0x0a8($0)
+            \\ stq $22, 0x0b0($0)
+            \\ stq $23, 0x0b8($0)
+            \\ stq $24, 0x0c0($0)
+            \\ stq $25, 0x0c8($0)
+            \\ stq $26, 0x0d0($0)
+            \\ stq $27, 0x0d8($0)
+            \\ stq $28, 0x0e0($0)
+            \\ stq $29, 0x0e8($0)
+            \\ stq $30, 0x0f0($0)
+            \\
+            \\ br $1, 1f
+            \\1:
+            \\ stq $1, 0x100($0)
+            :
+            : [ctx] "{r0}" (&ctx),
+            : .{ .r1 = true, .memory = true });
+        return ctx;
+    }
+
+    pub fn getFp(ctx: *const Alpha) u64 {
+        return ctx.r[15];
+    }
+    pub fn getPc(ctx: *const Alpha) u64 {
+        return ctx.pc;
+    }
+
+    pub fn dwarfRegisterBytes(ctx: *Aarch64, register_num: u16) DwarfRegisterError![]u8 {
+        switch (register_num) {
+            0...31 => return @ptrCast(&ctx.r[register_num]),
+            64 => return @ptrCast(&ctx.pc),
+
+            32...63 => return error.UnsupportedRegister, // f0 - f31
+            66 => return error.UnsupportedRegister, // uniq
 
             else => return error.InvalidRegister,
         }
@@ -815,6 +897,75 @@ const M68k = extern struct {
 
             16...23 => return error.UnsupportedRegister, // fp0 - fp7
             24...25 => return error.UnsupportedRegister, // Return columns in GCC...?
+
+            else => return error.InvalidRegister,
+        }
+    }
+};
+
+/// This is an `extern struct` so that inline assembly in `current` can use field offsets.
+const M88k = extern struct {
+    /// The numbered general-purpose registers r0 - r31.
+    r: [32]u32,
+    xip: u32,
+
+    pub inline fn current() M88k {
+        var ctx: M88k = undefined;
+        asm volatile (
+            \\ st %%r0, %%r2, 0
+            \\ st %%r1, %%r2, 4
+            \\ st %%r2, %%r2, 8
+            \\ st %%r3, %%r2, 12
+            \\ st %%r4, %%r2, 16
+            \\ st %%r5, %%r2, 20
+            \\ st %%r6, %%r2, 24
+            \\ st %%r7, %%r2, 28
+            \\ st %%r8, %%r2, 32
+            \\ st %%r9, %%r2, 36
+            \\ st %%r10, %%r2, 40
+            \\ st %%r11, %%r2, 44
+            \\ st %%r12, %%r2, 48
+            \\ st %%r13, %%r2, 52
+            \\ st %%r14, %%r2, 56
+            \\ st %%r15, %%r2, 60
+            \\ st %%r16, %%r2, 64
+            \\ st %%r17, %%r2, 68
+            \\ st %%r18, %%r2, 72
+            \\ st %%r19, %%r2, 76
+            \\ st %%r20, %%r2, 80
+            \\ st %%r21, %%r2, 84
+            \\ st %%r22, %%r2, 88
+            \\ st %%r23, %%r2, 92
+            \\ st %%r24, %%r2, 96
+            \\ st %%r25, %%r2, 100
+            \\ st %%r26, %%r2, 104
+            \\ st %%r27, %%r2, 108
+            \\ st %%r28, %%r2, 112
+            \\ st %%r29, %%r2, 116
+            \\ st %%r30, %%r2, 120
+            \\ st %%r31, %%r2, 124
+            \\ bsr.n 1f
+            \\1:
+            \\ st %%r1, %%r2, 128
+            :
+            : [ctx] "{r2}" (&ctx),
+            : .{ .r1 = true, .memory = true });
+        return ctx;
+    }
+
+    pub fn getFp(ctx: *const M88k) u32 {
+        return ctx.r[30];
+    }
+    pub fn getPc(ctx: *const M88k) u32 {
+        return ctx.xip;
+    }
+
+    pub fn dwarfRegisterBytes(ctx: *M88k, register_num: u16) DwarfRegisterError![]u8 {
+        switch (register_num) {
+            0...31 => return @ptrCast(&ctx.r[register_num]),
+            64 => return @ptrCast(&ctx.xip),
+
+            32...63 => return error.UnsupportedRegister, // x0 - x31
 
             else => return error.InvalidRegister,
         }
@@ -2257,9 +2408,11 @@ const signal_ucontext_t = switch (native_os) {
         .alpha => extern struct {
             _cookie: i64,
             _mask: i64,
-            pc: u64,
-            _ps: i64,
-            r: [32]u64,
+            mcontext: extern struct {
+                pc: u64,
+                _ps: i64,
+                r: [32]u64,
+            },
         },
         // https://github.com/openbsd/src/blob/42468faed8369d07ae49ae02dd71ec34f59b66cd/sys/arch/arm/include/signal.h
         .arm => extern struct {
@@ -2287,6 +2440,18 @@ const signal_ucontext_t = switch (native_os) {
             r1_19: [19]u32,
             r23_29: [7]u32,
             r31: u32,
+        },
+        // https://github.com/openbsd/src/blob/42468faed8369d07ae49ae02dd71ec34f59b66cd/sys/arch/m88k/include/signal.h
+        .m88k => extern struct {
+            _cookie: i32,
+            _mask: i32,
+            mcontext: extern struct {
+                r: [32]u32,
+                _epsr: u32,
+                _fpsr: u32,
+                _fpcr: u32,
+                xip: u32,
+            },
         },
         // https://github.com/openbsd/src/blob/42468faed8369d07ae49ae02dd71ec34f59b66cd/sys/arch/mips64/include/signal.h
         .mips64, .mips64el => extern struct {
@@ -2601,25 +2766,6 @@ const signal_ucontext_t = switch (native_os) {
                 sp: u64,
                 pc: u64,
             },
-            // https://github.com/haiku/haiku/blob/47538c534fe0aadc626c09d121773fee8ea10d71/headers/posix/arch/m68k/signal.h
-            .m68k => extern struct {
-                pc: u32 align(8),
-                d: [8]u32,
-                a: [8]u32,
-            },
-            // https://github.com/haiku/haiku/blob/47538c534fe0aadc626c09d121773fee8ea10d71/headers/posix/arch/ppc/signal.h
-            .powerpc => extern struct {
-                pc: u32 align(8),
-                r: [13]u32, // Um, are you okay, Haiku?
-                _f: [14]f64,
-                _reserved: u32,
-                _fpscr: u32,
-                _ctr: u32,
-                _xer: u32,
-                _cr: u32,
-                _msr: u32,
-                lr: u32,
-            },
             // https://github.com/haiku/haiku/blob/47538c534fe0aadc626c09d121773fee8ea10d71/headers/posix/arch/riscv64/signal.h
             .riscv64 => extern struct {
                 ra_sp_gp_tp: [4]u64,
@@ -2630,8 +2776,6 @@ const signal_ucontext_t = switch (native_os) {
                 t3_6: [4]u64,
                 pc: u64,
             },
-            // https://github.com/haiku/haiku/blob/47538c534fe0aadc626c09d121773fee8ea10d71/headers/posix/arch/sparc64/signal.h
-            .sparc64 => @compileError("sparc64-haiku mcontext_t missing"),
             // https://github.com/haiku/haiku/blob/47538c534fe0aadc626c09d121773fee8ea10d71/headers/posix/arch/x86/signal.h
             .x86 => extern struct {
                 eip: u32,

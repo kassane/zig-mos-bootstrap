@@ -944,7 +944,7 @@ pub const RealPathFileAllocError = RealPathFileError || Allocator.Error;
 pub fn realPathFileAlloc(dir: Dir, io: Io, sub_path: []const u8, allocator: Allocator) RealPathFileAllocError![:0]u8 {
     var buffer: [max_path_bytes]u8 = undefined;
     const n = try realPathFile(dir, io, sub_path, &buffer);
-    return allocator.dupeZ(u8, buffer[0..n]);
+    return allocator.dupeSentinel(u8, buffer[0..n], 0);
 }
 
 /// Same as `realPathFile` except `absolute_path` is asserted to be an absolute
@@ -974,7 +974,7 @@ pub fn realPathFileAbsolute(io: Io, absolute_path: []const u8, out_buffer: []u8)
 pub fn realPathFileAbsoluteAlloc(io: Io, absolute_path: []const u8, allocator: Allocator) RealPathFileAllocError![:0]u8 {
     var buffer: [max_path_bytes]u8 = undefined;
     const n = try realPathFileAbsolute(io, absolute_path, &buffer);
-    return allocator.dupeZ(u8, buffer[0..n]);
+    return allocator.dupeSentinel(u8, buffer[0..n], 0);
 }
 
 pub const DeleteFileError = error{
@@ -1123,9 +1123,6 @@ pub const RenamePreserveError = error{
 /// Change the name or location of a file or directory.
 ///
 /// If `new_sub_path` already exists, `error.PathAlreadyExists` will be returned.
-///
-/// Renaming a file over an existing directory or a directory over an existing
-/// file will fail with `error.IsDir` or `error.NotDir`
 ///
 /// * On Windows, both paths should be encoded as [WTF-8](https://wtf-8.codeberg.page/).
 /// * On WASI, both paths should be encoded as valid UTF-8.
