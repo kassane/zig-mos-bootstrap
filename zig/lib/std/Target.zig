@@ -3374,7 +3374,7 @@ pub fn cTypeBitSize(target: *const Target, c_type: CType) u16 {
                 .float, .long, .ulong => return 32,
                 .longlong, .ulonglong, .double, .longdouble => return 64,
             },
-            .avr => switch (c_type) {
+            .avr, .mos => switch (c_type) {
                 .char => return 8,
                 .short, .ushort, .int, .uint => return 16,
                 .long, .ulong, .float, .double, .longdouble => return 32,
@@ -3689,7 +3689,7 @@ pub fn cTypeBitSize(target: *const Target, c_type: CType) u16 {
 pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
     // Overrides for unusual alignments
     switch (target.cpu.arch) {
-        .avr, .ez80 => return 1,
+        .avr, .ez80, .mos => return 1,
         .x86 => switch (target.os.tag) {
             .windows, .uefi => switch (c_type) {
                 .longlong, .ulonglong, .double => return 8,
@@ -3701,7 +3701,7 @@ pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
             },
             else => {},
         },
-        .mos, .m68k => switch (c_type) {
+        .m68k => switch (c_type) {
             .int, .uint, .long, .ulong => return 2,
             else => {},
         },
@@ -3749,7 +3749,6 @@ pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
             .hexagon,
             .hppa,
             .lanai,
-            .mos,
             .m68k,
             .m88k,
             .mips,
@@ -3789,6 +3788,7 @@ pub fn cTypeAlignment(target: *const Target, c_type: CType) u16 {
             => 16,
 
             .avr,
+            .mos,
             => unreachable, // Handled above.
         }),
     );
@@ -3801,7 +3801,7 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
             .longdouble => return 4,
             else => {},
         },
-        .avr, .ez80 => return 1,
+        .avr, .ez80, .mos => return 1,
         .x86 => switch (target.os.tag) {
             .windows, .uefi => switch (c_type) {
                 .longdouble => switch (target.abi) {
@@ -3815,7 +3815,7 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
                 else => {},
             },
         },
-        .mos, .m68k => switch (c_type) {
+        .m68k => switch (c_type) {
             .int, .uint, .long, .ulong => return 2,
             else => {},
         },
@@ -3860,7 +3860,6 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
             .hexagon,
             .hppa,
             .lanai,
-            .mos,
             .m68k,
             .m88k,
             .mips,
@@ -3901,6 +3900,7 @@ pub fn cTypePreferredAlignment(target: *const Target, c_type: CType) u16 {
             => 16,
 
             .avr,
+            .mos,
             => unreachable, // Handled above.
         }),
     );

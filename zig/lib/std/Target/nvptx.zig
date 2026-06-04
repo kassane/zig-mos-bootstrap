@@ -455,6 +455,7 @@ pub const cpu = struct {
         .name = "sm_100",
         .llvm_name = "sm_100",
         .features = featureSet(&[_]Feature{
+            .ptx86,
             .sm_100,
         }),
     };
@@ -462,6 +463,7 @@ pub const cpu = struct {
         .name = "sm_100a",
         .llvm_name = "sm_100a",
         .features = featureSet(&[_]Feature{
+            .ptx86,
             .sm_100a,
         }),
     };
@@ -469,6 +471,7 @@ pub const cpu = struct {
         .name = "sm_100f",
         .llvm_name = "sm_100f",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_100f,
         }),
     };
@@ -476,6 +479,7 @@ pub const cpu = struct {
         .name = "sm_101",
         .llvm_name = "sm_101",
         .features = featureSet(&[_]Feature{
+            .ptx86,
             .sm_101,
         }),
     };
@@ -483,6 +487,7 @@ pub const cpu = struct {
         .name = "sm_101a",
         .llvm_name = "sm_101a",
         .features = featureSet(&[_]Feature{
+            .ptx86,
             .sm_101a,
         }),
     };
@@ -490,6 +495,7 @@ pub const cpu = struct {
         .name = "sm_101f",
         .llvm_name = "sm_101f",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_101f,
         }),
     };
@@ -497,6 +503,7 @@ pub const cpu = struct {
         .name = "sm_103",
         .llvm_name = "sm_103",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_103,
         }),
     };
@@ -504,6 +511,7 @@ pub const cpu = struct {
         .name = "sm_103a",
         .llvm_name = "sm_103a",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_103a,
         }),
     };
@@ -511,6 +519,7 @@ pub const cpu = struct {
         .name = "sm_103f",
         .llvm_name = "sm_103f",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_103f,
         }),
     };
@@ -518,6 +527,7 @@ pub const cpu = struct {
         .name = "sm_110",
         .llvm_name = "sm_110",
         .features = featureSet(&[_]Feature{
+            .ptx90,
             .sm_110,
         }),
     };
@@ -525,6 +535,7 @@ pub const cpu = struct {
         .name = "sm_110a",
         .llvm_name = "sm_110a",
         .features = featureSet(&[_]Feature{
+            .ptx90,
             .sm_110a,
         }),
     };
@@ -532,6 +543,7 @@ pub const cpu = struct {
         .name = "sm_110f",
         .llvm_name = "sm_110f",
         .features = featureSet(&[_]Feature{
+            .ptx90,
             .sm_110f,
         }),
     };
@@ -539,6 +551,7 @@ pub const cpu = struct {
         .name = "sm_120",
         .llvm_name = "sm_120",
         .features = featureSet(&[_]Feature{
+            .ptx87,
             .sm_120,
         }),
     };
@@ -546,6 +559,7 @@ pub const cpu = struct {
         .name = "sm_120a",
         .llvm_name = "sm_120a",
         .features = featureSet(&[_]Feature{
+            .ptx87,
             .sm_120a,
         }),
     };
@@ -553,6 +567,7 @@ pub const cpu = struct {
         .name = "sm_120f",
         .llvm_name = "sm_120f",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_120f,
         }),
     };
@@ -560,6 +575,7 @@ pub const cpu = struct {
         .name = "sm_121",
         .llvm_name = "sm_121",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_121,
         }),
     };
@@ -567,6 +583,7 @@ pub const cpu = struct {
         .name = "sm_121a",
         .llvm_name = "sm_121a",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_121a,
         }),
     };
@@ -574,6 +591,7 @@ pub const cpu = struct {
         .name = "sm_121f",
         .llvm_name = "sm_121f",
         .features = featureSet(&[_]Feature{
+            .ptx88,
             .sm_121f,
         }),
     };
@@ -581,6 +599,7 @@ pub const cpu = struct {
         .name = "sm_20",
         .llvm_name = "sm_20",
         .features = featureSet(&[_]Feature{
+            .ptx32,
             .sm_20,
         }),
     };
@@ -588,6 +607,7 @@ pub const cpu = struct {
         .name = "sm_21",
         .llvm_name = "sm_21",
         .features = featureSet(&[_]Feature{
+            .ptx32,
             .sm_21,
         }),
     };
@@ -602,6 +622,7 @@ pub const cpu = struct {
         .name = "sm_32",
         .llvm_name = "sm_32",
         .features = featureSet(&[_]Feature{
+            .ptx40,
             .sm_32,
         }),
     };
@@ -609,6 +630,7 @@ pub const cpu = struct {
         .name = "sm_35",
         .llvm_name = "sm_35",
         .features = featureSet(&[_]Feature{
+            .ptx32,
             .sm_35,
         }),
     };
@@ -616,6 +638,7 @@ pub const cpu = struct {
         .name = "sm_37",
         .llvm_name = "sm_37",
         .features = featureSet(&[_]Feature{
+            .ptx41,
             .sm_37,
         }),
     };
@@ -623,6 +646,7 @@ pub const cpu = struct {
         .name = "sm_50",
         .llvm_name = "sm_50",
         .features = featureSet(&[_]Feature{
+            .ptx40,
             .sm_50,
         }),
     };
@@ -630,6 +654,7 @@ pub const cpu = struct {
         .name = "sm_52",
         .llvm_name = "sm_52",
         .features = featureSet(&[_]Feature{
+            .ptx41,
             .sm_52,
         }),
     };
@@ -637,6 +662,7 @@ pub const cpu = struct {
         .name = "sm_53",
         .llvm_name = "sm_53",
         .features = featureSet(&[_]Feature{
+            .ptx42,
             .sm_53,
         }),
     };
@@ -644,6 +670,7 @@ pub const cpu = struct {
         .name = "sm_60",
         .llvm_name = "sm_60",
         .features = featureSet(&[_]Feature{
+            .ptx50,
             .sm_60,
         }),
     };
@@ -651,6 +678,7 @@ pub const cpu = struct {
         .name = "sm_61",
         .llvm_name = "sm_61",
         .features = featureSet(&[_]Feature{
+            .ptx50,
             .sm_61,
         }),
     };
@@ -658,6 +686,7 @@ pub const cpu = struct {
         .name = "sm_62",
         .llvm_name = "sm_62",
         .features = featureSet(&[_]Feature{
+            .ptx50,
             .sm_62,
         }),
     };
@@ -665,6 +694,7 @@ pub const cpu = struct {
         .name = "sm_70",
         .llvm_name = "sm_70",
         .features = featureSet(&[_]Feature{
+            .ptx60,
             .sm_70,
         }),
     };
@@ -672,6 +702,7 @@ pub const cpu = struct {
         .name = "sm_72",
         .llvm_name = "sm_72",
         .features = featureSet(&[_]Feature{
+            .ptx61,
             .sm_72,
         }),
     };
@@ -679,6 +710,7 @@ pub const cpu = struct {
         .name = "sm_75",
         .llvm_name = "sm_75",
         .features = featureSet(&[_]Feature{
+            .ptx63,
             .sm_75,
         }),
     };
@@ -686,6 +718,7 @@ pub const cpu = struct {
         .name = "sm_80",
         .llvm_name = "sm_80",
         .features = featureSet(&[_]Feature{
+            .ptx70,
             .sm_80,
         }),
     };
@@ -693,6 +726,7 @@ pub const cpu = struct {
         .name = "sm_86",
         .llvm_name = "sm_86",
         .features = featureSet(&[_]Feature{
+            .ptx71,
             .sm_86,
         }),
     };
@@ -700,6 +734,7 @@ pub const cpu = struct {
         .name = "sm_87",
         .llvm_name = "sm_87",
         .features = featureSet(&[_]Feature{
+            .ptx74,
             .sm_87,
         }),
     };
@@ -707,6 +742,7 @@ pub const cpu = struct {
         .name = "sm_88",
         .llvm_name = "sm_88",
         .features = featureSet(&[_]Feature{
+            .ptx90,
             .sm_88,
         }),
     };
@@ -714,6 +750,7 @@ pub const cpu = struct {
         .name = "sm_89",
         .llvm_name = "sm_89",
         .features = featureSet(&[_]Feature{
+            .ptx78,
             .sm_89,
         }),
     };
@@ -721,6 +758,7 @@ pub const cpu = struct {
         .name = "sm_90",
         .llvm_name = "sm_90",
         .features = featureSet(&[_]Feature{
+            .ptx78,
             .sm_90,
         }),
     };
@@ -728,6 +766,7 @@ pub const cpu = struct {
         .name = "sm_90a",
         .llvm_name = "sm_90a",
         .features = featureSet(&[_]Feature{
+            .ptx80,
             .sm_90a,
         }),
     };

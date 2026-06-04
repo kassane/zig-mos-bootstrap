@@ -42,7 +42,7 @@ const module_test_targets = blk: {
     // getBaselineCpuFeatures calls populateDependencies which has a O(N ^ 2) algorithm
     // (where N is roughly 160, which technically makes it O(1), but it adds up to a
     // lot of branches)
-    @setEvalBranchQuota(80_000);
+    @setEvalBranchQuota(200_000);
     break :blk [_]ModuleTestTarget{
         // Native Targets
 

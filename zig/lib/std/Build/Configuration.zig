@@ -2386,6 +2386,7 @@ pub const TargetQuery = struct {
         mipsel,
         mips64,
         mips64el,
+        mos,
         msp430,
         nvptx,
         nvptx64,
@@ -2451,6 +2452,7 @@ pub const TargetQuery = struct {
                 .mipsel => .mipsel,
                 .mips64 => .mips64,
                 .mips64el => .mips64el,
+                .mos => .mos,
                 .msp430 => .msp430,
                 .nvptx => .nvptx,
                 .nvptx64 => .nvptx64,
@@ -2516,6 +2518,7 @@ pub const TargetQuery = struct {
                 .mipsel => .mipsel,
                 .mips64 => .mips64,
                 .mips64el => .mips64el,
+                .mos => .mos,
                 .msp430 => .msp430,
                 .nvptx => .nvptx,
                 .nvptx64 => .nvptx64,
@@ -2553,7 +2556,7 @@ pub const TargetQuery = struct {
         }
     };
 
-    pub const OsTag = enum(u6) {
+    pub const OsTag = enum(u7) {
         freestanding,
         other,
         contiki,
@@ -2597,6 +2600,31 @@ pub const TargetQuery = struct {
         opengl,
         vulkan,
         tios,
+        appleii,
+        atari2600,
+        atari5200,
+        atari8,
+        c64,
+        c128,
+        cpm65,
+        cx16,
+        dodo,
+        eater,
+        fds,
+        geos_cbm,
+        lynx,
+        mega65,
+        nes,
+        osi_c1p,
+        pce,
+        pce_cd,
+        pet,
+        rp6502,
+        rpc8e,
+        sim,
+        snes,
+        supervision,
+        vic20,
 
         default,
 
@@ -2645,6 +2673,31 @@ pub const TargetQuery = struct {
                 .opengl => .opengl,
                 .vulkan => .vulkan,
                 .tios => .tios,
+                .appleii => .appleii,
+                .atari2600 => .atari2600,
+                .atari5200 => .atari5200,
+                .atari8 => .atari8,
+                .c64 => .c64,
+                .c128 => .c128,
+                .cpm65 => .cpm65,
+                .cx16 => .cx16,
+                .dodo => .dodo,
+                .eater => .eater,
+                .fds => .fds,
+                .geos_cbm => .geos_cbm,
+                .lynx => .lynx,
+                .mega65 => .mega65,
+                .nes => .nes,
+                .osi_c1p => .osi_c1p,
+                .pce => .pce,
+                .pce_cd => .pce_cd,
+                .pet => .pet,
+                .rp6502 => .rp6502,
+                .rpc8e => .rpc8e,
+                .sim => .sim,
+                .snes => .snes,
+                .supervision => .supervision,
+                .vic20 => .vic20,
             };
         }
 
@@ -2693,6 +2746,31 @@ pub const TargetQuery = struct {
                 .opengl => .opengl,
                 .vulkan => .vulkan,
                 .tios => .tios,
+                .appleii => .appleii,
+                .atari2600 => .atari2600,
+                .atari5200 => .atari5200,
+                .atari8 => .atari8,
+                .c64 => .c64,
+                .c128 => .c128,
+                .cpm65 => .cpm65,
+                .cx16 => .cx16,
+                .dodo => .dodo,
+                .eater => .eater,
+                .fds => .fds,
+                .geos_cbm => .geos_cbm,
+                .lynx => .lynx,
+                .mega65 => .mega65,
+                .nes => .nes,
+                .osi_c1p => .osi_c1p,
+                .pce => .pce,
+                .pce_cd => .pce_cd,
+                .pet => .pet,
+                .rp6502 => .rp6502,
+                .rpc8e => .rpc8e,
+                .sim => .sim,
+                .snes => .snes,
+                .supervision => .supervision,
+                .vic20 => .vic20,
 
                 .default => null,
             };
@@ -2743,7 +2821,7 @@ pub const TargetQuery = struct {
         }
     };
 
-    pub const Flags = packed struct(u32) {
+    pub const Flags = packed struct(u64) {
         cpu_arch: CpuArch,
         cpu_model: CpuModel,
         cpu_features_add: bool,
@@ -2756,6 +2834,7 @@ pub const TargetQuery = struct {
         glibc_version: bool,
         android_api_level: bool,
         dynamic_linker: bool,
+        _padding: u31 = 0,
     };
 
     pub fn unwrapTarget(tq: *const TargetQuery, c: *const Configuration) std.Target {

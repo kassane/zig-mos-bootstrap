@@ -6765,6 +6765,17 @@ const ParamTypeIterator = struct {
                     return .byref;
                 },
             },
+            .mos_sysv => {
+                it.zig_index += 1;
+                it.llvm_index += 1;
+                switch (mos_c_abi.classifyType(ty, zcu)) {
+                    .byval => return .byval,
+                    .indirect => {
+                        it.byval_attr = true;
+                        return .byref;
+                    },
+                }
+            },
             // TODO investigate other callconvs
             else => {
                 it.zig_index += 1;
@@ -6958,6 +6969,7 @@ pub fn firstParamSRet(fn_info: InternPool.Key.FuncType, zcu: *Zcu, target: *cons
             .memory, .i32_array => true,
             .byval => false,
         },
+        .mos_sysv => mos_c_abi.classifyType(return_type, zcu) == .indirect,
         else => false, // TODO: investigate other targets/callconvs
     };
 }
@@ -7030,6 +7042,10 @@ pub fn lowerFnRetTy(o: *Object, fn_info: InternPool.Key.FuncType) Allocator.Erro
         },
         .wasm_mvp => switch (wasm_c_abi.classifyType(return_type, zcu)) {
             .direct => |scalar_ty| return o.lowerType(scalar_ty),
+            .indirect => return .void,
+        },
+        .mos_sysv => switch (mos_c_abi.classifyType(return_type, zcu)) {
+            .byval => return o.lowerType(return_type),
             .indirect => return .void,
         },
         // TODO investigate other callconvs
@@ -7745,6 +7761,7 @@ const math = std.math;
 const x86_64_abi = @import("../x86_64/abi.zig");
 const wasm_c_abi = @import("../wasm/abi.zig");
 const aarch64_c_abi = @import("../aarch64/abi.zig");
+const mos_c_abi = @import("../mos/abi.zig");
 const arm_c_abi = @import("../arm/abi.zig");
 const riscv_c_abi = @import("../riscv64/abi.zig");
 const mips_c_abi = @import("../mips/abi.zig");

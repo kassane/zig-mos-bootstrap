@@ -25,17 +25,18 @@ pub const Feature = enum {
     disable_postmisched_store_clustering,
     dlen_factor_2,
     e,
-    enable_vsetvli_sched_heuristic,
     exact_asm,
     experimental,
     experimental_p,
     experimental_rvm23u32,
     experimental_smpmpmt,
     experimental_svukte,
+    experimental_xqccmp,
     experimental_xrivosvisni,
     experimental_xrivosvizip,
     experimental_xsfmclic,
     experimental_xsfsclic,
+    experimental_zalasr,
     experimental_zibi,
     experimental_zicfilp,
     experimental_zicfiss,
@@ -192,7 +193,6 @@ pub const Feature = enum {
     xmipscmov,
     xmipsexectl,
     xmipslsp,
-    xqccmp,
     xqci,
     xqcia,
     xqciac,
@@ -254,7 +254,6 @@ pub const Feature = enum {
     zaamo,
     zabha,
     zacas,
-    zalasr,
     zalrsc,
     zama16b,
     zawrs,
@@ -475,11 +474,6 @@ pub const all_features = blk: {
         .description = "'E' (Embedded Instruction Set with 16 GPRs)",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.enable_vsetvli_sched_heuristic)] = .{
-        .llvm_name = "enable-vsetvli-sched-heuristic",
-        .description = "Enable vsetvli-based scheduling heuristic",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@intFromEnum(Feature.exact_asm)] = .{
         .llvm_name = "exact-asm",
         .description = "Enable Exact Assembly (Disables Compression and Relaxation)",
@@ -522,6 +516,13 @@ pub const all_features = blk: {
         .description = "'Svukte' (Address-Independent Latency of User-Mode Faults to Supervisor Addresses)",
         .dependencies = featureSet(&[_]Feature{}),
     };
+    result[@intFromEnum(Feature.experimental_xqccmp)] = .{
+        .llvm_name = "experimental-xqccmp",
+        .description = "'Xqccmp' (Qualcomm 16-bit Push/Pop and Double Moves)",
+        .dependencies = featureSet(&[_]Feature{
+            .zca,
+        }),
+    };
     result[@intFromEnum(Feature.experimental_xrivosvisni)] = .{
         .llvm_name = "experimental-xrivosvisni",
         .description = "'XRivosVisni' (Rivos Vector Integer Small New)",
@@ -540,6 +541,11 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.experimental_xsfsclic)] = .{
         .llvm_name = "experimental-xsfsclic",
         .description = "'XSfsclic' (SiFive CLIC Supervisor-mode CSRs)",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
+    result[@intFromEnum(Feature.experimental_zalasr)] = .{
+        .llvm_name = "experimental-zalasr",
+        .description = "'Zalasr' (Load-Acquire and Store-Release Instructions)",
         .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.experimental_zibi)] = .{
@@ -1623,13 +1629,6 @@ pub const all_features = blk: {
         .description = "'XMIPSLSP' (MIPS optimization for hardware load-store bonding)",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.xqccmp)] = .{
-        .llvm_name = "xqccmp",
-        .description = "'Xqccmp' (Qualcomm 16-bit Push/Pop and Double Moves)",
-        .dependencies = featureSet(&[_]Feature{
-            .zca,
-        }),
-    };
     result[@intFromEnum(Feature.xqci)] = .{
         .llvm_name = "xqci",
         .description = "'Xqci' (Qualcomm uC Extension)",
@@ -2035,11 +2034,6 @@ pub const all_features = blk: {
         .dependencies = featureSet(&[_]Feature{
             .zaamo,
         }),
-    };
-    result[@intFromEnum(Feature.zalasr)] = .{
-        .llvm_name = "zalasr",
-        .description = "'Zalasr' (Load-Acquire and Store-Release Instructions)",
-        .dependencies = featureSet(&[_]Feature{}),
     };
     result[@intFromEnum(Feature.zalrsc)] = .{
         .llvm_name = "zalrsc",
