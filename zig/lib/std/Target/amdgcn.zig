@@ -156,6 +156,7 @@ pub const Feature = enum {
     max_private_element_size_16,
     max_private_element_size_4,
     max_private_element_size_8,
+    mcast_load_insts,
     memory_atomic_fadd_f32_denormal_support,
     mfma_inline_literal_bug,
     mimg_r128,
@@ -213,6 +214,7 @@ pub const Feature = enum {
     sdwa_sdst,
     sea_islands,
     setprio_inc_wg_inst,
+    setreg_vgpr_msb_fixup,
     sgpr_init_bug,
     shader_cycles_hi_lo_registers,
     shader_cycles_register,
@@ -266,7 +268,7 @@ pub const featureSetHasAll = CpuFeature.FeatureSetFns(Feature).featureSetHasAll;
 
 pub const all_features = blk: {
     @setEvalBranchQuota(2000);
-    const len = @typeInfo(Feature).@"enum".fields.len;
+    const len = @typeInfo(Feature).@"enum".field_names.len;
     std.debug.assert(len <= CpuFeature.Set.needed_bit_count);
     var result: [len]CpuFeature = undefined;
     result[@intFromEnum(Feature.@"1024_addressable_vgprs")] = .{
@@ -1268,6 +1270,11 @@ pub const all_features = blk: {
         .description = "Maximum private access size may be 8",
         .dependencies = featureSet(&[_]Feature{}),
     };
+    result[@intFromEnum(Feature.mcast_load_insts)] = .{
+        .llvm_name = "mcast-load-insts",
+        .description = "Has multicast load instructions",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
     result[@intFromEnum(Feature.memory_atomic_fadd_f32_denormal_support)] = .{
         .llvm_name = "memory-atomic-fadd-f32-denormal-support",
         .description = "global/flat/buffer atomic fadd for float supports denormal handling",
@@ -1581,6 +1588,11 @@ pub const all_features = blk: {
         .description = "Has s_setprio_inc_wg instruction.",
         .dependencies = featureSet(&[_]Feature{}),
     };
+    result[@intFromEnum(Feature.setreg_vgpr_msb_fixup)] = .{
+        .llvm_name = "setreg-vgpr-msb-fixup",
+        .description = "S_SETREG to MODE clobbers VGPR MSB bits, requires fixup",
+        .dependencies = featureSet(&[_]Feature{}),
+    };
     result[@intFromEnum(Feature.sgpr_init_bug)] = .{
         .llvm_name = "sgpr-init-bug",
         .description = "VI SGPR initialization bug requiring a fixed SGPR allocation size",
@@ -1865,7 +1877,7 @@ pub const all_features = blk: {
     const ti = @typeInfo(Feature);
     for (&result, 0..) |*elem, i| {
         elem.index = i;
-        elem.name = ti.@"enum".fields[i].name;
+        elem.name = ti.@"enum".field_names[i];
     }
     break :blk result;
 };
@@ -2709,6 +2721,7 @@ pub const cpu = struct {
             .lshl_add_u64_inst,
             .mad_u32_inst,
             .max_hard_clause_length_63,
+            .mcast_load_insts,
             .memory_atomic_fadd_f32_denormal_support,
             .min3_max3_pkf16,
             .minimum3_maximum3_pkf16,
@@ -2725,6 +2738,7 @@ pub const cpu = struct {
             .salu_float,
             .scalar_dwordx3_loads,
             .setprio_inc_wg_inst,
+            .setreg_vgpr_msb_fixup,
             .shader_cycles_hi_lo_registers,
             .sramecc_support,
             .tanh_insts,
@@ -2796,6 +2810,7 @@ pub const cpu = struct {
             .lshl_add_u64_inst,
             .mad_u32_inst,
             .max_hard_clause_length_63,
+            .mcast_load_insts,
             .memory_atomic_fadd_f32_denormal_support,
             .min3_max3_pkf16,
             .minimum3_maximum3_pkf16,

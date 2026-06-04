@@ -1732,9 +1732,9 @@ pub const Inst = struct {
             assert(@sizeOf(Data) == 8);
         }
         const Mnemonic = @import("Encoding.zig").Mnemonic;
-        if (@typeInfo(Mnemonic).@"enum".fields.len != 978 or
-            @typeInfo(Fixes).@"enum".fields.len != 231 or
-            @typeInfo(Tag).@"enum".fields.len != 251)
+        if (@typeInfo(Mnemonic).@"enum".field_names.len != 978 or
+            @typeInfo(Fixes).@"enum".field_names.len != 231 or
+            @typeInfo(Tag).@"enum".field_names.len != 251)
         {
             const cond_src = (struct {
                 fn src() std.lang.SourceLocation {
@@ -1742,32 +1742,32 @@ pub const Inst = struct {
                 }
             }).src();
             @setEvalBranchQuota(2_000_000);
-            for (@typeInfo(Mnemonic).@"enum".fields) |mnemonic| {
-                if (mnemonic.name[0] == '.') continue;
-                for (@typeInfo(Fixes).@"enum".fields) |fixes| {
-                    const pattern = fixes.name[if (std.mem.indexOfScalar(u8, fixes.name, ' ')) |index| index + " ".len else 0..];
+            for (@typeInfo(Mnemonic).@"enum".field_names) |mnemonic_name| {
+                if (mnemonic_name[0] == '.') continue;
+                for (@typeInfo(Fixes).@"enum".field_names) |fixes_name| {
+                    const pattern = fixes_name[if (std.mem.indexOfScalar(u8, fixes_name, ' ')) |index| index + " ".len else 0..];
                     const wildcard_index = std.mem.indexOfScalar(u8, pattern, '_').?;
                     const mnem_prefix = pattern[0..wildcard_index];
                     const mnem_suffix = pattern[wildcard_index + "_".len ..];
-                    if (!std.mem.startsWith(u8, mnemonic.name, mnem_prefix)) continue;
-                    if (!std.mem.endsWith(u8, mnemonic.name, mnem_suffix)) continue;
+                    if (!std.mem.startsWith(u8, mnemonic_name, mnem_prefix)) continue;
+                    if (!std.mem.endsWith(u8, mnemonic_name, mnem_suffix)) continue;
                     if (@hasField(
                         Tag,
-                        mnemonic.name[mnem_prefix.len .. mnemonic.name.len - mnem_suffix.len],
+                        mnemonic_name[mnem_prefix.len .. mnemonic_name.len - mnem_suffix.len],
                     )) break;
-                } else @compileError("'" ++ mnemonic.name ++ "' is not encodable in Mir");
+                } else @compileError("'" ++ mnemonic_name ++ "' is not encodable in Mir");
             }
             @compileError(std.fmt.comptimePrint(
                 \\All mnemonics are encodable in Mir! You may now change the condition at {s}:{d} to:
-                \\if (@typeInfo(Mnemonic).@"enum".fields.len != {d} or
-                \\    @typeInfo(Fixes).@"enum".fields.len != {d} or
-                \\    @typeInfo(Tag).@"enum".fields.len != {d})
+                \\if (@typeInfo(Mnemonic).@"enum".field_names.len != {d} or
+                \\    @typeInfo(Fixes).@"enum".field_names.len != {d} or
+                \\    @typeInfo(Tag).@"enum".field_names.len != {d})
             , .{
                 cond_src.file,
                 cond_src.line - 6,
-                @typeInfo(Mnemonic).@"enum".fields.len,
-                @typeInfo(Fixes).@"enum".fields.len,
-                @typeInfo(Tag).@"enum".fields.len,
+                @typeInfo(Mnemonic).@"enum".field_names.len,
+                @typeInfo(Fixes).@"enum".field_names.len,
+                @typeInfo(Tag).@"enum".field_names.len,
             }));
         }
     }
@@ -1974,12 +1974,11 @@ pub fn emit(
     mir: Mir,
     lf: *link.File,
     pt: Zcu.PerThread,
-    src_loc: Zcu.LazySrcLoc,
     func_index: InternPool.Index,
     atom_id: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) codegen.CodeGenError!void {
+) codegen.Error!void {
     const zcu = pt.zcu;
     const comp = zcu.comp;
     const gpa = comp.gpa;
@@ -1993,7 +1992,7 @@ pub fn emit(
             .allocator = gpa,
             .mir = mir,
             .cc = fn_info.cc,
-            .src_loc = src_loc,
+            .src_loc = zcu.navSrcLoc(nav),
         },
         .bin_file = lf,
         .pt = pt,
@@ -2028,12 +2027,11 @@ pub fn emitLazy(
     mir: Mir,
     lf: *link.File,
     pt: Zcu.PerThread,
-    src_loc: Zcu.LazySrcLoc,
     lazy_sym: link.File.LazySymbol,
     atom_id: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) codegen.CodeGenError!void {
+) codegen.Error!void {
     const zcu = pt.zcu;
     const comp = zcu.comp;
     const gpa = comp.gpa;
@@ -2044,7 +2042,7 @@ pub fn emitLazy(
             .allocator = gpa,
             .mir = mir,
             .cc = .auto,
-            .src_loc = src_loc,
+            .src_loc = Zcu.Type.fromInterned(lazy_sym.ty).srcLocOrNull(zcu) orelse .unneeded,
         },
         .bin_file = lf,
         .pt = pt,
@@ -2069,15 +2067,15 @@ pub fn emitLazy(
 }
 
 pub fn extraData(mir: Mir, comptime T: type, index: u32) struct { data: T, end: u32 } {
-    const fields = std.meta.fields(T);
+    const info = @typeInfo(T).@"struct";
     var i: u32 = index;
     var result: T = undefined;
-    inline for (fields) |field| {
-        @field(result, field.name) = switch (field.type) {
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        @field(result, field_name) = switch (field_type) {
             u32 => mir.extra[i],
             i32, Memory.Info => @bitCast(mir.extra[i]),
             bits.FrameIndex => @enumFromInt(mir.extra[i]),
-            else => @compileError("bad field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
+            else => @compileError("bad field type: " ++ field_name ++ ": " ++ @typeName(field_type)),
         };
         i += 1;
     }

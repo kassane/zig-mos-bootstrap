@@ -303,10 +303,12 @@ pub const Os = struct {
         win11_ga = 0x0A00000F, //aka win11_22h2
         win11_ge = 0x0A000010, //aka win11_23h2
         win11_dt = 0x0A000011, //aka win11_24h2
+        win11_br = 0x0A000012, //aka win11_25h2
+        win11_kr = 0x0A000013, //aka win11_26h1
         _,
 
         /// Latest Windows version that the Zig Standard Library is aware of
-        pub const latest = WindowsVersion.win11_dt;
+        pub const latest = WindowsVersion.win11_kr;
 
         /// Compared against build numbers reported by the runtime to distinguish win10 versions,
         /// where 0x0A000000 + index corresponds to the WindowsVersion u32 value.
@@ -329,6 +331,8 @@ pub const Os = struct {
             22621, //win11_ga aka win11_22h2
             22631, //win11_ge aka win11_23h2
             26100, //win11_dt aka win11_24h2
+            26200, //win11_br aka win11_25h2
+            28000, //win11_kr aka win11_26h1
         };
 
         /// Returns whether the first version `ver` is newer (greater) than or equal to the second version `ver`.
@@ -614,7 +618,7 @@ pub const Os = struct {
 
                             break :blk default_min;
                         },
-                        .max = .{ .major = 10, .minor = 1, .patch = 0 },
+                        .max = .{ .major = 11, .minor = 0, .patch = 0 },
                     },
                 },
                 .openbsd => .{
@@ -880,6 +884,7 @@ pub const Abi = enum {
     simulator,
     ohos,
     ohoseabi,
+    call0,
 
     // LLVM tags deliberately omitted:
     // - amplification
@@ -1774,13 +1779,13 @@ pub const Cpu = struct {
             };
         }
 
-        pub fn parseCpuModel(arch: Arch, cpu_name: []const u8) !*const Cpu.Model {
+        pub fn parseCpuModel(arch: Arch, cpu_name: []const u8) ?*const Cpu.Model {
             for (arch.allCpuModels()) |cpu| {
                 if (std.mem.eql(u8, cpu_name, cpu.name)) {
                     return cpu;
                 }
             }
-            return error.UnknownCpuModel;
+            return null;
         }
 
         pub fn endian(arch: Arch) std.builtin.Endian {
@@ -1871,10 +1876,10 @@ pub const Cpu = struct {
 
         fn allCpusFromDecls(comptime cpus: type) []const *const Cpu.Model {
             @setEvalBranchQuota(2000);
-            const decls = @typeInfo(cpus).@"struct".decls;
-            var array: [decls.len]*const Cpu.Model = undefined;
-            for (decls, 0..) |decl, i| {
-                array[i] = &@field(cpus, decl.name);
+            const decl_names = @typeInfo(cpus).@"struct".decl_names;
+            var array: [decl_names.len]*const Cpu.Model = undefined;
+            for (decl_names, 0..) |decl_name, i| {
+                array[i] = &@field(cpus, decl_name);
             }
             const finalized = array;
             return &finalized;
@@ -2816,7 +2821,6 @@ pub const DynamicLinker = struct {
                 }
             else if (abi.isGnu())
                 switch (cpu.arch) {
-                    // TODO: `700` ABI support.
                     .arc,
                     .arceb,
                     => |arch| if (abi == .gnu) initFmt("/lib/ld-linux-{t}.so.2", .{arch}) else none,
@@ -2981,6 +2985,8 @@ pub const DynamicLinker = struct {
                 .mips64,
                 .mips64el,
                 .powerpc,
+                .riscv32,
+                .riscv64,
                 .sh,
                 .sheb,
                 .sparc,

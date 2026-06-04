@@ -2739,6 +2739,7 @@ fn dirOpenDir(
             error.FileBusy => return errnoBug(.TXTBSY),
             error.PathAlreadyExists => return errnoBug(.EXIST), // Not creating.
             error.OperationUnsupported => return errnoBug(.OPNOTSUPP), // No TMPFILE, no locks.
+            error.ReadOnlyFileSystem => return errnoBug(.ROFS), // Not creating.
             else => |e| return e,
         },
     };
@@ -3164,6 +3165,7 @@ fn dirRealPathFile(
     }, 0) catch |err| switch (err) {
         error.WouldBlock => return errnoBug(.AGAIN),
         error.OperationUnsupported => return errnoBug(.OPNOTSUPP), // Not asking for locks.
+        error.ReadOnlyFileSystem => return errnoBug(.ROFS), // Not creating.
         else => |e| return e,
     };
     defer ev.closeAsync(fd);
@@ -5982,9 +5984,9 @@ fn socket(
     };
     errdefer ev.closeAsync(socket_fd);
 
-    if (options.ip6_only) {
+    if (options.ip6_only) |ip6_only| {
         if (linux.IPV6 == void) return error.OptionUnsupported;
-        try ev.setsockopt(cancel_region, socket_fd, linux.IPPROTO.IPV6, linux.IPV6.V6ONLY, 0);
+        try ev.setsockopt(cancel_region, socket_fd, linux.IPPROTO.IPV6, linux.IPV6.V6ONLY, @intFromBool(ip6_only));
     }
 
     return socket_fd;

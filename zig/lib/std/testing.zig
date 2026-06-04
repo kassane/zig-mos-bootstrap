@@ -17,19 +17,11 @@ var failing_allocator_instance = FailingAllocator.init(base_allocator_instance.a
 });
 var base_allocator_instance = std.heap.FixedBufferAllocator.init("");
 
-/// This should only be used in temporary test programs.
-pub const allocator = allocator_instance.allocator();
-pub var allocator_instance: std.heap.DebugAllocator(.{
-    .stack_trace_frames = if (std.debug.sys_can_stack_trace) 10 else 0,
-    .resize_stack_traces = true,
-    // A unique value so that when a default-constructed
-    // DebugAllocator is incorrectly passed to testing allocator, or
-    // vice versa, panic occurs.
-    .canary = @truncate(0x2731e675c3a701ba),
-}) = b: {
-    if (!builtin.is_test) @compileError("testing allocator used when not testing");
-    break :b .init;
-};
+pub var allocator_instance: std.heap.SafeAllocator = undefined;
+pub const allocator = if (builtin.is_test)
+    allocator_instance.allocator()
+else
+    @compileError("not testing");
 
 pub var io_instance: Io.Threaded = undefined;
 pub const io = if (builtin.is_test) io_instance.io() else @compileError("not testing");
@@ -149,16 +141,16 @@ fn expectEqualInner(comptime T: type, expected: T, actual: T) !void {
         },
 
         .@"struct" => |structType| {
-            inline for (structType.fields) |field| {
-                try expectEqual(@field(expected, field.name), @field(actual, field.name));
+            inline for (structType.field_names) |field_name| {
+                try expectEqual(@field(expected, field_name), @field(actual, field_name));
             }
         },
 
         .@"union" => |union_info| {
             if (union_info.tag_type == null) {
-                const first_size = @bitSizeOf(union_info.fields[0].type);
-                inline for (union_info.fields) |field| {
-                    if (@bitSizeOf(field.type) != first_size) {
+                const first_size = @bitSizeOf(union_info.field_types[0]);
+                inline for (union_info.field_types) |field_type| {
+                    if (@bitSizeOf(field_type) != first_size) {
                         @compileError("Unable to compare untagged unions with varying field sizes for type " ++ @typeName(@TypeOf(actual)));
                     }
                 }
@@ -848,9 +840,9 @@ fn expectEqualDeepInner(comptime T: type, expected: T, actual: T) error{TestExpe
         },
 
         .@"struct" => |structType| {
-            inline for (structType.fields) |field| {
-                expectEqualDeep(@field(expected, field.name), @field(actual, field.name)) catch |e| {
-                    print("Field {s} incorrect. expected {any}, found {any}\n", .{ field.name, @field(expected, field.name), @field(actual, field.name) });
+            inline for (structType.field_names) |field_name| {
+                expectEqualDeep(@field(expected, field_name), @field(actual, field_name)) catch |e| {
+                    print("Field {s} incorrect. expected {any}, found {any}\n", .{ field_name, @field(expected, field_name), @field(actual, field_name) });
                     return e;
                 };
             }
@@ -1173,14 +1165,14 @@ fn CheckAllAllocationFailuresExtraArgs(comptime TestFn: type) type {
 
     const ArgsTuple = std.meta.ArgsTuple(TestFn);
 
-    const fields = @typeInfo(ArgsTuple).@"struct".fields;
-    if (fields.len == 0 or fields[0].type != std.mem.Allocator) {
+    const field_types = @typeInfo(ArgsTuple).@"struct".field_types;
+    if (field_types.len == 0 or field_types[0] != std.mem.Allocator) {
         @compileError("The provided function must have an " ++ @typeName(std.mem.Allocator) ++ " as its first argument");
     }
 
-    var extra_args: [fields.len - 1]type = undefined;
-    for (&extra_args, fields[1..]) |*arg, field| {
-        arg.* = field.type;
+    var extra_args: [field_types.len - 1]type = undefined;
+    for (&extra_args, field_types[1..]) |*arg, field_type| {
+        arg.* = field_type;
     }
 
     return @Tuple(&extra_args);
@@ -1212,8 +1204,8 @@ test "checkAllAllocationFailures provide result type to 'extra_args' argument" {
 /// Given a type, references all the declarations inside, so that the semantic analyzer sees them.
 pub fn refAllDecls(comptime T: type) void {
     if (!builtin.is_test) return;
-    inline for (comptime std.meta.declarations(T)) |decl| {
-        _ = &@field(T, decl.name);
+    inline for (comptime std.meta.declarations(T)) |decl_name| {
+        _ = &@field(T, decl_name);
     }
 }
 

@@ -54,7 +54,7 @@ pub const EXC = enum(exception_type_t) {
 
     _,
 
-    pub const TYPES_COUNT = @typeInfo(EXC).@"enum".fields.len;
+    pub const TYPES_COUNT = @typeInfo(EXC).@"enum".field_names.len;
     pub const SOFT_SIGNAL = 0x10003;
 
     pub const MASK = packed struct(u32) {
@@ -1184,6 +1184,10 @@ pub const CPUFAMILY = enum(u32) {
     ARM_BRAVA = 0x17d5b93a,
     ARM_TAHITI = 0x75d4acb9,
     ARM_TUPAI = 0x204526d0,
+    ARM_HIDRA = 0x1d5a87e8,
+    ARM_SOTRA = 0xf76c5b1a,
+    ARM_THERA = 0xab345f09,
+    ARM_TILOS = 0x01d7a72b,
     _,
 };
 
@@ -1490,6 +1494,8 @@ pub const E = enum(u16) {
     OWNERDEAD = 105,
     /// Interface output queue is full
     QFULL = 106,
+    /// Capabilities insufficient
+    NOTCAPABLE = 107,
     _,
 };
 

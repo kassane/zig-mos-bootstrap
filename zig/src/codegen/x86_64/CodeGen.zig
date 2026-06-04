@@ -31,7 +31,7 @@ const RegisterManager = abi.RegisterManager;
 const RegisterLock = RegisterManager.RegisterLock;
 const FrameIndex = bits.FrameIndex;
 
-const InnerError = codegen.CodeGenError || error{OutOfRegisters};
+const InnerError = codegen.Error || error{OutOfRegisters};
 
 pub fn legalizeFeatures(_: *const std.Target) *const Air.Legalize.Features {
     return comptime &.initMany(&.{
@@ -106,7 +106,6 @@ va_info: union {
 ret_mcv: InstTracking,
 err_ret_trace_reg: Register,
 fn_type: Type,
-src_loc: Zcu.LazySrcLoc,
 
 eflags_inst: ?Air.Inst.Index = null,
 
@@ -869,11 +868,10 @@ const CodeGen = @This();
 pub fn generate(
     bin_file: *link.File,
     pt: Zcu.PerThread,
-    src_loc: Zcu.LazySrcLoc,
     func_index: InternPool.Index,
     air: *const Air,
     liveness: *const ?Air.Liveness,
-) codegen.CodeGenError!Mir {
+) codegen.Error!Mir {
     _ = bin_file;
     const zcu = pt.zcu;
     const gpa = zcu.gpa;
@@ -898,7 +896,6 @@ pub fn generate(
         .ret_mcv = undefined, // populated after `resolveCallingConventionValues`
         .err_ret_trace_reg = undefined, // populated after `resolveCallingConventionValues`
         .fn_type = fn_type,
-        .src_loc = src_loc,
     };
     defer {
         function.frame_allocs.deinit(gpa);
@@ -937,10 +934,7 @@ pub fn generate(
     );
 
     const fn_info = zcu.typeToFunc(fn_type).?;
-    var call_info = function.resolveCallingConventionValues(fn_info, &.{}, .args_frame) catch |err| switch (err) {
-        error.CodegenFail => |e| return e,
-        else => |e| return e,
-    };
+    var call_info = try function.resolveCallingConventionValues(fn_info, &.{}, .args_frame);
     defer call_info.deinit(&function);
 
     function.args = call_info.args;
@@ -983,7 +977,6 @@ pub fn generate(
     }
 
     function.gen(&file.zir.?, func_zir.inst, func.comptime_args, call_info.air_arg_count) catch |err| switch (err) {
-        error.CodegenFail => |e| return e,
         error.OutOfRegisters => return function.fail("ran out of registers (Zig compiler bug)", .{}),
         else => |e| return e,
     };
@@ -1027,12 +1020,11 @@ pub fn getTmpMir(cg: *CodeGen) Mir {
 pub fn generateLazy(
     bin_file: *link.File,
     pt: Zcu.PerThread,
-    src_loc: Zcu.LazySrcLoc,
     lazy_sym: link.File.LazySymbol,
     atom_id: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) codegen.CodeGenError!void {
+) codegen.Error!void {
     const gpa = pt.zcu.gpa;
     // This function is for generating global code, so we use the root module.
     const mod = pt.zcu.comp.root_mod;
@@ -1050,7 +1042,6 @@ pub fn generateLazy(
         .ret_mcv = undefined,
         .err_ret_trace_reg = undefined,
         .fn_type = undefined,
-        .src_loc = src_loc,
     };
     defer {
         function.inst_tracking.deinit(gpa);
@@ -1068,12 +1059,11 @@ pub fn generateLazy(
     }
 
     function.genLazy(lazy_sym) catch |err| switch (err) {
-        error.CodegenFail => |e| return e,
         error.OutOfRegisters => return function.fail("ran out of registers (Zig compiler bug)", .{}),
         else => |e| return e,
     };
 
-    try function.getTmpMir().emitLazy(bin_file, pt, src_loc, lazy_sym, atom_id, w, debug_output);
+    try function.getTmpMir().emitLazy(bin_file, pt, lazy_sym, atom_id, w, debug_output);
 }
 
 const FormatNavData = struct {
@@ -1111,7 +1101,10 @@ fn formatWipMir(data: FormatWipMirData, w: *Writer) Writer.Error!void {
         .allocator = data.self.gpa,
         .mir = data.self.getTmpMir(),
         .cc = .auto,
-        .src_loc = data.self.src_loc,
+        .src_loc = switch (data.self.owner) {
+            .nav_index => |nav| data.self.pt.zcu.navSrcLoc(nav),
+            .lazy_sym => |lazy_sym| Type.fromInterned(lazy_sym.ty).srcLocOrNull(data.self.pt.zcu) orelse .unneeded,
+        },
     };
     var first = true;
     for ((lower.lowerMir(data.inst) catch |err| switch (err) {
@@ -1214,20 +1207,20 @@ fn addInst(self: *CodeGen, inst: Mir.Inst) error{OutOfMemory}!Mir.Inst.Index {
 }
 
 fn addExtra(self: *CodeGen, extra: anytype) Allocator.Error!u32 {
-    const fields = std.meta.fields(@TypeOf(extra));
-    try self.mir_extra.ensureUnusedCapacity(self.gpa, fields.len);
+    const field_count = std.meta.fieldNames(@TypeOf(extra)).len;
+    try self.mir_extra.ensureUnusedCapacity(self.gpa, field_count);
     return self.addExtraAssumeCapacity(extra);
 }
 
 fn addExtraAssumeCapacity(self: *CodeGen, extra: anytype) u32 {
-    const fields = std.meta.fields(@TypeOf(extra));
+    const info = @typeInfo(@TypeOf(extra)).@"struct";
     const result: u32 = @intCast(self.mir_extra.items.len);
-    inline for (fields) |field| {
-        self.mir_extra.appendAssumeCapacity(switch (field.type) {
-            u32 => @field(extra, field.name),
-            i32, Mir.Memory.Info => @bitCast(@field(extra, field.name)),
-            FrameIndex => @intFromEnum(@field(extra, field.name)),
-            else => @compileError("bad field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        self.mir_extra.appendAssumeCapacity(switch (field_type) {
+            u32 => @field(extra, field_name),
+            i32, Mir.Memory.Info => @bitCast(@field(extra, field_name)),
+            FrameIndex => @intFromEnum(@field(extra, field_name)),
+            else => @compileError("bad field type: " ++ field_name ++ ": " ++ @typeName(field_type)),
         });
     }
     return result;
@@ -176371,7 +176364,7 @@ fn genTry(
         .close_scope = true,
     });
 
-    self.performReloc(reloc);
+    if (reloc) |r| self.performReloc(r);
 
     for (liveness_cond_br.then_deaths) |death| try self.processDeath(death, .{});
 
@@ -176384,30 +176377,26 @@ fn genTry(
     return result;
 }
 
-fn genCondBrMir(self: *CodeGen, ty: Type, mcv: MCValue) !Mir.Inst.Index {
-    const pt = self.pt;
-    const abi_size = ty.abiSize(pt.zcu);
+fn genCondBrMir(self: *CodeGen, ty: Type, mcv: MCValue) !?Mir.Inst.Index {
     switch (mcv) {
-        .eflags => |cc| {
-            // Here we map the opposites since the jump is to the false branch.
-            return self.asmJccReloc(cc.negate(), undefined);
-        },
+        .eflags => |cc| return try self.asmJccReloc(cc.negate(), undefined),
         .register => |reg| {
             try self.spillEflagsIfOccupied();
             try self.asmRegisterImmediate(.{ ._, .@"test" }, reg.to8(), .u(1));
-            return self.asmJccReloc(.z, undefined);
+            return try self.asmJccReloc(.z, undefined);
         },
-        .immediate,
-        .load_frame,
-        => {
+        .immediate => |imm| switch (@as(u1, @truncate(imm))) {
+            0 => return try self.asmJmpReloc(undefined),
+            1 => return null,
+        },
+        .load_frame => {
             try self.spillEflagsIfOccupied();
-            if (abi_size <= 8) {
-                const reg = try self.copyToTmpRegister(ty, mcv);
-                return self.genCondBrMir(ty, .{ .register = reg });
-            }
-            return self.fail("TODO implement condbr when condition is {f} with abi larger than 8 bytes", .{mcv});
+            try self.asmMemoryImmediate(.{ ._, .@"test" }, try mcv.mem(self, .{ .size = .byte }), .u(1));
+            return try self.asmJccReloc(.z, undefined);
         },
-        else => return self.fail("TODO implement condbr when condition is {s}", .{@tagName(mcv)}),
+        else => return self.fail("TODO implement condbr when condition is {f} {s}", .{
+            ty.fmt(self.pt), @tagName(mcv),
+        }),
     }
 }
 
@@ -176440,7 +176429,7 @@ fn airCondBr(self: *CodeGen, inst: Air.Inst.Index) !void {
         .close_scope = true,
     });
 
-    self.performReloc(reloc);
+    if (reloc) |r| self.performReloc(r);
 
     for (liveness_cond_br.else_deaths) |death| try self.processDeath(death, .{});
     try self.genBodyBlock(else_body);
@@ -177140,7 +177129,7 @@ fn airBr(self: *CodeGen, inst: Air.Inst.Index) !void {
 }
 
 fn airAsm(self: *CodeGen, inst: Air.Inst.Index) !void {
-    @setEvalBranchQuota(1_100 + @typeInfo(Mir.Inst.Fixes).@"enum".fields.len);
+    @setEvalBranchQuota(1_100 + @typeInfo(Mir.Inst.Fixes).@"enum".field_names.len);
     const pt = self.pt;
     const zcu = pt.zcu;
     const unwrapped_asm = self.air.unwrapAsm(inst);
@@ -177748,8 +177737,8 @@ fn airAsm(self: *CodeGen, inst: Air.Inst.Index) !void {
         std.mem.reverse(Operand, ops[0..ops_len]);
         if (mnem_size.size != .none and !mnem_size.used) {
             comptime var max_mnem_len: usize = 0;
-            inline for (@typeInfo(encoder.Instruction.Mnemonic).@"enum".fields) |mnem|
-                max_mnem_len = @max(mnem.name.len, max_mnem_len);
+            inline for (@typeInfo(encoder.Instruction.Mnemonic).@"enum".field_names) |mnem_name|
+                max_mnem_len = @max(mnem_name.len, max_mnem_len);
             var intel_mnem_buf: [max_mnem_len + 1]u8 = undefined;
             const intel_mnem_str = std.fmt.bufPrint(&intel_mnem_buf, "{s}{c}", .{
                 @tagName(mnem_tag),
@@ -179464,7 +179453,26 @@ fn airBitCast(self: *CodeGen, inst: Air.Inst.Index) !void {
                     .gt => src_ty,
                 },
                 .register_mask => src_ty,
-            }, dst_mcv, src_mcv, .{});
+            }, dst_mcv, if (src_ty.isVector(zcu) and src_ty.childType(zcu).toIntern() == .bool_type) src_mcv: {
+                try self.spillEflagsIfOccupied();
+                const dst_signedness: std.builtin.Signedness = if (dst_ty.scalarType(zcu).isSignedInt(zcu)) .signed else .unsigned;
+                switch (src_mcv) {
+                    .immediate => |src_imm| break :src_mcv .{ .immediate = switch (dst_signedness) {
+                        .unsigned => @as(u1, @truncate(src_imm)),
+                        .signed => @as(u8, @bitCast(@as(i8, @as(i1, @bitCast(@as(u1, @truncate(src_imm))))))),
+                    } },
+                    else => {
+                        try self.spillEflagsIfOccupied();
+                        const tmp_reg = try self.copyToTmpRegister(.u8, src_mcv);
+                        try self.asmRegisterImmediate(.{ ._, .@"and" }, tmp_reg.to8(), .u(1));
+                        switch (dst_signedness) {
+                            .unsigned => {},
+                            .signed => try self.asmRegister(.{ ._, .neg }, tmp_reg.to8()),
+                        }
+                        break :src_mcv .{ .register = tmp_reg };
+                    },
+                }
+            } else src_mcv, .{});
             break :dst dst_mcv;
         };
 
@@ -181508,7 +181516,7 @@ fn resolveCallingConventionValues(
     return result;
 }
 
-fn fail(cg: *CodeGen, comptime format: []const u8, args: anytype) error{ OutOfMemory, CodegenFail } {
+fn fail(cg: *CodeGen, comptime format: []const u8, args: anytype) error{ OutOfMemory, AlreadyReported } {
     @branchHint(.cold);
     const zcu = cg.pt.zcu;
     return switch (cg.owner) {
@@ -182789,7 +182797,7 @@ const Temp = struct {
                         break :part_ty .usize;
                     },
                 },
-                .struct_type => {
+                .struct_type, .union_type => {
                     assert(src_regs.len - part_index == std.math.divCeil(u32, src_abi_size, 8) catch unreachable);
                     break :part_ty switch (src_abi_size) {
                         0, 3, 5...7 => unreachable,

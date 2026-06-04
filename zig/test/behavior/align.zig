@@ -7,7 +7,7 @@ const assert = std.debug.assert;
 var foo: u8 align(4) = 100;
 
 test "global variable alignment" {
-    comptime assert(@typeInfo(@TypeOf(&foo)).pointer.alignment == 4);
+    comptime assert(@typeInfo(@TypeOf(&foo)).pointer.attrs.@"align" == 4);
     comptime assert(@TypeOf(&foo) == *align(4) u8);
     {
         const slice = @as(*align(4) [1]u8, &foo)[0..];
@@ -15,10 +15,24 @@ test "global variable alignment" {
     }
 }
 
+test "large abi alignment of global" {
+    const S = struct {
+        var global: @This() = undefined;
+        x: u64 align(64),
+    };
+
+    try std.testing.expect(@ctz(@intFromPtr(&S.global)) >= 6);
+}
+
 test "large alignment of local constant" {
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest; // flaky
     if (builtin.zig_backend == .stage2_c and builtin.target.abi == .msvc) return error.SkipZigTest;
+
+    if (builtin.zig_backend == .stage2_x86_64 and builtin.os.tag == .windows) {
+        // https://codeberg.org/ziglang/zig/issues/35537
+        return error.SkipZigTest;
+    }
 
     const x: f32 align(128) = 12.34;
     try std.testing.expect(@intFromPtr(&x) % 128 == 0);

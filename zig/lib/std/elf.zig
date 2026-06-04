@@ -224,6 +224,9 @@ pub const DT_PPC64_NUM = 4;
 pub const DT_IA_64_PLT_RESERVE = (DT_LOPROC + 0);
 pub const DT_IA_64_NUM = 1;
 
+pub const DT_XTENSA_GOT_LOC_OFF = 0x70000000;
+pub const DT_XTENSA_GOT_LOC_SZ = 0x70000001;
+
 pub const DT_NIOS2_GP = 0x70000002;
 
 pub const DF_ORIGIN = 0x00000001;
@@ -481,7 +484,7 @@ pub const PT = enum(Word) {
     _,
 
     /// Number of defined types
-    pub const NUM = @typeInfo(PT).@"enum".fields.len;
+    pub const NUM = @typeInfo(PT).@"enum".field_names.len;
 
     /// Start of OS-specific
     pub const LOOS: PT = @enumFromInt(0x60000000);
@@ -549,7 +552,7 @@ pub const SHT = enum(Word) {
     _,
 
     /// Number of defined types
-    pub const NUM = @typeInfo(SHT).@"enum".fields.len;
+    pub const NUM = @typeInfo(SHT).@"enum".field_names.len;
 
     /// Start of OS-specific
     pub const LOOS: SHT = @enumFromInt(0x60000000);
@@ -592,7 +595,7 @@ pub const STB = enum(u4) {
     _,
 
     /// Number of defined types
-    pub const NUM = @typeInfo(STB).@"enum".fields.len;
+    pub const NUM = @typeInfo(STB).@"enum".field_names.len;
 
     /// Start of OS-specific
     pub const LOOS: STB = @enumFromInt(10);
@@ -628,7 +631,7 @@ pub const STT = enum(u4) {
     _,
 
     /// Number of defined types
-    pub const NUM = @typeInfo(STT).@"enum".fields.len;
+    pub const NUM = @typeInfo(STT).@"enum".field_names.len;
 
     /// Start of OS-specific
     pub const LOOS: STT = @enumFromInt(10);
@@ -812,7 +815,7 @@ pub const Header = struct {
 
     pub fn init(hdr: anytype, endian: Endian) Header {
         // Converting integers to exhaustive enums using `@enumFromInt` could cause a panic.
-        comptime assert(!@typeInfo(OSABI).@"enum".is_exhaustive);
+        comptime assert(@typeInfo(OSABI).@"enum".mode == .nonexhaustive);
         return .{
             .is_64 = switch (@TypeOf(hdr)) {
                 Elf32_Ehdr => false,
@@ -870,8 +873,8 @@ pub const ProgramHeaderBufferIterator = struct {
         if (it.index >= it.phnum) return null;
         defer it.index += 1;
 
-        const size: u64 = if (it.is_64) @sizeOf(Elf64_Phdr) else @sizeOf(Elf32_Phdr);
-        const offset = it.phoff + size * it.index;
+        const size: usize = if (it.is_64) @sizeOf(Elf64_Phdr) else @sizeOf(Elf32_Phdr);
+        const offset = @as(usize, @intCast(it.phoff)) + size * it.index;
         var reader = Io.Reader.fixed(it.buf[offset..]);
 
         return try takeProgramHeader(&reader, it.is_64, it.endian);
@@ -1639,7 +1642,7 @@ pub const CLASS = enum(u8) {
     @"64" = 2,
     _,
 
-    pub const NUM = @typeInfo(CLASS).@"enum".fields.len;
+    pub const NUM = @typeInfo(CLASS).@"enum".field_names.len;
 
     pub fn ElfN(comptime class: CLASS) type {
         return switch (class) {
@@ -1664,7 +1667,7 @@ pub const DATA = enum(u8) {
     @"2MSB" = 2,
     _,
 
-    pub const NUM = @typeInfo(DATA).@"enum".fields.len;
+    pub const NUM = @typeInfo(DATA).@"enum".field_names.len;
 };
 
 pub const OSABI = enum(u8) {

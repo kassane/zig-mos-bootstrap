@@ -291,7 +291,7 @@ pub const featureSetHasAll = CpuFeature.FeatureSetFns(Feature).featureSetHasAll;
 
 pub const all_features = blk: {
     @setEvalBranchQuota(2000);
-    const len = @typeInfo(Feature).@"enum".fields.len;
+    const len = @typeInfo(Feature).@"enum".field_names.len;
     std.debug.assert(len <= CpuFeature.Set.needed_bit_count);
     var result: [len]CpuFeature = undefined;
     result[@intFromEnum(Feature.a320)] = .{
@@ -633,6 +633,7 @@ pub const all_features = blk: {
         .description = "Enable Armv9.7-A non-widening half-precision matrix multiply-accumulate",
         .dependencies = featureSet(&[_]Feature{
             .fullfp16,
+            .neon,
         }),
     };
     result[@intFromEnum(Feature.f32mm)] = .{
@@ -951,7 +952,10 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.mops_go)] = .{
         .llvm_name = "mops-go",
         .description = "Enable memset acceleration granule only",
-        .dependencies = featureSet(&[_]Feature{}),
+        .dependencies = featureSet(&[_]Feature{
+            .mops,
+            .mte,
+        }),
     };
     result[@intFromEnum(Feature.mpam)] = .{
         .llvm_name = "mpam",
@@ -971,7 +975,9 @@ pub const all_features = blk: {
     result[@intFromEnum(Feature.mtetc)] = .{
         .llvm_name = "mtetc",
         .description = "Enable Virtual Memory Tagging Extension",
-        .dependencies = featureSet(&[_]Feature{}),
+        .dependencies = featureSet(&[_]Feature{
+            .mte,
+        }),
     };
     result[@intFromEnum(Feature.neon)] = .{
         .llvm_name = "neon",
@@ -1934,6 +1940,7 @@ pub const all_features = blk: {
         .llvm_name = "v9.7a",
         .description = "Support ARM v9.7a architecture",
         .dependencies = featureSet(&[_]Feature{
+            .f16f32dot,
             .fprcvt,
             .sve2p3,
             .v9_6a,
@@ -2012,7 +2019,7 @@ pub const all_features = blk: {
     const ti = @typeInfo(Feature);
     for (&result, 0..) |*elem, i| {
         elem.index = i;
-        elem.name = ti.@"enum".fields[i].name;
+        elem.name = ti.@"enum".field_names[i];
     }
     break :blk result;
 };
@@ -2118,6 +2125,38 @@ pub const cpu = struct {
             .stp_aligned_only,
             .use_postra_scheduler,
             .v8_7a,
+        }),
+    };
+    pub const ampere1c: CpuModel = .{
+        .name = "ampere1c",
+        .llvm_name = "ampere1c",
+        .features = featureSet(&[_]Feature{
+            .aggressive_fma,
+            .alu_lsl_fast,
+            .arith_bcc_fusion,
+            .cmp_bcc_fusion,
+            .cssc,
+            .enable_select_opt,
+            .faminmax,
+            .fp16fml,
+            .fp8fma,
+            .fuse_address,
+            .fuse_adrp_add,
+            .fuse_aes,
+            .fuse_literals,
+            .lut,
+            .max_interleave_factor_4,
+            .mte,
+            .perfmon,
+            .predictable_select_expensive,
+            .rand,
+            .store_pair_suppress,
+            .sve_aes,
+            .sve_b16b16,
+            .sve_sha3,
+            .sve_sm4,
+            .use_postra_scheduler,
+            .v9_2a,
         }),
     };
     pub const apple_a10: CpuModel = .{
@@ -3906,7 +3945,6 @@ pub const cpu = struct {
             .mte,
             .perfmon,
             .predictable_select_expensive,
-            .rand,
             .spe,
             .sve_aes,
             .sve_bitperm,

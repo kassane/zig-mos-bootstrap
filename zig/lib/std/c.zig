@@ -148,12 +148,12 @@ pub const timespec = switch (native_os) {
 };
 
 pub const dev_t = switch (native_os) {
-    .linux => linux.dev_t,
     .emscripten => emscripten.dev_t,
     .wasi => wasi.device_t,
     .openbsd, .haiku, .illumos, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => i32,
+    // glibc and musl define dev_t as u64, while in Linux kernel it is u32.
     // https://github.com/SerenityOS/serenity/blob/b98f537f117b341788023ab82e0c11ca9ae29a57/Kernel/API/POSIX/sys/types.h#L43
-    .netbsd, .freebsd, .serenity => u64,
+    .linux, .netbsd, .freebsd, .serenity => u64,
     else => void,
 };
 
@@ -10552,6 +10552,7 @@ const sigrt_private = struct {
             .freebsd => 65,
             .netbsd => 33,
             .illumos => @truncate(sysconf(@intFromEnum(_SC.SIGRT_MIN))),
+            .haiku => @truncate(@as(c_uint, @bitCast(private.__signal_get_sigrtmin()))),
             else => @truncate(@as(c_uint, @bitCast(private.__libc_current_sigrtmin()))),
         };
     }
@@ -10561,6 +10562,7 @@ const sigrt_private = struct {
             .freebsd => 126,
             .netbsd => 63,
             .illumos => @truncate(sysconf(@intFromEnum(_SC.SIGRT_MAX))),
+            .haiku => @truncate(@as(c_uint, @bitCast(private.__signal_get_sigrtmax()))),
             else => @truncate(@as(c_uint, @bitCast(private.__libc_current_sigrtmax()))),
         };
     }
@@ -11132,14 +11134,23 @@ pub const ioctl = switch (native_os) {
 
 pub extern "c" fn bzero(s: *anyopaque, n: usize) void;
 
-pub extern "c" fn swab(noalias from: *const anyopaque, noalias to: *anyopaque, n: isize) void;
+pub const swab = switch (builtin.abi) {
+    .msvc => private._swab,
+    else => private.swab,
+};
 
 pub extern "c" fn strncmp(a: [*:0]const c_char, b: [*:0]const c_char, max: usize) c_int;
 pub extern "c" fn strcasecmp(a: [*:0]const c_char, b: [*:0]const c_char) c_int;
 pub extern "c" fn strncasecmp(a: [*:0]const c_char, b: [*:0]const c_char, max: usize) c_int;
-pub extern "c" fn strdup(s: [*:0]const c_char) ?[*:0]c_char;
+pub const strdup = switch (builtin.abi) {
+    .msvc => private._strdup,
+    else => private.strdup,
+};
 pub extern "c" fn strndup(s: [*:0]const c_char, n: usize) ?[*:0]c_char;
-pub extern "c" fn wcsdup(s: [*:0]const wchar_t) ?[*:0]wchar_t;
+pub const wcsdup = switch (builtin.abi) {
+    .msvc => private._wcsdup,
+    else => private.wcsdup,
+};
 
 pub extern "c" fn ffs(i: c_int) c_int;
 pub extern "c" fn ffsl(i: c_long) c_long;
@@ -11553,6 +11564,14 @@ pub const setkeymap = serenity.setkeymap;
 
 /// External definitions shared by two or more operating systems.
 const private = struct {
+    pub extern "c" fn strdup(s: [*:0]const c_char) ?[*:0]c_char;
+    pub extern "c" fn _strdup(s: [*:0]const c_char) ?[*:0]c_char;
+    pub extern "c" fn wcsdup(s: [*:0]const wchar_t) ?[*:0]wchar_t;
+    pub extern "c" fn _wcsdup(s: [*:0]const wchar_t) ?[*:0]wchar_t;
+
+    pub extern "c" fn swab(noalias from: *const anyopaque, noalias to: *anyopaque, n: isize) void;
+    pub extern "c" fn _swab(noalias from: *const anyopaque, noalias to: *anyopaque, n: isize) void;
+
     extern "c" fn close(fd: fd_t) c_int;
     extern "c" fn clock_getres(clk_id: clockid_t, tp: *timespec) c_int;
     extern "c" fn clock_gettime(clk_id: clockid_t, tp: *timespec) c_int;
@@ -11649,6 +11668,8 @@ const private = struct {
 
     extern "c" fn __libc_current_sigrtmin() c_int;
     extern "c" fn __libc_current_sigrtmax() c_int;
+    extern "c" fn __signal_get_sigrtmin() c_int;
+    extern "c" fn __signal_get_sigrtmax() c_int;
 
     // Don't forget to add another clown when an OS picks yet another unique
     // symbol name for errno location!

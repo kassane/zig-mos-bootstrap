@@ -146,6 +146,7 @@ pub const ResolveError = error{
     DynamicLibraryPrecludesPie,
     TargetRequiresPie,
     SanitizeThreadRequiresPie,
+    SanitizeThreadRequiresLlvmBackend,
     BackendLacksErrorTracing,
     LlvmLibraryUnavailable,
     LldUnavailable,
@@ -249,7 +250,7 @@ pub fn resolve(options: Options) ResolveError!Config {
             if (options.link_mode == .dynamic) return error.TargetCannotDynamicLink;
             break :b .static;
         }
-        if (target.os.tag == .fuchsia and options.output_mode == .Exe) {
+        if (!target_util.canStaticLinkExe(target) and options.output_mode == .Exe) {
             if (options.link_mode == .static) return error.TargetCannotStaticLinkExecutables;
             break :b .dynamic;
         }
@@ -342,6 +343,12 @@ pub fn resolve(options: Options) ResolveError!Config {
             break :b true;
         }
 
+        if (options.any_sanitize_thread) {
+            // Thread sanitization instrumentation requires the LLVM backend.
+            if (options.use_llvm == false) return error.SanitizeThreadRequiresLlvmBackend;
+            break :b true;
+        }
+
         if (options.use_llvm) |x| break :b x;
 
         // If we cannot use LLVM libraries, then our own backends will be a
@@ -393,7 +400,9 @@ pub fn resolve(options: Options) ResolveError!Config {
             break :b true;
         }
 
-        if (options.use_llvm == false) {
+        // If there's no ZCU we aren't using the LLVM backend but
+        // it shouldn't influence which linker we pick
+        if (!use_llvm and options.have_zcu) {
             if (options.use_lld == true) return error.LldCannotIncrementallyLink;
             break :b false;
         }

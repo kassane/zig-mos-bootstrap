@@ -24,7 +24,7 @@ comptime {
         if (native_os == .windows and !builtin.link_libc and !@hasDecl(root, dll_main_crt_startup)) {
             @export(&DllMainCRTStartup, .{ .name = dll_main_crt_startup });
         } else if (native_os == .windows and builtin.link_libc and @hasDecl(root, "DllMain")) {
-            if (!@typeInfo(@TypeOf(root.DllMain)).@"fn".calling_convention.eql(.winapi)) {
+            if (!@typeInfo(@TypeOf(root.DllMain)).@"fn".attrs.@"callconv".eql(.winapi)) {
                 @export(&DllMain, .{ .name = "DllMain" });
             }
         }
@@ -32,11 +32,11 @@ comptime {
         if (builtin.link_libc and @hasDecl(root, "main")) {
             if (is_wasm) {
                 @export(&mainWithoutEnv, .{ .name = "__main_argc_argv" });
-            } else if (!@typeInfo(@TypeOf(root.main)).@"fn".calling_convention.eql(.c)) {
+            } else if (!@typeInfo(@TypeOf(root.main)).@"fn".attrs.@"callconv".eql(.c)) {
                 @export(&main, .{ .name = "main" });
             }
         } else if (native_os == .windows and builtin.link_libc and @hasDecl(root, "wWinMain")) {
-            if (!@typeInfo(@TypeOf(root.wWinMain)).@"fn".calling_convention.eql(.c)) {
+            if (!@typeInfo(@TypeOf(root.wWinMain)).@"fn".attrs.@"callconv".eql(.c)) {
                 @export(&wWinMain, .{ .name = "wWinMain" });
             }
         } else if (native_os == .windows) {
@@ -207,6 +207,7 @@ fn _start() callconv(.naked) noreturn {
             .sparc, .sparc64 => ".cfi_undefined %%i7",
             .x86 => ".cfi_undefined %%eip",
             .x86_64 => ".cfi_undefined %%rip",
+            .xtensa, .xtensaeb => "", // No CFI support.
             // MOS 6502 has no link register; the PC is saved on the hardware stack by JSR.
             .mos => "",
             else => @compileError("unsupported arch"),
@@ -512,6 +513,23 @@ fn _start() callconv(.naked) noreturn {
             \\ sub %%sp, 2047, %%sp
             \\ ba,a %[posixCallMainAndExit]
             ,
+            .xtensa, .xtensaeb => if (builtin.abi == .call0)
+                // a0 = LR, a15 = FP, a1 = SP
+                \\ movi a0, 0
+                \\ movi a15, 0
+                \\ mov a2, sp
+                \\ movi a8, -16
+                \\ and sp, sp, a8
+                \\ call0 %[posixCallMainAndExit]
+            else
+                // a0 = LR, a7 = FP, a1 = SP
+                \\ movi a0, 0
+                \\ movi a7, 0
+                \\ mov a6, sp
+                \\ movi a8, -16
+                \\ and sp, sp, a8
+                \\ call4 %[posixCallMainAndExit]
+            ,
             else => @compileError("unsupported arch"),
         }
         :
@@ -736,23 +754,22 @@ fn mainWithoutEnv(c_argc: c_int, c_argv: [*][*:0]c_char) callconv(.c) c_int {
 /// General error message for a malformed return type
 const bad_main_ret = "expected return type of main to be 'void', '!void', 'noreturn', 'u8', or '!u8'";
 
-const use_debug_allocator = !is_wasm and switch (builtin.mode) {
-    .Debug => true,
-    .ReleaseSafe => !builtin.link_libc, // Not ideal, but the best we have for now.
+const use_safe_allocator = !is_wasm and switch (builtin.mode) {
+    .Debug, .ReleaseSafe => true,
     .ReleaseFast, .ReleaseSmall => !builtin.link_libc and builtin.single_threaded, // Also not ideal.
 };
-var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+var safe_allocator: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
 
 inline fn callMain(args: std.process.Args.Vector, environ: std.process.Environ.Block) u8 {
     const fn_info = @typeInfo(@TypeOf(root.main)).@"fn";
-    if (fn_info.params.len == 0) return wrapMain(root.main());
-    if (fn_info.params[0].type.? == std.process.Init.Minimal) return wrapMain(root.main(.{
+    if (fn_info.param_types.len == 0) return wrapMain(root.main());
+    if (fn_info.param_types[0].? == std.process.Init.Minimal) return wrapMain(root.main(.{
         .args = .{ .vector = args },
         .environ = .{ .block = environ },
     }));
 
-    const gpa = if (use_debug_allocator)
-        debug_allocator.allocator()
+    const gpa = if (use_safe_allocator)
+        safe_allocator.allocator()
     else if (builtin.link_libc)
         std.heap.c_allocator
     else if (is_wasm)
@@ -762,8 +779,8 @@ inline fn callMain(args: std.process.Args.Vector, environ: std.process.Environ.B
     else
         comptime unreachable;
 
-    defer if (use_debug_allocator) {
-        _ = debug_allocator.deinit(); // Leaks do not affect return code.
+    defer if (use_safe_allocator) {
+        _ = safe_allocator.deinit(); // Leaks do not affect return code.
     };
 
     const arena_backing_allocator = if (is_wasm) gpa else std.heap.page_allocator;
@@ -827,7 +844,7 @@ inline fn wrapMain(result: anytype) u8 {
 
 fn call_wWinMain() std.os.windows.INT {
     const peb = std.os.windows.peb();
-    const MAIN_HINSTANCE = @typeInfo(@TypeOf(root.wWinMain)).@"fn".params[0].type.?;
+    const MAIN_HINSTANCE = @typeInfo(@TypeOf(root.wWinMain)).@"fn".param_types[0].?;
     const hInstance: MAIN_HINSTANCE = @ptrCast(peb.ImageBaseAddress);
     const lpCmdLine: [*:0]u16 = @ptrCast(peb.ProcessParameters.CommandLine.Buffer);
 

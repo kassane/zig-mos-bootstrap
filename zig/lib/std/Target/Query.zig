@@ -282,7 +282,7 @@ pub fn parse(args: ParseOptions) !Query {
         } else if (mem.eql(u8, cpu_name, "baseline")) {
             result.cpu_model = .baseline;
         } else {
-            result.cpu_model = .{ .explicit = try arch.parseCpuModel(cpu_name) };
+            result.cpu_model = .{ .explicit = arch.parseCpuModel(cpu_name) orelse return error.UnknownCpuModel };
         }
 
         while (index < cpu_features.len) {
@@ -533,9 +533,8 @@ pub fn serializeCpuAlloc(q: Query, ally: Allocator) Allocator.Error![]u8 {
     return buffer.toOwnedSlice();
 }
 
+/// Deprecated; use `zigTriple` instead. Will be removed in 0.18.0.
 pub fn allocDescription(self: Query, allocator: Allocator) ![]u8 {
-    // TODO is there anything else worthy of the description that is not
-    // already captured in the triple?
     return self.zigTriple(allocator);
 }
 

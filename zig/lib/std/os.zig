@@ -15,10 +15,6 @@ pub fn targetRequiresLibC(target: *const std.Target) bool {
     if (target.requiresLibC()) return true;
     return switch (target.os.tag) {
         .linux => switch (target.cpu.arch) {
-            // https://codeberg.org/ziglang/zig/issues/30940
-            .alpha,
-            // https://codeberg.org/ziglang/zig/issues/30942
-            .csky,
             // https://codeberg.org/ziglang/zig/issues/30943
             .hppa,
             .hppa64,
@@ -28,11 +24,6 @@ pub fn targetRequiresLibC(target: *const std.Target) bool {
             // https://codeberg.org/ziglang/zig/issues/30946
             .sh,
             .sheb,
-            // https://codeberg.org/ziglang/zig/issues/30945
-            .sparc,
-            // https://codeberg.org/ziglang/zig/issues/30947
-            .xtensa,
-            .xtensaeb,
             => true,
             else => false,
         },

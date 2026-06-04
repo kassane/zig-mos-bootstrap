@@ -332,8 +332,8 @@ pub const Environ = struct {
                             .flags = .{ .nonblocking = true },
                         };
                     };
-                } else inline for (@typeInfo(String).@"struct".fields) |field| {
-                    if (std.mem.eql(u8, key, field.name)) @field(environ.string, field.name) = value;
+                } else inline for (@typeInfo(String).@"struct".field_names) |field_name| {
+                    if (std.mem.eql(u8, key, field_name)) @field(environ.string, field_name) = value;
                 }
             }
         }
@@ -11785,8 +11785,8 @@ fn sleepWasi(t: *Threaded, timeout: Io.Timeout) Io.Cancelable!void {
 
 fn sleepNanosleep(t: *Threaded, timeout: Io.Timeout) Io.Cancelable!void {
     const t_io = io(t);
-    const sec_type = @typeInfo(posix.timespec).@"struct".fields[0].type;
-    const nsec_type = @typeInfo(posix.timespec).@"struct".fields[1].type;
+    const sec_type = @typeInfo(posix.timespec).@"struct".field_types[0];
+    const nsec_type = @typeInfo(posix.timespec).@"struct".field_types[1];
 
     var timespec: posix.timespec = t: {
         const d = timeout.toDurationFromNow(t_io) orelse break :t .{
@@ -12407,9 +12407,9 @@ fn openSocketPosix(
     };
     errdefer closeFd(socket_fd);
 
-    if (options.ip6_only) {
+    if (options.ip6_only) |ip6_only| {
         if (posix.IPV6 == void) return error.OptionUnsupported;
-        try setSocketOptionPosix(socket_fd, posix.IPPROTO.IPV6, posix.IPV6.V6ONLY, 0);
+        try setSocketOptionPosix(socket_fd, posix.IPPROTO.IPV6, posix.IPV6.V6ONLY, @intFromBool(ip6_only));
     }
 
     return socket_fd;
@@ -13627,12 +13627,15 @@ fn netLookupFallible(
 
     // On Linux, glibc provides getaddrinfo_a which is capable of supporting our semantics.
     // However, musl's POSIX-compliant getaddrinfo is not, so we bypass it.
+    const is_glibc = builtin.link_libc and builtin.target.isGnuLibC();
 
-    if (builtin.target.isGnuLibC()) {
+    if (is_glibc) {
         // TODO use getaddrinfo_a / gai_cancel
     }
 
-    if (native_os == .linux or is_windows) {
+    // On Linux, we have to go through glibc because of the Name Service Switch feature.
+    const non_glibc_linux = native_os == .linux and !is_glibc;
+    if (non_glibc_linux or is_windows) {
         if (IpAddress.parseIp6(name, options.port)) |addr| {
             if (options.family == .ip4) return error.UnknownHostName;
             if (copyCanon(options.canonical_name_buffer, name)) |canon| {
@@ -14493,7 +14496,7 @@ fn lookupDns(
     var socket = s: {
         if (any_ip6) ip6: {
             const ip6_addr: IpAddress = .{ .ip6 = .unspecified(0) };
-            const socket = ip6_addr.bind(t_io, .{ .ip6_only = true, .mode = .dgram }) catch |err| switch (err) {
+            const socket = ip6_addr.bind(t_io, .{ .ip6_only = false, .mode = .dgram }) catch |err| switch (err) {
                 error.AddressFamilyUnsupported => break :ip6,
                 else => |e| return e,
             };
@@ -14923,9 +14926,9 @@ const WindowsEnvironStrings = struct {
 
             i += 1; // skip over null byte
 
-            inline for (@typeInfo(WindowsEnvironStrings).@"struct".fields) |field| {
-                const field_name_w = comptime std.unicode.wtf8ToWtf16LeStringLiteral(field.name);
-                if (windows.eqlIgnoreCaseWtf16(key_w, field_name_w)) @field(result, field.name) = value_w;
+            inline for (@typeInfo(WindowsEnvironStrings).@"struct".field_names) |field_name| {
+                const field_name_w = comptime std.unicode.wtf8ToWtf16LeStringLiteral(field_name);
+                if (windows.eqlIgnoreCaseWtf16(key_w, field_name_w)) @field(result, field_name) = value_w;
             }
         }
 
@@ -16190,7 +16193,7 @@ fn windowsCreateProcessPathExt(
     }
     var io_status: windows.IO_STATUS_BLOCK = undefined;
 
-    const num_supported_pathext = @typeInfo(process.WindowsExtension).@"enum".fields.len;
+    const num_supported_pathext = @typeInfo(process.WindowsExtension).@"enum".field_names.len;
     var pathext_seen: [num_supported_pathext]bool = @splat(false);
     var any_pathext_seen = false;
     var unappended_exists = false;
@@ -16435,8 +16438,8 @@ fn windowsCreateProcess(
 fn windowsCreateProcessSupportsExtension(ext: []const u16) ?process.WindowsExtension {
     comptime {
         // Ensures keeping this function in sync with the enum.
-        const fields = @typeInfo(process.WindowsExtension).@"enum".fields;
-        assert(fields.len == 4);
+        const field_names = @typeInfo(process.WindowsExtension).@"enum".field_names;
+        assert(field_names.len == 4);
         assert(@intFromEnum(process.WindowsExtension.bat) == 0);
         assert(@intFromEnum(process.WindowsExtension.cmd) == 1);
         assert(@intFromEnum(process.WindowsExtension.com) == 2);

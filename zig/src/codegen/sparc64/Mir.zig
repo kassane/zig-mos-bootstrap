@@ -378,12 +378,11 @@ pub fn emit(
     mir: Mir,
     lf: *link.File,
     pt: Zcu.PerThread,
-    src_loc: Zcu.LazySrcLoc,
     func_index: InternPool.Index,
     atom_index: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) (codegen.CodeGenError || std.Io.Writer.Error)!void {
+) (codegen.Error || std.Io.Writer.Error)!void {
     _ = atom_index;
     const zcu = pt.zcu;
     const func = zcu.funcInfo(func_index);
@@ -394,7 +393,7 @@ pub fn emit(
         .bin_file = lf,
         .debug_output = debug_output,
         .target = &mod.resolved_target.result,
-        .src_loc = src_loc,
+        .src_loc = zcu.navSrcLoc(nav),
         .w = w,
         .prev_di_pc = 0,
         .prev_di_line = func.lbrace_line,
@@ -410,11 +409,11 @@ pub fn emit(
 /// Returns the requested data, as well as the new index which is at the start of the
 /// trailers for the object.
 pub fn extraData(mir: Mir, comptime T: type, index: usize) struct { data: T, end: usize } {
-    const fields = std.meta.fields(T);
+    const info = @typeInfo(T).@"struct";
     var i: usize = index;
     var result: T = undefined;
-    inline for (fields) |field| {
-        @field(result, field.name) = switch (field.type) {
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        @field(result, field_name) = switch (field_type) {
             u32 => mir.extra[i],
             i32 => @as(i32, @bitCast(mir.extra[i])),
             else => @compileError("bad field type"),

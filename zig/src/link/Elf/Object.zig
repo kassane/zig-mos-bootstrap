@@ -282,7 +282,7 @@ pub fn validateEFlags(
                 );
             }
 
-            if (any_errors) return error.LinkFailure;
+            if (any_errors) return error.AlreadyReported;
         },
         else => {},
     }
@@ -829,7 +829,7 @@ pub fn initInputMergeSections(self: *Object, elf_file: *Elf) !void {
                     var err = try diags.addErrorWithNotes(1);
                     try err.addMsg("string not null terminated", .{});
                     err.addNote("in {f}:{s}", .{ self.fmtPath(), atom_ptr.name(elf_file) });
-                    return error.LinkFailure;
+                    return error.AlreadyReported;
                 }
                 end += sh_entsize;
                 const string = data[start..end];
@@ -844,7 +844,7 @@ pub fn initInputMergeSections(self: *Object, elf_file: *Elf) !void {
                 var err = try diags.addErrorWithNotes(1);
                 try err.addMsg("size not a multiple of sh_entsize", .{});
                 err.addNote("in {f}:{s}", .{ self.fmtPath(), atom_ptr.name(elf_file) });
-                return error.LinkFailure;
+                return error.AlreadyReported;
             }
 
             var pos: u32 = 0;
@@ -873,7 +873,7 @@ pub fn initOutputMergeSections(self: *Object, elf_file: *Elf) !void {
 }
 
 pub fn resolveMergeSubsections(self: *Object, elf_file: *Elf) error{
-    LinkFailure,
+    AlreadyReported,
     OutOfMemory,
     /// TODO report the error and remove this
     Overflow,
@@ -925,7 +925,7 @@ pub fn resolveMergeSubsections(self: *Object, elf_file: *Elf) error{
             try err.addMsg("invalid symbol value: {x}", .{esym.st_value});
             err.addNote("for symbol {s}", .{sym.name(elf_file)});
             err.addNote("in {f}", .{self.fmtPath()});
-            return error.LinkFailure;
+            return error.AlreadyReported;
         };
 
         sym.ref = .{ .index = res.msub_index, .file = imsec.merge_section_index };
@@ -950,7 +950,7 @@ pub fn resolveMergeSubsections(self: *Object, elf_file: *Elf) error{
                 var err = try diags.addErrorWithNotes(1);
                 try err.addMsg("invalid relocation at offset 0x{x}", .{rel.r_offset});
                 err.addNote("in {f}:{s}", .{ self.fmtPath(), atom_ptr.name(elf_file) });
-                return error.LinkFailure;
+                return error.AlreadyReported;
             };
 
             const sym_index = try self.addSymbol(gpa);
@@ -1298,17 +1298,17 @@ fn addSymbolAssumeCapacity(self: *Object) Symbol.Index {
 }
 
 pub fn addSymbolExtra(self: *Object, gpa: Allocator, extra: Symbol.Extra) !u32 {
-    const fields = @typeInfo(Symbol.Extra).@"struct".fields;
-    try self.symbols_extra.ensureUnusedCapacity(gpa, fields.len);
+    const field_count = @typeInfo(Symbol.Extra).@"struct".field_names.len;
+    try self.symbols_extra.ensureUnusedCapacity(gpa, field_count);
     return self.addSymbolExtraAssumeCapacity(extra);
 }
 
 pub fn addSymbolExtraAssumeCapacity(self: *Object, extra: Symbol.Extra) u32 {
     const index = @as(u32, @intCast(self.symbols_extra.items.len));
-    const fields = @typeInfo(Symbol.Extra).@"struct".fields;
-    inline for (fields) |field| {
-        self.symbols_extra.appendAssumeCapacity(switch (field.type) {
-            u32 => @field(extra, field.name),
+    const info = @typeInfo(Symbol.Extra).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        self.symbols_extra.appendAssumeCapacity(switch (field_type) {
+            u32 => @field(extra, field_name),
             else => @compileError("bad field type"),
         });
     }
@@ -1316,11 +1316,11 @@ pub fn addSymbolExtraAssumeCapacity(self: *Object, extra: Symbol.Extra) u32 {
 }
 
 pub fn symbolExtra(self: *Object, index: u32) Symbol.Extra {
-    const fields = @typeInfo(Symbol.Extra).@"struct".fields;
+    const info = @typeInfo(Symbol.Extra).@"struct";
     var i: usize = index;
     var result: Symbol.Extra = undefined;
-    inline for (fields) |field| {
-        @field(result, field.name) = switch (field.type) {
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        @field(result, field_name) = switch (field_type) {
             u32 => self.symbols_extra.items[i],
             else => @compileError("bad field type"),
         };
@@ -1330,10 +1330,10 @@ pub fn symbolExtra(self: *Object, index: u32) Symbol.Extra {
 }
 
 pub fn setSymbolExtra(self: *Object, index: u32, extra: Symbol.Extra) void {
-    const fields = @typeInfo(Symbol.Extra).@"struct".fields;
-    inline for (fields, 0..) |field, i| {
-        self.symbols_extra.items[index + i] = switch (field.type) {
-            u32 => @field(extra, field.name),
+    const info = @typeInfo(Symbol.Extra).@"struct";
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+        self.symbols_extra.items[index + i] = switch (field_type) {
+            u32 => @field(extra, field_name),
             else => @compileError("bad field type"),
         };
     }
@@ -1408,17 +1408,17 @@ pub fn atom(self: *Object, atom_index: Atom.Index) ?*Atom {
 }
 
 pub fn addAtomExtra(self: *Object, gpa: Allocator, extra: Atom.Extra) !u32 {
-    const fields = @typeInfo(Atom.Extra).@"struct".fields;
-    try self.atoms_extra.ensureUnusedCapacity(gpa, fields.len);
+    const field_count = @typeInfo(Atom.Extra).@"struct".field_names.len;
+    try self.atoms_extra.ensureUnusedCapacity(gpa, field_count);
     return self.addAtomExtraAssumeCapacity(extra);
 }
 
 pub fn addAtomExtraAssumeCapacity(self: *Object, extra: Atom.Extra) u32 {
     const index: u32 = @intCast(self.atoms_extra.items.len);
-    const fields = @typeInfo(Atom.Extra).@"struct".fields;
-    inline for (fields) |field| {
-        self.atoms_extra.appendAssumeCapacity(switch (field.type) {
-            u32 => @field(extra, field.name),
+    const info = @typeInfo(Atom.Extra).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        self.atoms_extra.appendAssumeCapacity(switch (field_type) {
+            u32 => @field(extra, field_name),
             else => @compileError("bad field type"),
         });
     }
@@ -1426,11 +1426,11 @@ pub fn addAtomExtraAssumeCapacity(self: *Object, extra: Atom.Extra) u32 {
 }
 
 pub fn atomExtra(self: *Object, index: u32) Atom.Extra {
-    const fields = @typeInfo(Atom.Extra).@"struct".fields;
+    const info = @typeInfo(Atom.Extra).@"struct";
     var i: usize = index;
     var result: Atom.Extra = undefined;
-    inline for (fields) |field| {
-        @field(result, field.name) = switch (field.type) {
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        @field(result, field_name) = switch (field_type) {
             u32 => self.atoms_extra.items[i],
             else => @compileError("bad field type"),
         };
@@ -1440,10 +1440,10 @@ pub fn atomExtra(self: *Object, index: u32) Atom.Extra {
 }
 
 pub fn setAtomExtra(self: *Object, index: u32, extra: Atom.Extra) void {
-    const fields = @typeInfo(Atom.Extra).@"struct".fields;
-    inline for (fields, 0..) |field, i| {
-        self.atoms_extra.items[index + i] = switch (field.type) {
-            u32 => @field(extra, field.name),
+    const info = @typeInfo(Atom.Extra).@"struct";
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+        self.atoms_extra.items[index + i] = switch (field_type) {
+            u32 => @field(extra, field_name),
             else => @compileError("bad field type"),
         };
     }
@@ -1452,8 +1452,8 @@ pub fn setAtomExtra(self: *Object, index: u32, extra: Atom.Extra) void {
 fn setAtomFields(o: *Object, atom_ptr: *Atom, opts: Atom.Extra.AsOptionals) void {
     assert(o.index == atom_ptr.file_index);
     var extras = o.atomExtra(atom_ptr.extra_index);
-    inline for (@typeInfo(@TypeOf(opts)).@"struct".fields) |field| {
-        if (@field(opts, field.name)) |x| @field(extras, field.name) = x;
+    inline for (@typeInfo(@TypeOf(opts)).@"struct".field_names) |field_name| {
+        if (@field(opts, field_name)) |x| @field(extras, field_name) = x;
     }
     o.setAtomExtra(atom_ptr.extra_index, extras);
 }

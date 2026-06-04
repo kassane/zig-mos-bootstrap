@@ -1220,6 +1220,16 @@ const LinuxThreadImpl = struct {
                     : [ptr] "{$16}" (@intFromPtr(self.mapped.ptr)),
                       [len] "{$17}" (self.mapped.len),
                 ),
+                .arc, .arceb => asm volatile (
+                    \\ mov r8, 215 # SYS_munmap
+                    \\ trap_s 0
+                    \\ mov r8, 93 # SYS_exit
+                    \\ mov r0, 0
+                    \\ trap_s 0
+                    :
+                    : [ptr] "{r0}" (@intFromPtr(self.mapped.ptr)),
+                      [len] "{r1}" (self.mapped.len),
+                ),
                 .hexagon => asm volatile (
                     \\  r6 = #215 // SYS_munmap
                     \\  trap0(#1)
@@ -1366,7 +1376,7 @@ const LinuxThreadImpl = struct {
                     \\  mov %%g1, %%o0 // ptr
                     \\  mov %%g2, %%o1 // len
                     \\  mov 73, %%g1 // SYS_munmap
-                    \\  t 0x3 # ST_FLUSH_WINDOWS
+                    \\  t 0x3 // ST_FLUSH_WINDOWS
                     \\  t 0x10
                     \\  mov 1, %%g1 // SYS_exit
                     \\  mov 0, %%o0
@@ -1410,6 +1420,26 @@ const LinuxThreadImpl = struct {
                     :
                     : [ptr] "{r4}" (@intFromPtr(self.mapped.ptr)),
                       [len] "{r5}" (self.mapped.len),
+                    : .{ .memory = true }),
+                .csky => asm volatile (
+                    \\ movi r7, 215 # SYS_munmap
+                    \\ trap 0
+                    \\ movi r7, 93 # SYS_exit
+                    \\ movi r0, 0
+                    \\ trap 0
+                    :
+                    : [ptr] "{r0}" (@intFromPtr(self.mapped.ptr)),
+                      [len] "{r1}" (self.mapped.len),
+                    : .{ .memory = true }),
+                .xtensa, .xtensaeb => asm volatile (
+                    \\ movi a2, 81 // SYS_munmap
+                    \\ syscall
+                    \\ movi a6, 0
+                    \\ movi a2, 118 // SYS_exit
+                    \\ syscall
+                    :
+                    : [ptr] "{a6}" (@intFromPtr(self.mapped.ptr)),
+                      [len] "{a3}" (self.mapped.len),
                     : .{ .memory = true }),
                 else => |cpu_arch| @compileError("Unsupported linux arch: " ++ @tagName(cpu_arch)),
             }

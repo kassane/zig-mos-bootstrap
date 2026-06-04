@@ -568,7 +568,7 @@ pub const SourceLocation = enum(u32) {
         err_msg.notes[err.note_slot - 1].source_location = .{ .wasm = sl };
     }
 
-    pub fn fail(sl: SourceLocation, diags: *link.Diags, comptime format: []const u8, args: anytype) error{LinkFailure} {
+    pub fn fail(sl: SourceLocation, diags: *link.Diags, comptime format: []const u8, args: anytype) error{AlreadyReported} {
         return diags.failSourceLocation(.{ .wasm = sl }, format, args);
     }
 
@@ -2992,8 +2992,8 @@ pub fn createEmpty(
 
     if (options.object_host_name) |name| wasm.object_host_name = (try wasm.internString(name)).toOptional();
 
-    inline for (@typeInfo(PreloadedStrings).@"struct".fields) |field| {
-        @field(wasm.preloaded_strings, field.name) = try wasm.internString(field.name);
+    inline for (@typeInfo(PreloadedStrings).@"struct".field_names) |field_name| {
+        @field(wasm.preloaded_strings, field_name) = try wasm.internString(field_name);
     }
 
     wasm.entry_name = switch (options.entry) {
@@ -3027,12 +3027,12 @@ fn openParseObjectReportingFailure(wasm: *Wasm, path: Path) void {
     const diags = &comp.link_diags;
     const obj = link.openObject(io, path, false, false) catch |err| {
         switch (diags.failParse(path, "failed to open object: {t}", .{err})) {
-            error.LinkFailure => return,
+            error.AlreadyReported => return,
         }
     };
     wasm.parseObject(obj) catch |err| {
         switch (diags.failParse(path, "failed to parse object: {t}", .{err})) {
-            error.LinkFailure => return,
+            error.AlreadyReported => return,
         }
     };
 }
@@ -3192,10 +3192,6 @@ pub fn updateFunc(
     func_index: InternPool.Index,
     any_mir: *const codegen.AnyMir,
 ) !void {
-    if (build_options.skip_non_native and builtin.object_format != .wasm) {
-        @panic("Attempted to compile for object format that was disabled by build configuration");
-    }
-
     dev.check(.wasm_backend);
 
     // This linker implementation only works with codegen backend `.stage2_wasm`.
@@ -3279,9 +3275,6 @@ pub fn updateFunc(
 // Generate code for the "Nav", storing it in memory to be later written to
 // the file on flush().
 pub fn updateNav(wasm: *Wasm, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index) !void {
-    if (build_options.skip_non_native and builtin.object_format != .wasm) {
-        @panic("Attempted to compile for object format that was disabled by build configuration");
-    }
     const zcu = pt.zcu;
     const ip = &zcu.intern_pool;
     const nav = ip.getNav(nav_index);
@@ -3343,12 +3336,12 @@ pub fn updateNav(wasm: *Wasm, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index
     }
 }
 
-pub fn updateLineNumber(wasm: *Wasm, pt: Zcu.PerThread, ti_id: InternPool.TrackedInst.Index) !void {
+pub fn updateLineNumber(wasm: *Wasm, pt: Zcu.PerThread, ti_id: InternPool.TrackedInst.Index) link.Error!void {
     const comp = wasm.base.comp;
     const diags = &comp.link_diags;
     if (wasm.dwarf) |*dw| {
         dw.updateLineNumber(pt.zcu, ti_id) catch |err| switch (err) {
-            error.Overflow, error.OutOfMemory => |e| return e,
+            error.OutOfMemory, error.Canceled, error.AlreadyReported => |e| return e,
             else => |e| return diags.fail("failed to update dwarf line numbers: {s}", .{@errorName(e)}),
         };
     }
@@ -3378,10 +3371,6 @@ pub fn updateExports(
     exported: Zcu.Exported,
     export_indices: []const Zcu.Export.Index,
 ) !void {
-    if (build_options.skip_non_native and builtin.object_format != .wasm) {
-        @panic("Attempted to compile for object format that was disabled by build configuration");
-    }
-
     const zcu = pt.zcu;
     const gpa = zcu.gpa;
     const ip = &zcu.intern_pool;
@@ -3428,7 +3417,7 @@ pub fn loadInput(wasm: *Wasm, input: link.Input) !void {
     }
 }
 
-pub fn prelink(wasm: *Wasm, prog_node: std.Progress.Node) link.File.FlushError!void {
+pub fn prelink(wasm: *Wasm, prog_node: std.Progress.Node) link.Error!void {
     const tracy = trace(@src());
     defer tracy.end();
 
@@ -3537,7 +3526,7 @@ pub fn markFunctionImport(
     name: String,
     import: *FunctionImport,
     func_index: FunctionImport.Index,
-) link.File.FlushError!void {
+) link.Error!void {
     // import.flags.alive might be already true from a previous update. In such
     // case, we must still run the logic in this function, in case the item
     // being marked was reverted by the `flush` logic that resets the hash
@@ -3568,7 +3557,7 @@ pub fn markFunctionImport(
 }
 
 /// Recursively mark alive everything referenced by the function.
-fn markFunction(wasm: *Wasm, i: ObjectFunctionIndex, override_export: bool) link.File.FlushError!void {
+fn markFunction(wasm: *Wasm, i: ObjectFunctionIndex, override_export: bool) link.Error!void {
     const comp = wasm.base.comp;
     const gpa = comp.gpa;
     const gop = try wasm.functions.getOrPut(gpa, .fromObjectFunction(wasm, i));
@@ -3601,7 +3590,7 @@ fn markGlobalImport(
     name: String,
     import: *GlobalImport,
     global_index: GlobalImport.Index,
-) link.File.FlushError!void {
+) link.Error!void {
     // import.flags.alive might be already true from a previous update. In such
     // case, we must still run the logic in this function, in case the item
     // being marked was reverted by the `flush` logic that resets the hash
@@ -3641,7 +3630,7 @@ fn markGlobalImport(
     }
 }
 
-fn markGlobal(wasm: *Wasm, i: ObjectGlobalIndex, override_export: bool) link.File.FlushError!void {
+fn markGlobal(wasm: *Wasm, i: ObjectGlobalIndex, override_export: bool) link.Error!void {
     const comp = wasm.base.comp;
     const gpa = comp.gpa;
     const gop = try wasm.globals.getOrPut(gpa, .fromObjectGlobal(wasm, i));
@@ -3664,7 +3653,7 @@ fn markTableImport(
     name: String,
     import: *TableImport,
     table_index: TableImport.Index,
-) link.File.FlushError!void {
+) link.Error!void {
     if (import.flags.alive) return;
     import.flags.alive = true;
 
@@ -3686,7 +3675,7 @@ fn markTableImport(
     }
 }
 
-fn markDataSegment(wasm: *Wasm, segment_index: ObjectDataSegment.Index) link.File.FlushError!void {
+fn markDataSegment(wasm: *Wasm, segment_index: ObjectDataSegment.Index) link.Error!void {
     const comp = wasm.base.comp;
     const segment = segment_index.ptr(wasm);
     if (segment.flags.alive) return;
@@ -3704,7 +3693,7 @@ pub fn markDataImport(
     name: String,
     import: *ObjectDataImport,
     data_index: ObjectDataImport.Index,
-) link.File.FlushError!void {
+) link.Error!void {
     if (import.flags.alive) return;
     import.flags.alive = true;
 
@@ -3726,7 +3715,7 @@ pub fn markDataImport(
     }
 }
 
-fn markRelocations(wasm: *Wasm, relocs: ObjectRelocation.IterableSlice) link.File.FlushError!void {
+fn markRelocations(wasm: *Wasm, relocs: ObjectRelocation.IterableSlice) link.Error!void {
     const gpa = wasm.base.comp.gpa;
     for (relocs.slice.tags(wasm), relocs.slice.pointees(wasm), relocs.slice.offsets(wasm)) |tag, pointee, offset| {
         if (offset >= relocs.end) break;
@@ -3823,7 +3812,7 @@ fn markRelocations(wasm: *Wasm, relocs: ObjectRelocation.IterableSlice) link.Fil
     }
 }
 
-fn markTable(wasm: *Wasm, i: ObjectTableIndex) link.File.FlushError!void {
+fn markTable(wasm: *Wasm, i: ObjectTableIndex) link.Error!void {
     try wasm.tables.put(wasm.base.comp.gpa, .fromObjectTable(i), {});
 }
 
@@ -3832,7 +3821,7 @@ pub fn flush(
     arena: Allocator,
     tid: Zcu.PerThread.Id,
     prog_node: std.Progress.Node,
-) link.File.FlushError!void {
+) link.Error!void {
     // The goal is to never use this because it's only needed if we need to
     // write to InternPool, but flush is too late to be writing to the
     // InternPool.
@@ -3875,7 +3864,7 @@ pub fn flush(
     try wasm.flush_buffer.data_imports.reinit(gpa, wasm.data_imports.keys(), wasm.data_imports.values());
 
     return wasm.flush_buffer.finish(wasm) catch |err| switch (err) {
-        error.OutOfMemory, error.LinkFailure => |e| return e,
+        error.OutOfMemory, error.AlreadyReported => |e| return e,
         else => |e| return diags.fail("failed to flush wasm: {s}", .{@errorName(e)}),
     };
 }
@@ -4286,7 +4275,7 @@ fn lowerZcuData(wasm: *Wasm, pt: Zcu.PerThread, ip_index: InternPool.Index) !Zcu
     {
         var aw: std.Io.Writer.Allocating = .fromArrayList(wasm.base.comp.gpa, &wasm.string_bytes);
         defer wasm.string_bytes = aw.toArrayList();
-        codegen.generateSymbol(&wasm.base, pt, .unneeded, .fromInterned(ip_index), &aw.writer, .none) catch |err| switch (err) {
+        codegen.generateSymbol(&wasm.base, pt, .fromInterned(ip_index), &aw.writer, .none) catch |err| switch (err) {
             error.WriteFailed => return error.OutOfMemory,
             else => |e| return e,
         };
@@ -4360,7 +4349,7 @@ fn resolveFunctionSynthetic(
     res: FunctionImport.Resolution,
     params: []const std.wasm.Valtype,
     returns: []const std.wasm.Valtype,
-) link.File.FlushError!void {
+) link.Error!void {
     import.resolution = res;
     wasm.functions.putAssumeCapacity(res, {});
     // This is not only used for type-checking but also ensures the function

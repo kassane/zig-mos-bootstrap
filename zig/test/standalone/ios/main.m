@@ -4,6 +4,8 @@
 @property (strong, nonatomic) UIWindow *window;
 @end
 
+extern void zig_panic();
+
 int main() {
   @autoreleasepool {
     return UIApplicationMain(0, nil, nil, NSStringFromClass([AppDelegate class]));
@@ -27,6 +29,8 @@ int main() {
   self.window.rootViewController = viewController;
 
   [self.window makeKeyAndVisible];
+
+  zig_panic();
 
   return YES;
 }

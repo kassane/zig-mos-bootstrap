@@ -883,7 +883,7 @@ pub fn finishAnalysis(isel: *Select) !void {
     }
 }
 
-pub fn body(isel: *Select, air_body: []const Air.Inst.Index) error{ OutOfMemory, CodegenFail }!void {
+pub fn body(isel: *Select, air_body: []const Air.Inst.Index) error{ OutOfMemory, AlreadyReported }!void {
     const zcu = isel.pt.zcu;
     const ip = &zcu.intern_pool;
     const gpa = zcu.gpa;
@@ -8001,7 +8001,7 @@ fn emitLiteral(isel: *Select, bytes: []const u8) !void {
     }
 }
 
-fn fail(isel: *Select, comptime format: []const u8, args: anytype) error{ OutOfMemory, CodegenFail } {
+fn fail(isel: *Select, comptime format: []const u8, args: anytype) error{ OutOfMemory, AlreadyReported } {
     @branchHint(.cold);
     return isel.pt.zcu.codegenFail(isel.nav_index, format, args);
 }
@@ -8891,14 +8891,8 @@ pub const Value = struct {
 
         pub const Tag = @typeInfo(Parent).@"union".tag_type.?;
         pub const Payload = Payload: {
-            const fields = @typeInfo(Parent).@"union".fields;
-            var types: [fields.len]type = undefined;
-            var names: [fields.len][]const u8 = undefined;
-            for (fields, &types, &names) |f, *ty, *name| {
-                ty.* = f.type;
-                name.* = f.name;
-            }
-            break :Payload @Union(.auto, null, &names, &types, &@splat(.{}));
+            const info = @typeInfo(Parent).@"union";
+            break :Payload @Union(.auto, null, info.field_names, info.field_types[0..], &@splat(.{}));
         };
     };
 
@@ -8916,14 +8910,8 @@ pub const Value = struct {
 
         pub const Tag = @typeInfo(Location).@"union".tag_type.?;
         pub const Payload = Payload: {
-            const fields = @typeInfo(Location).@"union".fields;
-            var types: [fields.len]type = undefined;
-            var names: [fields.len][]const u8 = undefined;
-            for (fields, &types, &names) |f, *ty, *name| {
-                ty.* = f.type;
-                name.* = f.name;
-            }
-            break :Payload @Union(.auto, null, &names, &types, &@splat(.{}));
+            const info = @typeInfo(Location).@"union";
+            break :Payload @Union(.auto, null, info.field_names, info.field_types[0..], &@splat(.{}));
         };
     };
 
@@ -10607,7 +10595,7 @@ pub const Value = struct {
         vi: Value.Index,
         ra: Register.Alias,
 
-        fn finish(mat: Value.Materialize, isel: *Select) error{ OutOfMemory, CodegenFail }!void {
+        fn finish(mat: Value.Materialize, isel: *Select) error{ OutOfMemory, AlreadyReported }!void {
             const live_vi = isel.live_registers.getPtr(mat.ra);
             assert(live_vi.* == .allocating);
             var vi = mat.vi;
@@ -11257,7 +11245,7 @@ fn dumpValuesInner(isel: *Select, which: WhichValues) !void {
     var reverse_live_registers: std.AutoHashMapUnmanaged(Value.Index, Register.Alias) = .empty;
     defer reverse_live_registers.deinit(gpa);
     {
-        try reverse_live_registers.ensureTotalCapacity(gpa, @typeInfo(Register.Alias).@"enum".fields.len);
+        try reverse_live_registers.ensureTotalCapacity(gpa, @typeInfo(Register.Alias).@"enum".field_names.len);
         var live_reg_it = isel.live_registers.iterator();
         while (live_reg_it.next()) |live_reg_entry| switch (live_reg_entry.value.*) {
             _ => reverse_live_registers.putAssumeCapacityNoClobber(live_reg_entry.value.*, live_reg_entry.key),
@@ -11648,7 +11636,7 @@ fn use(isel: *Select, air_ref: Air.Inst.Ref) !Value.Index {
     return vi;
 }
 
-fn fill(isel: *Select, dst_ra: Register.Alias) error{ OutOfMemory, CodegenFail }!bool {
+fn fill(isel: *Select, dst_ra: Register.Alias) error{ OutOfMemory, AlreadyReported }!bool {
     switch (dst_ra) {
         else => {},
         Register.Alias.fp, .zr, .sp, .pc, .fpcr, .fpsr, .ffr => return false,
@@ -11681,7 +11669,7 @@ fn fill(isel: *Select, dst_ra: Register.Alias) error{ OutOfMemory, CodegenFail }
     return true;
 }
 
-fn fillMemory(isel: *Select, dst_ra: Register.Alias) error{ OutOfMemory, CodegenFail }!bool {
+fn fillMemory(isel: *Select, dst_ra: Register.Alias) error{ OutOfMemory, AlreadyReported }!bool {
     const dst_live_vi = isel.live_registers.getPtr(dst_ra);
     const dst_vi = switch (dst_live_vi.*) {
         _ => |dst_vi| dst_vi,

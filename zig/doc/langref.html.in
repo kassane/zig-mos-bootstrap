@@ -814,7 +814,7 @@
       <p>
         A destructuring expression may only appear within a block (i.e. not at {#link|Namespace#} scope).
         The left hand side of the assignment must consist of a comma separated list,
-        each element of which may be either an lvalue (for instance, an existing `var`) or a variable declaration:
+        each element of which may be either an lvalue (for instance, an existing {#syntax#}var{#endsyntax#}) or a variable declaration:
       </p>
       {#code|destructuring_mixed.zig#}
 
@@ -1917,7 +1917,7 @@ or
       </p>
       <p>
       Vectors generally support the same builtin operators as their underlying base types.
-      The only exception to this is the keywords `and` and `or` on vectors of bools, since
+      The only exception to this is the keywords {#syntax#}and{#endsyntax#} and {#syntax#}or{#endsyntax#} on vectors of bools, since
       these operators affect control flow, which is not allowed for vectors.
       All other operations are performed element-wise, and return a vector of the same length
       as the input vectors. This includes:
@@ -5752,7 +5752,7 @@ fn cmpxchgWeakButNotAtomic(comptime T: type, ptr: *T, expected_value: T, new_val
       {#header_open|@Fn#}
       <pre>{#syntax#}@Fn(
     comptime param_types: []const type,
-    comptime param_attrs: *const [param_types.len]std.lang.Type.Fn.Param.Attributes,
+    comptime param_attrs: *const [param_types.len]std.lang.Type.Fn.ParamAttributes,
     comptime ReturnType: type,
     comptime attrs: std.lang.Type.Fn.Attributes,
 ) type{#endsyntax#}</pre>
@@ -5765,7 +5765,7 @@ fn cmpxchgWeakButNotAtomic(comptime T: type, ptr: *T, expected_value: T, new_val
     comptime BackingInt: ?type,
     comptime field_names: []const []const u8,
     comptime field_types: *const [field_names.len]type,
-    comptime field_attrs: *const [field_names.len]std.lang.Type.StructField.Attributes,
+    comptime field_attrs: *const [field_names.len]std.lang.Type.Struct.FieldAttributes,
 ) type{#endsyntax#}</pre>
       <p>Returns a {#link|struct#} type with the properties specified by the arguments.</p>
       {#header_close#}
@@ -5777,7 +5777,7 @@ fn cmpxchgWeakButNotAtomic(comptime T: type, ptr: *T, expected_value: T, new_val
     comptime ArgType: ?type,
     comptime field_names: []const []const u8,
     comptime field_types: *const [field_names.len]type,
-    comptime field_attrs: *const [field_names.len]std.lang.Type.UnionField.Attributes,
+    comptime field_attrs: *const [field_names.len]std.lang.Type.Union.FieldAttributes,
 ) type{#endsyntax#}</pre>
       <p>Returns a {#link|union#} type with the properties specified by the arguments.</p>
       {#header_close#}
@@ -7925,7 +7925,7 @@ AddrSpace <- KEYWORD_addrspace LPAREN Expr RPAREN
 # Fn specific
 CallConv <- KEYWORD_callconv LPAREN Expr RPAREN
 
-ParamDecl <- doc_comment? (KEYWORD_noalias / KEYWORD_comptime / !KEYWORD_comptime) (IDENTIFIER COLON / !(IDENTIFIER_COLON)) ParamType
+ParamDecl <- doc_comment? (KEYWORD_noalias / KEYWORD_comptime / !KEYWORD_comptime) (IDENTIFIER COLON / !(IDENTIFIER COLON)) ParamType
 
 ParamType
     <- KEYWORD_anytype
