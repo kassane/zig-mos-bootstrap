@@ -76,7 +76,7 @@ comptime {
             // without a hand-written call_main.s in each example.
             .appleii, .atari2600, .atari5200, .nes, .c64, .c128, .cpm65, .cx16, .dodo, .eater, .fds, .geos_cbm, .atari8, .lynx, .mega65, .osi_c1p, .pce, .pce_cd, .pet, .rp6502, .rpc8e, .sim, .snes, .supervision, .vic20 => {
                 if (native_arch == .mos and @hasDecl(root, "main")) {
-                    if (!@typeInfo(@TypeOf(root.main)).@"fn".calling_convention.eql(.c)) {
+                    if (!@typeInfo(@TypeOf(root.main)).@"fn".attrs.@"callconv".eql(.c)) {
                         @export(&mosMain, .{ .name = "main" });
                     }
                     @export(&mosCallMainSection, .{ .name = "__zig_call_main_section" });
