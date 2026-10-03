@@ -68,6 +68,11 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
   LLT P = LLT::pointer(0, 16);
   LLT PZ = LLT::pointer(1, 8);
 
+  // There are no vector registers, but the optimizer freely forms vector
+  // operations over the vector types SROA invents for aggregates. Any
+  // operation that can carry a vector type scalarizes it; the pieces are then
+  // legalized by the scalar rules as usual.
+
   // Constants
 
   getActionDefinitionsBuilder(G_CONSTANT)
@@ -78,6 +83,7 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
 
   getActionDefinitionsBuilder(G_IMPLICIT_DEF)
       .legalFor({S1, S8, P, PZ})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
@@ -91,17 +97,20 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
   getActionDefinitionsBuilder(G_ANYEXT)
       .legalFor({{S16, S8}})
       .customIf(typeIs(1, S1))
+      .scalarize(0)
       .unsupported();
   getActionDefinitionsBuilder(G_TRUNC)
       .legalFor({{S1, S8}, {S1, S16}, {S8, S16}})
+      .scalarize(0)
       .unsupported();
 
-  getActionDefinitionsBuilder(G_SEXT).custom();
+  getActionDefinitionsBuilder(G_SEXT).scalarize(0).custom();
 
   getActionDefinitionsBuilder(G_SEXT_INREG).lower();
 
   getActionDefinitionsBuilder(G_ZEXT)
       .customIf(typeIs(1, S1))
+      .scalarize(0)
       .maxScalar(0, S8)
       .unsupported();
 
@@ -119,9 +128,27 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
       .customForCartesianProduct({P, PZ})
       .unsupported();
 
+  // Bitcasts only appear once vector types are involved; a scalar-to-scalar
+  // bitcast of the same size is folded away before reaching here. The generic
+  // lowering splits the vector side into elements and merges/unmerges the
+  // scalar side.
+  getActionDefinitionsBuilder(G_BITCAST)
+      .lowerIf(LegalityPredicates::any(isVector(0), isVector(1)))
+      .unsupported();
+
   // Scalar Operations
 
   getActionDefinitionsBuilder({G_EXTRACT, G_INSERT}).lower();
+
+  // There are no vector registers. The generic lowering breaks a constant
+  // index into an unmerge of the vector's elements; a variable index spills
+  // the vector to a stack temporary and indexes into it.
+  getActionDefinitionsBuilder({G_EXTRACT_VECTOR_ELT, G_INSERT_VECTOR_ELT})
+      .lower();
+
+  // The generic lowering rewrites a shuffle as a series of extracts and
+  // inserts with constant indices, which the rule above then lowers further.
+  getActionDefinitionsBuilder(G_SHUFFLE_VECTOR).lower();
 
   getActionDefinitionsBuilder(G_MERGE_VALUES)
       .legalForCartesianProduct({S16, P}, {S8, PZ})
@@ -132,22 +159,25 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
 
   getActionDefinitionsBuilder(G_BSWAP)
       .customFor({S8})
+      .scalarize(0)
       .unsupportedIf(scalarNarrowerThan(0, 8))
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
 
-  getActionDefinitionsBuilder(G_BITREVERSE).lower();
+  getActionDefinitionsBuilder(G_BITREVERSE).scalarize(0).lower();
 
   // Integer Operations
 
   getActionDefinitionsBuilder({G_ADD, G_SUB})
       .legalFor({S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .custom();
 
   getActionDefinitionsBuilder({G_AND, G_OR})
       .legalFor({S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
@@ -155,12 +185,14 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
   getActionDefinitionsBuilder(G_XOR)
       .legalFor({S8})
       .customFor({S1})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
 
   getActionDefinitionsBuilder(G_MUL)
       .libcallFor({S8, S16, S32, S64})
+      .scalarize(0)
       .widenScalarToNextPow2(0)
       // Multiplications can only be narrowed to sizes where a multiplication of
       // double that size is legal, since that's the lowered algorithm invokes
@@ -170,24 +202,29 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
       .unsupported();
 
   getActionDefinitionsBuilder({G_SDIV, G_SREM, G_UDIV, G_UREM})
+      .scalarize(0)
       .clampScalar(0, S8, S64)
       .widenScalarToNextPow2(0)
       .libcall();
 
   getActionDefinitionsBuilder({G_SDIVREM, G_UDIVREM})
       .customFor({S8, S16, S32, S64})
+      .scalarize(0)
       .lower();
 
   getActionDefinitionsBuilder(
       {G_SADDSAT, G_UADDSAT, G_SSUBSAT, G_USUBSAT, G_SSHLSAT, G_USHLSAT})
+      .scalarize(0)
       .lower();
 
   getActionDefinitionsBuilder({G_LSHR, G_SHL, G_ASHR})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(1, S8)
       .custom();
 
   getActionDefinitionsBuilder({G_ROTL, G_ROTR})
+      .scalarize(0)
       .lowerIf([](const LegalityQuery &Query) {
         assert(Query.Types[0].isScalar());
         return !Query.Types[0].isByteSized();
@@ -196,12 +233,14 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
 
   getActionDefinitionsBuilder(G_ICMP)
       .customFor({{S1, P}, {S1, S8}})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(1, 8)
       .custom();
 
   getActionDefinitionsBuilder(G_SELECT)
       .customFor({P, PZ})
       .legalFor({S1, S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
@@ -215,36 +254,44 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
       .scalarSameSizeAs(1, 0)
       .unsupported();
 
-  getActionDefinitionsBuilder({G_SMIN, G_SMAX, G_UMIN, G_UMAX}).lower();
+  getActionDefinitionsBuilder({G_SMIN, G_SMAX, G_UMIN, G_UMAX})
+      .scalarize(0)
+      .lower();
 
-  getActionDefinitionsBuilder(G_ABS).custom();
+  getActionDefinitionsBuilder({G_SCMP, G_UCMP}).lower();
+
+  getActionDefinitionsBuilder(G_ABS).scalarize(0).custom();
 
   // Odd operations are handled via even ones: 6502 has only ADC/SBC.
   getActionDefinitionsBuilder({G_UADDO, G_SADDO, G_USUBO, G_SSUBO})
       .customFor({S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
-  getActionDefinitionsBuilder({G_SMULO, G_UMULO}).lower();
+  getActionDefinitionsBuilder({G_SMULO, G_UMULO}).scalarize(0).lower();
   getActionDefinitionsBuilder({G_UADDE, G_SADDE})
       .legalFor({S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
   getActionDefinitionsBuilder({G_USUBE, G_SSUBE})
       .customFor({S8})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
-  getActionDefinitionsBuilder({G_UMULH, G_SMULH}).lower();
+  getActionDefinitionsBuilder({G_UMULH, G_SMULH}).scalarize(0).lower();
 
   // WARNING: The default lowering of funnel shifts is terrible. Luckily, they
   // appear to mostly be rotations, which are combined away and handled
   // separately.
-  getActionDefinitionsBuilder({G_FSHL, G_FSHR}).lower();
+  getActionDefinitionsBuilder({G_FSHL, G_FSHR}).scalarize(0).lower();
 
   getActionDefinitionsBuilder(
       {G_CTLZ, G_CTTZ, G_CTPOP, G_CTLZ_ZERO_UNDEF, G_CTTZ_ZERO_UNDEF})
+      .scalarize(0)
       .lower();
 
   // Floating Point Operations
@@ -337,6 +384,7 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
 
   getActionDefinitionsBuilder(G_PHI)
       .legalFor({S1, S8, P, PZ})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
@@ -364,6 +412,7 @@ MOSLegalizerInfo::MOSLegalizerInfo(const MOSSubtarget &STI) {
 
   getActionDefinitionsBuilder(G_FREEZE)
       .customFor({S1, S8, P, PZ})
+      .scalarize(0)
       .widenScalarToNextMultipleOf(0, 8)
       .maxScalar(0, S8)
       .unsupported();
@@ -665,22 +714,26 @@ bool MOSLegalizerInfo::legalizeAddSub(LegalizerHelper &Helper,
   auto [Dst, Src] = MI.getFirst2Regs();
   assert(MRI.getType(Dst).isByteSized());
 
+  assert(MI.getOpcode() == MOS::G_ADD || MI.getOpcode() == MOS::G_SUB);
   auto RHSConst =
       getIConstantVRegValWithLookThrough(MI.getOperand(2).getReg(), MRI);
-  if (!RHSConst || std::abs(RHSConst->Value.getSExtValue()) != 1)
+  // Constants too wide for int64_t cannot be +/-1, and would assert in
+  // getSExtValue().
+  if (!RHSConst || RHSConst->Value.getSignificantBits() > 64)
     return Helper.narrowScalarAddSub(MI, 0, S8) !=
            LegalizerHelper::UnableToLegalize;
 
+  // Take the magnitude without negating; -INT64_MIN would overflow.
+  const int64_t Amt = RHSConst->Value.getSExtValue();
+  if (llvm::AbsoluteValue(Amt) != 1)
+    return Helper.narrowScalarAddSub(MI, 0, S8) !=
+           LegalizerHelper::UnableToLegalize;
+  const bool IsInc = (Amt > 0) != (MI.getOpcode() == MOS::G_SUB);
+
   // Handle multi-byte increments and decrements.
-
-  assert(MI.getOpcode() == MOS::G_ADD || MI.getOpcode() == MOS::G_SUB);
-  int64_t Amt = RHSConst->Value.getSExtValue();
-  if (MI.getOpcode() == MOS::G_SUB)
-    Amt = -Amt;
-
   auto Unmerge = Builder.buildUnmerge(S8, Src);
   size_t NumParts = llvm::size(unmergeDefs(Unmerge));
-  auto IncDec = Builder.buildInstr(Amt == 1 ? MOS::G_INC : MOS::G_DEC);
+  auto IncDec = Builder.buildInstr(IsInc ? MOS::G_INC : MOS::G_DEC);
   SmallVector<Register> DstParts;
   for (size_t Idx = 0; Idx < NumParts; ++Idx) {
     Register R = MRI.createGenericVirtualRegister(S8);
@@ -1462,9 +1515,26 @@ bool MOSLegalizerInfo::legalizePtrAdd(LegalizerHelper &Helper,
     return true;
   }
 
-  if (ConstOffset && ConstOffset->Value.abs().isOne()) {
-    Builder.buildInstr(ConstOffset->Value.isOne() ? MOS::G_INC : MOS::G_DEC,
-                       {Result}, {Base});
+  // Pointers are allocated to Imag16, so the byte pair is always adjacent and
+  // each step becomes a single INW/DEW. The limit is cycles, not allocation:
+  // one INW/DEW beats a 16-bit ADC sequence, two roughly break even on speed
+  // while saving space, and longer chains lose. Measured on a MEGA65, raising
+  // this to 4 cost 3% in a tile-conversion loop.
+  const MOSSubtarget &STI = Builder.getMF().getSubtarget<MOSSubtarget>();
+  unsigned MaxIncDec = STI.has65CE02() ? 2 : 1;
+  if (ConstOffset && !ConstOffset->Value.isZero() &&
+      ConstOffset->Value.abs().ule(MaxIncDec)) {
+    int64_t N = ConstOffset->Value.getSExtValue();
+    unsigned Opc = N > 0 ? MOS::G_INC : MOS::G_DEC;
+    uint64_t Count = llvm::AbsoluteValue(N);
+    Register Cur = Base;
+    for (uint64_t I = 0; I < Count; ++I) {
+      Register Next = (I == Count - 1)
+                          ? Result
+                          : MRI.createGenericVirtualRegister(MRI.getType(Base));
+      Builder.buildInstr(Opc, {Next}, {Cur});
+      Cur = Next;
+    }
     MI.eraseFromParent();
     return true;
   }

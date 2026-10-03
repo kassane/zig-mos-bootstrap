@@ -287,6 +287,23 @@ def DecDcpMB : MOSIncDecMB {
   let Predicates = [Has6502X];
 }
 
+// 65CE02 word increment/decrement. INW/DEW operate on a 16-bit word at a
+// zero-page address, replacing a multi-instruction INC/BNE/INC or DEC sequence.
+// Imaginary registers cannot alias IR-level memory, so these are not modeled
+// as loads/stores, allowing the compiler more freedom to reorder them.
+let Predicates = [Has65CE02] in {
+  def INWImag : MOSPseudo {
+    dag OutOperandList = (outs Imag16:$dst);
+    dag InOperandList = (ins Imag16:$src);
+    let Constraints = "$dst = $src";
+  }
+  def DEWImag : MOSPseudo {
+    dag OutOperandList = (outs Imag16:$dst);
+    dag InOperandList = (ins Imag16:$src);
+    let Constraints = "$dst = $src";
+  }
+}
+
 // Use the diamond control flow pattern to load one of two immediates based on
 // the value of a flag. The output must either be to CV_GPR_LSB or GPR.
 def SelectImm : MOSPseudo {

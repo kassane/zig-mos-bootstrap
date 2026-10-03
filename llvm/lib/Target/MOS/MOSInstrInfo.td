@@ -192,6 +192,10 @@ def BEQ_Relative : ConditionalBranch<"beq", 0b11, 0b1>;
 /// 8A  9A  AA  BA  CA  EA
 
 def BRK_Implied: InstLow0<"brk", 0b0000>, InstUnconditionalBranch;
+def BRK_Immediate: Inst16<"brk", Opcode<0x00>, Immediate>,
+    InstUnconditionalBranch {
+  let isAsmParserOnly = true;
+}
 /// JSR is the only instruction that does not follow the current pattern.
 def JSR_Absolute: Inst24<"jsr", Opcode<0x20>, Absolute>, InstCall;
 def RTI_Implied: InstLow0<"rti", 0b0100>, InstReturn;
@@ -419,6 +423,9 @@ let Predicates = [Has65CE02] in {
 /// Branches and jumps
 
 let DecoderNamespace = "65ce02" in {
+/// Unlike the 65816's BRL, these are relative to opcode + 2, the same base as
+/// the 8-bit branches. LongBranch records that for the MC layer.
+let LongBranch = 1 in {
 def BPL_Relative16 : Inst24<"bpl", Opcode<0x13>, Relative16>,
 	InstConditionalBranch;
 def BMI_Relative16 : Inst24<"bmi", Opcode<0x33>, Relative16>,
@@ -439,6 +446,7 @@ def BNE_Relative16 : Inst24<"bne", Opcode<0xd3>, Relative16>,
 	InstConditionalBranch;
 def BEQ_Relative16 : Inst24<"beq", Opcode<0xf3>, Relative16>,
 	InstConditionalBranch;
+} // let LongBranch = 1
 
 def JSR_AbsoluteIndirect: Inst24<"jsr", Opcode<0x22>, Indirect16>,
 	InstCall {

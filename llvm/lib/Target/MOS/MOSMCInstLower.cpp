@@ -508,6 +508,16 @@ void MOSMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) {
       return;
     }
   }
+  case MOS::INWImag:
+  case MOS::DEWImag: {
+    OutMI.setOpcode(MI->getOpcode() == MOS::INWImag ? MOS::INW_ZeroPage
+                                                     : MOS::DEW_ZeroPage);
+    MCOperand MCOp;
+    if (!lowerOperand(MI->getOperand(0), MCOp))
+      llvm_unreachable("Failed to lower operand");
+    OutMI.addOperand(MCOp);
+    return;
+  }
   case MOS::DEC:
   case MOS::INC:
     if (MOS::Imag8RegClass.contains(MI->getOperand(0).getReg())) {

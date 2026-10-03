@@ -1899,9 +1899,11 @@ bool MOSInstructionSelector::selectIncDecMB(MachineInstr &MI) {
     Instr.addDef(Builder.getMRI()->createVirtualRegister(&MOS::AcRegClass));
   for (MachineOperand &MO : MI.operands())
     Instr.add(MO);
-  for (MachineOperand &MO : Instr->explicit_operands())
-    if (MO.isReg())
-      constrainOperandRegClass(MO, MOS::Anyi8RegClass);
+  for (MachineOperand &MO : Instr->explicit_operands()) {
+    if (!MO.isReg())
+      continue;
+    constrainOperandRegClass(MO, MOS::Anyi8RegClass);
+  }
 
   unsigned DstIdx = Opcode == MOS::IncMB ? 0 : 1;
   unsigned SrcIdx = Instr->getNumExplicitDefs();

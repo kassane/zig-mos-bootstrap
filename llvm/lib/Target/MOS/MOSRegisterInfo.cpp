@@ -808,6 +808,41 @@ bool MOSRegisterInfo::getRegAllocationHints(Register VirtReg,
         RegScores[MOS::X] += INCzp - INCxy;
       if (is_contained(Order, MOS::Y))
         RegScores[MOS::Y] += INCzp - INCxy;
+
+      // Prefer placing adjacent IncMB/DecMB bytes into consecutive Imag8
+      // pairs so post-RA expansion can emit INW/DEW word operations.
+      if (STI.has65CE02() && VRM &&
+          (MI.getOpcode() == MOS::IncMB || MI.getOpcode() == MOS::DecMB ||
+           MI.getOpcode() == MOS::DecDcpMB)) {
+        unsigned NumDefs = MI.getNumExplicitDefs();
+        for (unsigned I = NumDefs, E = MI.getNumExplicitOperands(); I < E;
+             ++I) {
+          if (!MI.getOperand(I).isReg() ||
+              MI.getOperand(I).getReg() != VirtReg)
+            continue;
+          unsigned ByteIdx = I - NumDefs;
+          unsigned PartnerI = NumDefs + (ByteIdx ^ 1);
+          if (PartnerI >= E || !MI.getOperand(PartnerI).isReg())
+            break;
+          Register PartnerVReg = MI.getOperand(PartnerI).getReg();
+          if (!PartnerVReg.isVirtual() || !VRM->hasPhys(PartnerVReg))
+            break;
+          MCPhysReg PartnerPhys = VRM->getPhys(PartnerVReg);
+          if (!MOS::Imag8RegClass.contains(PartnerPhys))
+            break;
+          bool IsLo = (ByteIdx % 2 == 0);
+          MCRegister Super = TRI.getMatchingSuperReg(
+              PartnerPhys, IsLo ? MOS::subhi : MOS::sublo,
+              &MOS::Imag16RegClass);
+          if (!Super)
+            break;
+          MCPhysReg HintReg =
+              TRI.getSubReg(Super, IsLo ? MOS::sublo : MOS::subhi);
+          if (HintReg && is_contained(Order, HintReg))
+            Hints.push_back(HintReg);
+          break;
+        }
+      }
       break;
     }
     }
