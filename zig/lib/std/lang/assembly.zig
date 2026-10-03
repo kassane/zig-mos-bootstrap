@@ -3187,24 +3187,14 @@ pub const Clobbers = switch (@import("builtin").cpu.arch) {
         /// addresses other than those derived from input pointer provenance.
         memory: bool = false,
 
-        /// Accumulator.
         a: bool = false,
-        /// X index register.
         x: bool = false,
-        /// Y index register.
         y: bool = false,
-        /// Stack pointer.
         s: bool = false,
-
-        /// Carry flag.
         c: bool = false,
-        /// Negative flag.
         n: bool = false,
-        /// Overflow flag.
         v: bool = false,
-        /// Zero flag.
         z: bool = false,
-        /// Processor status register (all flags).
         p: bool = false,
 
         // Imaginary 8-bit zero-page registers (`Imag8`: `rc0`..`rc255`),

@@ -241,9 +241,11 @@ pub fn fromWindowsContext(ctx: *const std.os.windows.CONTEXT) Native {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Aarch64 = extern struct {
     /// The numbered general-purpose registers X0 - X30.
-    x: [31]u64,
-    sp: u64,
-    pc: u64,
+    x: [31]Gpr,
+    sp: Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u64;
 
     pub inline fn current() Aarch64 {
         var ctx: Aarch64 = undefined;
@@ -274,10 +276,10 @@ const Aarch64 = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Aarch64) u64 {
+    pub fn getFp(ctx: *const Aarch64) usize {
         return ctx.x[29];
     }
-    pub fn getPc(ctx: *const Aarch64) u64 {
+    pub fn getPc(ctx: *const Aarch64) usize {
         return ctx.pc;
     }
 
@@ -309,8 +311,10 @@ const Aarch64 = extern struct {
 
 const Alpha = extern struct {
     /// The numbered general-purpose registers R0 - R31.
-    r: [32]u64,
-    pc: u64,
+    r: [32]Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u64;
 
     pub inline fn current() Alpha {
         var ctx: Alpha = undefined;
@@ -346,6 +350,7 @@ const Alpha = extern struct {
             \\ stq $28, 0x0e0($0)
             \\ stq $29, 0x0e8($0)
             \\ stq $30, 0x0f0($0)
+            \\ stq $31, 0x0f8($0)
             \\
             \\ br $1, 1f
             \\1:
@@ -356,10 +361,10 @@ const Alpha = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Alpha) u64 {
+    pub fn getFp(ctx: *const Alpha) usize {
         return ctx.r[15];
     }
-    pub fn getPc(ctx: *const Alpha) u64 {
+    pub fn getPc(ctx: *const Alpha) usize {
         return ctx.pc;
     }
 
@@ -379,8 +384,10 @@ const Alpha = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Arc = extern struct {
     /// The numbered general-purpose registers r0 - r31.
-    r: [32]u32,
-    pcl: u32,
+    r: [32]Gpr,
+    pcl: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Arc {
         var ctx: Arc = undefined;
@@ -424,10 +431,10 @@ const Arc = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Arc) u32 {
+    pub fn getFp(ctx: *const Arc) usize {
         return ctx.r[27];
     }
-    pub fn getPc(ctx: *const Arc) u32 {
+    pub fn getPc(ctx: *const Arc) usize {
         return ctx.pcl;
     }
 
@@ -447,7 +454,9 @@ const Arc = extern struct {
 
 const Arm = struct {
     /// The numbered general-purpose registers R0 - R15.
-    r: [16]u32,
+    r: [16]Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Arm {
         var ctx: Arm = undefined;
@@ -456,17 +465,18 @@ const Arm = struct {
             \\ stm r0, {r0-r12}
             \\ str r13, [r0, #0x34]
             \\ str r14, [r0, #0x38]
-            \\ str r15, [r0, #0x3c]
+            \\ mov r1, pc
+            \\ str r1, [r0, #0x3c]
             :
             : [r] "{r0}" (&ctx.r),
-            : .{ .memory = true });
+            : .{ .r1 = true, .memory = true });
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Arm) u32 {
+    pub fn getFp(ctx: *const Arm) usize {
         return ctx.r[11];
     }
-    pub fn getPc(ctx: *const Arm) u32 {
+    pub fn getPc(ctx: *const Arm) usize {
         return ctx.r[15];
     }
 
@@ -513,8 +523,10 @@ const Arm = struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Csky = extern struct {
     /// The numbered general-purpose registers r0 - r31.
-    r: [32]u32,
-    pc: u32,
+    r: [32]Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Csky {
         var ctx: Csky = undefined;
@@ -529,10 +541,10 @@ const Csky = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Csky) u32 {
+    pub fn getFp(ctx: *const Csky) usize {
         return ctx.r[14];
     }
-    pub fn getPc(ctx: *const Csky) u32 {
+    pub fn getPc(ctx: *const Csky) usize {
         return ctx.pc;
     }
 
@@ -551,8 +563,10 @@ const Csky = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Hexagon = extern struct {
     /// The numbered general-purpose registers r0 - r31.
-    r: [32]u32,
-    pc: u32,
+    r: [32]Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Hexagon {
         var ctx: Hexagon = undefined;
@@ -597,10 +611,10 @@ const Hexagon = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Hexagon) u32 {
+    pub fn getFp(ctx: *const Hexagon) usize {
         return ctx.r[30];
     }
-    pub fn getPc(ctx: *const Hexagon) u32 {
+    pub fn getPc(ctx: *const Hexagon) usize {
         return ctx.pc;
     }
 
@@ -624,9 +638,11 @@ const Hexagon = extern struct {
 
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Kvx = extern struct {
-    r: [64]u64,
-    ra: u64,
-    pc: u64,
+    r: [64]Gpr,
+    pc: Gpr,
+    ra: Gpr,
+
+    pub const Gpr = u64;
 
     pub inline fn current() Kvx {
         var ctx: Kvx = undefined;
@@ -672,10 +688,10 @@ const Kvx = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Kvx) u64 {
+    pub fn getFp(ctx: *const Kvx) usize {
         return ctx.r[14];
     }
-    pub fn getPc(ctx: *const Kvx) u64 {
+    pub fn getPc(ctx: *const Kvx) usize {
         return ctx.pc;
     }
 
@@ -696,59 +712,61 @@ const Kvx = extern struct {
 
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Lanai = extern struct {
-    r: [32]u32,
+    r: [32]Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Lanai {
         var ctx: Lanai = undefined;
         asm volatile (
-            \\ st %%r0, 0[r9]
-            \\ st %%r1, 4[r9]
-            \\ st %%r2, 8[r9]
-            \\ st %%r3, 12[r9]
-            \\ st %%r4, 16[r9]
-            \\ st %%r5, 20[r9]
-            \\ st %%r6, 24[r9]
-            \\ st %%r7, 28[r9]
-            \\ st %%r8, 32[r9]
-            \\ st %%r9, 36[r9]
-            \\ st %%r10, 40[r9]
-            \\ st %%r11, 44[r9]
-            \\ st %%r12, 48[r9]
-            \\ st %%r13, 52[r9]
-            \\ st %%r14, 56[r9]
-            \\ st %%r15, 60[r9]
-            \\ st %%r16, 64[r9]
-            \\ st %%r17, 68[r9]
-            \\ st %%r18, 72[r9]
-            \\ st %%r19, 76[r9]
-            \\ st %%r20, 80[r9]
-            \\ st %%r21, 84[r9]
-            \\ st %%r22, 88[r9]
-            \\ st %%r23, 92[r9]
-            \\ st %%r24, 96[r9]
-            \\ st %%r25, 100[r9]
-            \\ st %%r26, 104[r9]
-            \\ st %%r27, 108[r9]
-            \\ st %%r28, 112[r9]
-            \\ st %%r29, 116[r9]
-            \\ st %%r30, 120[r9]
-            \\ st %%r31, 124[r9]
+            \\ st %%r0, 0[%%r9]
+            \\ st %%r1, 4[%%r9]
+            \\ st %%r2, 8[%%r9]
+            \\ st %%r3, 12[%%r9]
+            \\ st %%r4, 16[%%r9]
+            \\ st %%r5, 20[%%r9]
+            \\ st %%r6, 24[%%r9]
+            \\ st %%r7, 28[%%r9]
+            \\ st %%r8, 32[%%r9]
+            \\ st %%r9, 36[%%r9]
+            \\ st %%r10, 40[%%r9]
+            \\ st %%r11, 44[%%r9]
+            \\ st %%r12, 48[%%r9]
+            \\ st %%r13, 52[%%r9]
+            \\ st %%r14, 56[%%r9]
+            \\ st %%r15, 60[%%r9]
+            \\ st %%r16, 64[%%r9]
+            \\ st %%r17, 68[%%r9]
+            \\ st %%r18, 72[%%r9]
+            \\ st %%r19, 76[%%r9]
+            \\ st %%r20, 80[%%r9]
+            \\ st %%r21, 84[%%r9]
+            \\ st %%r22, 88[%%r9]
+            \\ st %%r23, 92[%%r9]
+            \\ st %%r24, 96[%%r9]
+            \\ st %%r25, 100[%%r9]
+            \\ st %%r26, 104[%%r9]
+            \\ st %%r27, 108[%%r9]
+            \\ st %%r28, 112[%%r9]
+            \\ st %%r29, 116[%%r9]
+            \\ st %%r30, 120[%%r9]
+            \\ st %%r31, 124[%%r9]
             :
             : [ctx] "{r9}" (&ctx),
             : .{ .memory = true });
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Lanai) u32 {
+    pub fn getFp(ctx: *const Lanai) usize {
         return ctx.r[5];
     }
-    pub fn getPc(ctx: *const Lanai) u32 {
+    pub fn getPc(ctx: *const Lanai) usize {
         return ctx.r[2];
     }
 
     pub fn dwarfRegisterBytes(ctx: *Lanai, register_num: u16) DwarfRegisterError![]u8 {
         switch (register_num) {
-            0...31 => return @ptrCast(&ctx.s[register_num]),
+            0...31 => return @ptrCast(&ctx.r[register_num]),
 
             else => return error.InvalidRegister,
         }
@@ -843,10 +861,10 @@ const LoongArch = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const LoongArch) Gpr {
+    pub fn getFp(ctx: *const LoongArch) usize {
         return ctx.r[22];
     }
-    pub fn getPc(ctx: *const LoongArch) Gpr {
+    pub fn getPc(ctx: *const LoongArch) usize {
         return ctx.pc;
     }
 
@@ -865,10 +883,12 @@ const LoongArch = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const M68k = extern struct {
     /// The numbered data registers d0 - d7.
-    d: [8]u32,
+    d: [8]Gpr,
     /// The numbered address registers a0 - a7.
-    a: [8]u32,
-    pc: u32,
+    a: [8]Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() M68k {
         var ctx: M68k = undefined;
@@ -882,10 +902,10 @@ const M68k = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const M68k) u32 {
+    pub fn getFp(ctx: *const M68k) usize {
         return ctx.a[6];
     }
-    pub fn getPc(ctx: *const M68k) u32 {
+    pub fn getPc(ctx: *const M68k) usize {
         return ctx.pc;
     }
 
@@ -906,8 +926,10 @@ const M68k = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const M88k = extern struct {
     /// The numbered general-purpose registers r0 - r31.
-    r: [32]u32,
-    xip: u32,
+    r: [32]Gpr,
+    xip: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() M88k {
         var ctx: M88k = undefined;
@@ -953,10 +975,10 @@ const M88k = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const M88k) u32 {
+    pub fn getFp(ctx: *const M88k) usize {
         return ctx.r[30];
     }
-    pub fn getPc(ctx: *const M88k) u32 {
+    pub fn getPc(ctx: *const M88k) usize {
         return ctx.xip;
     }
 
@@ -1020,6 +1042,7 @@ const Mips = extern struct {
                 \\ sd $fp, 240($t0)
                 \\ sd $ra, 248($t0)
                 \\ bal 1f
+                \\  nop
                 \\1:
                 \\ sd $ra, 256($t0)
                 \\ .set pop
@@ -1061,6 +1084,7 @@ const Mips = extern struct {
                 \\ sw $fp, 120($t4)
                 \\ sw $ra, 124($t4)
                 \\ bal 1f
+                \\  nop
                 \\1:
                 \\ sw $ra, 128($t4)
                 \\ .set pop
@@ -1104,8 +1128,10 @@ const Mips = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Or1k = extern struct {
     /// The numbered general-purpose registers r0 - r31.
-    r: [32]u32,
-    pc: u32,
+    r: [32]Gpr,
+    pc: Gpr,
+
+    pub const Gpr = u32;
 
     pub inline fn current() Or1k {
         var ctx: Or1k = undefined;
@@ -1143,6 +1169,7 @@ const Or1k = extern struct {
             \\ l.sw 120(r15), r30
             \\ l.sw 124(r15), r31
             \\ l.jal 1f
+            \\  l.nop
             \\1:
             \\ l.sw 128(r15), r9
             :
@@ -1151,10 +1178,10 @@ const Or1k = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Or1k) u32 {
+    pub fn getFp(ctx: *const Or1k) usize {
         return ctx.r[2];
     }
-    pub fn getPc(ctx: *const Or1k) u32 {
+    pub fn getPc(ctx: *const Or1k) usize {
         return ctx.pc;
     }
 
@@ -1263,10 +1290,10 @@ const Powerpc = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Powerpc) Gpr {
+    pub fn getFp(ctx: *const Powerpc) usize {
         return ctx.r[1];
     }
-    pub fn getPc(ctx: *const Powerpc) Gpr {
+    pub fn getPc(ctx: *const Powerpc) usize {
         return ctx.pc;
     }
 
@@ -1416,10 +1443,10 @@ const Riscv = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Riscv) Gpr {
+    pub fn getFp(ctx: *const Riscv) usize {
         return ctx.x[8];
     }
-    pub fn getPc(ctx: *const Riscv) Gpr {
+    pub fn getPc(ctx: *const Riscv) usize {
         return ctx.pc;
     }
 
@@ -1442,12 +1469,14 @@ const Riscv = extern struct {
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const S390x = extern struct {
     /// The numbered general-purpose registers r0 - r15.
-    r: [16]u64,
+    r: [16]Gpr,
     /// The program counter.
     psw: extern struct {
-        mask: u64,
-        addr: u64,
+        mask: Gpr,
+        addr: Gpr,
     },
+
+    pub const Gpr = u64;
 
     pub inline fn current() S390x {
         var ctx: S390x = undefined;
@@ -1463,10 +1492,10 @@ const S390x = extern struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const S390x) u64 {
+    pub fn getFp(ctx: *const S390x) usize {
         return ctx.r[11];
     }
-    pub fn getPc(ctx: *const S390x) u64 {
+    pub fn getPc(ctx: *const S390x) usize {
         return ctx.psw.addr;
     }
 
@@ -1489,7 +1518,7 @@ const S390x = extern struct {
 
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Sparc = extern struct {
-    g: [8]Gpr,
+    g: [8]Gpr align(8), // Align to make `std` safe on 32-bit.
     o: [8]Gpr,
     l: [8]Gpr,
     i: [8]Gpr,
@@ -1502,61 +1531,63 @@ const Sparc = extern struct {
 
         var ctx: Sparc = undefined;
         asm volatile (if (Gpr == u64)
-                \\ stx %g0, [%l0 + 0]
-                \\ stx %g1, [%l0 + 8]
-                \\ stx %g2, [%l0 + 16]
-                \\ stx %g3, [%l0 + 24]
-                \\ stx %g4, [%l0 + 32]
-                \\ stx %g5, [%l0 + 40]
-                \\ stx %g6, [%l0 + 48]
-                \\ stx %g7, [%l0 + 56]
-                \\ stx %o0, [%l0 + 64]
-                \\ stx %o1, [%l0 + 72]
-                \\ stx %o2, [%l0 + 80]
-                \\ stx %o3, [%l0 + 88]
-                \\ stx %o4, [%l0 + 96]
-                \\ stx %o5, [%l0 + 104]
-                \\ stx %o6, [%l0 + 112]
-                \\ stx %o7, [%l0 + 120]
-                \\ stx %l0, [%l0 + 128]
-                \\ stx %l1, [%l0 + 136]
-                \\ stx %l2, [%l0 + 144]
-                \\ stx %l3, [%l0 + 152]
-                \\ stx %l4, [%l0 + 160]
-                \\ stx %l5, [%l0 + 168]
-                \\ stx %l6, [%l0 + 176]
-                \\ stx %l7, [%l0 + 184]
-                \\ stx %i0, [%l0 + 192]
-                \\ stx %i1, [%l0 + 200]
-                \\ stx %i2, [%l0 + 208]
-                \\ stx %i3, [%l0 + 216]
-                \\ stx %i4, [%l0 + 224]
-                \\ stx %i5, [%l0 + 232]
-                \\ stx %i6, [%l0 + 240]
-                \\ stx %i7, [%l0 + 248]
+                \\ stx %%g0, [%%l0 + 0]
+                \\ stx %%g1, [%%l0 + 8]
+                \\ stx %%g2, [%%l0 + 16]
+                \\ stx %%g3, [%%l0 + 24]
+                \\ stx %%g4, [%%l0 + 32]
+                \\ stx %%g5, [%%l0 + 40]
+                \\ stx %%g6, [%%l0 + 48]
+                \\ stx %%g7, [%%l0 + 56]
+                \\ stx %%o0, [%%l0 + 64]
+                \\ stx %%o1, [%%l0 + 72]
+                \\ stx %%o2, [%%l0 + 80]
+                \\ stx %%o3, [%%l0 + 88]
+                \\ stx %%o4, [%%l0 + 96]
+                \\ stx %%o5, [%%l0 + 104]
+                \\ stx %%o6, [%%l0 + 112]
+                \\ stx %%o7, [%%l0 + 120]
+                \\ stx %%l0, [%%l0 + 128]
+                \\ stx %%l1, [%%l0 + 136]
+                \\ stx %%l2, [%%l0 + 144]
+                \\ stx %%l3, [%%l0 + 152]
+                \\ stx %%l4, [%%l0 + 160]
+                \\ stx %%l5, [%%l0 + 168]
+                \\ stx %%l6, [%%l0 + 176]
+                \\ stx %%l7, [%%l0 + 184]
+                \\ stx %%i0, [%%l0 + 192]
+                \\ stx %%i1, [%%l0 + 200]
+                \\ stx %%i2, [%%l0 + 208]
+                \\ stx %%i3, [%%l0 + 216]
+                \\ stx %%i4, [%%l0 + 224]
+                \\ stx %%i5, [%%l0 + 232]
+                \\ stx %%i6, [%%l0 + 240]
+                \\ stx %%i7, [%%l0 + 248]
                 \\ call 1f
+                \\  nop
                 \\1:
-                \\ stx %o7, [%l0 + 256]
+                \\ stx %%o7, [%%l0 + 256]
             else
-                \\ std %g0, [%l0 + 0]
-                \\ std %g2, [%l0 + 8]
-                \\ std %g4, [%l0 + 16]
-                \\ std %g6, [%l0 + 24]
-                \\ std %o0, [%l0 + 32]
-                \\ std %o2, [%l0 + 40]
-                \\ std %o4, [%l0 + 48]
-                \\ std %o6, [%l0 + 56]
-                \\ std %l0, [%l0 + 64]
-                \\ std %l2, [%l0 + 72]
-                \\ std %l4, [%l0 + 80]
-                \\ std %l6, [%l0 + 88]
-                \\ std %i0, [%l0 + 96]
-                \\ std %i2, [%l0 + 104]
-                \\ std %i4, [%l0 + 112]
-                \\ std %i6, [%l0 + 120]
+                \\ std %%g0, [%%l0 + 0]
+                \\ std %%g2, [%%l0 + 8]
+                \\ std %%g4, [%%l0 + 16]
+                \\ std %%g6, [%%l0 + 24]
+                \\ std %%o0, [%%l0 + 32]
+                \\ std %%o2, [%%l0 + 40]
+                \\ std %%o4, [%%l0 + 48]
+                \\ std %%o6, [%%l0 + 56]
+                \\ std %%l0, [%%l0 + 64]
+                \\ std %%l2, [%%l0 + 72]
+                \\ std %%l4, [%%l0 + 80]
+                \\ std %%l6, [%%l0 + 88]
+                \\ std %%i0, [%%l0 + 96]
+                \\ std %%i2, [%%l0 + 104]
+                \\ std %%i4, [%%l0 + 112]
+                \\ std %%i6, [%%l0 + 120]
                 \\ call 1f
+                \\  nop
                 \\1:
-                \\ st %o7, [%l0 + 128]
+                \\ st %%o7, [%%l0 + 128]
             :
             : [ctx] "{l0}" (&ctx),
             : .{ .o7 = true, .memory = true });
@@ -1572,10 +1603,10 @@ const Sparc = extern struct {
             asm volatile ("ta 3" ::: .{ .memory = true }); // ST_FLUSH_WINDOWS
     }
 
-    pub fn getFp(ctx: *const Sparc) Gpr {
+    pub fn getFp(ctx: *const Sparc) usize {
         return ctx.i[6];
     }
-    pub fn getPc(ctx: *const Sparc) Gpr {
+    pub fn getPc(ctx: *const Sparc) usize {
         return ctx.pc;
     }
 
@@ -1585,7 +1616,11 @@ const Sparc = extern struct {
             8...15 => return @ptrCast(&ctx.o[register_num - 8]),
             16...23 => return @ptrCast(&ctx.l[register_num - 16]),
             24...31 => return @ptrCast(&ctx.i[register_num - 24]),
-            32 => return @ptrCast(&ctx.pc),
+            65 => return @ptrCast(&ctx.pc),
+
+            32...63 => return error.UnsupportedRegister, // F0-F31
+            64 => return error.UnsupportedRegister, // Y
+            72...87 => return error.UnsupportedRegister, // D0-D15
 
             else => return error.InvalidRegister,
         }
@@ -1594,8 +1629,10 @@ const Sparc = extern struct {
 
 /// This is an `extern struct` so that inline assembly in `current` can use field offsets.
 const Ve = extern struct {
-    s: [64]u64,
-    ic: u64,
+    s: [64]Gpr,
+    ic: Gpr,
+
+    pub const Gpr = u64;
 
     pub inline fn current() Ve {
         var ctx: Ve = undefined;
@@ -1664,19 +1701,18 @@ const Ve = extern struct {
             \\ st %%s61, 488(, %%s8)
             \\ st %%s62, 496(, %%s8)
             \\ st %%s63, 504(, %%s8)
-            \\ br.l 1f
-            \\1:
-            \\ st %%lr, 512(, %%s8)
+            \\ sic %%s10
+            \\ st %%s10, 512(, %%s8)
             :
             : [ctx] "{s8}" (&ctx),
             : .{ .s10 = true, .memory = true });
         return ctx;
     }
 
-    pub fn getFp(ctx: *const Ve) u64 {
+    pub fn getFp(ctx: *const Ve) usize {
         return ctx.s[9];
     }
-    pub fn getPc(ctx: *const Ve) u64 {
+    pub fn getPc(ctx: *const Ve) usize {
         return ctx.ic;
     }
 
@@ -1694,14 +1730,15 @@ const Ve = extern struct {
 };
 
 const X86_16 = struct {
-    pub const Register = enum {
+    regs: std.enums.EnumArray(GprName, Gpr),
+
+    pub const GprName = enum {
         // zig fmt: off
         sp, bp, ss,
         ip, cs,
         // zig fmt: on
     };
-
-    regs: std.enums.EnumArray(Register, u16),
+    pub const Gpr = u16;
 
     pub inline fn current() X86_16 {
         var ctx: X86_16 = undefined;
@@ -1720,10 +1757,10 @@ const X86_16 = struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const X86_16) u16 {
+    pub fn getFp(ctx: *const X86_16) usize {
         return ctx.regs.get(.bp);
     }
-    pub fn getPc(ctx: *const X86_16) u16 {
+    pub fn getPc(ctx: *const X86_16) usize {
         return ctx.regs.get(.ip);
     }
 
@@ -1732,7 +1769,7 @@ const X86_16 = struct {
         switch (register_num) {
             4 => return @ptrCast(ctx.regs.getPtr(.sp)),
             5 => return @ptrCast(ctx.regs.getPtr(.bp)),
-            6 => return @ptrCast(ctx.regs.getPtr(.ip)),
+            8 => return @ptrCast(ctx.regs.getPtr(.ip)),
             41 => return @ptrCast(ctx.regs.getPtr(.cs)),
             42 => return @ptrCast(ctx.regs.getPtr(.ss)),
             else => return error.InvalidRegister,
@@ -1741,17 +1778,19 @@ const X86_16 = struct {
 };
 
 const X86 = struct {
+    gprs: std.enums.EnumArray(GprName, Gpr),
+
     /// The first 8 registers here intentionally match the order of registers in the x86 instruction
     /// encoding. This order is inherited by the PUSHA instruction and the DWARF register mappings,
     /// among other things.
-    pub const Gpr = enum {
+    pub const GprName = enum {
         // zig fmt: off
         eax, ecx, edx, ebx,
         esp, ebp, esi, edi,
         eip,
         // zig fmt: on
     };
-    gprs: std.enums.EnumArray(Gpr, u32),
+    pub const Gpr = u32;
 
     pub inline fn current() X86 {
         var ctx: X86 = undefined;
@@ -1773,10 +1812,10 @@ const X86 = struct {
         return ctx;
     }
 
-    pub fn getFp(ctx: *const X86) u32 {
+    pub fn getFp(ctx: *const X86) usize {
         return ctx.gprs.get(.ebp);
     }
-    pub fn getPc(ctx: *const X86) u32 {
+    pub fn getPc(ctx: *const X86) usize {
         return ctx.gprs.get(.eip);
     }
 
@@ -1807,10 +1846,12 @@ const X86 = struct {
 };
 
 const X86_64 = struct {
+    gprs: std.enums.EnumArray(GprName, Gpr),
+
     /// The order here intentionally matches the order of the DWARF register mappings. It's unclear
     /// where those mappings actually originated from---the ordering of the first 4 registers seems
     /// quite unusual---but it is currently convenient for us to match DWARF.
-    pub const Gpr = enum {
+    pub const GprName = enum {
         // zig fmt: off
         rax, rdx, rcx, rbx,
         rsi, rdi, rbp, rsp,
@@ -1819,7 +1860,7 @@ const X86_64 = struct {
         rip,
         // zig fmt: on
     };
-    gprs: std.enums.EnumArray(Gpr, u64),
+    pub const Gpr = u64;
 
     pub inline fn current() X86_64 {
         var ctx: X86_64 = undefined;
@@ -1990,6 +2031,8 @@ const signal_ucontext_t = switch (native_os) {
         .mips64el,
         .or1k,
         .s390x,
+        .sh,
+        .sheb,
         .x86,
         .x86_64,
         .xtensa,

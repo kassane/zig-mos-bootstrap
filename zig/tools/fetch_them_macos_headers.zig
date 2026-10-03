@@ -24,6 +24,7 @@ const OsVer = enum(u32) {
     sonoma = 14,
     sequoia = 15,
     tahoe = 26,
+    golden_gate = 27,
 };
 
 const Target = struct {
@@ -44,7 +45,7 @@ const Target = struct {
         return std.fmt.allocPrint(allocator, "{s}-{s}.{d}-{s}", .{
             @tagName(self.arch),
             @tagName(self.os),
-            @intFromEnum(self.os_ver),
+            @backingInt(self.os_ver),
             @tagName(self.abi),
         });
     }
@@ -97,7 +98,7 @@ pub fn main(init: std.process.Init) !void {
         fatal("don't know how to parse SDK version: {s}", .{
             parsed_json.value.DefaultProperties.MACOSX_DEPLOYMENT_TARGET,
         });
-    const os_ver: OsVer = @enumFromInt(version.major);
+    const os_ver: OsVer = @fromBackingInt(@intCast(version.major));
     info("found SDK deployment target macOS {f} aka '{t}'", .{ version, os_ver });
 
     const tmp_dir: Io.Dir = .cwd();
@@ -187,8 +188,8 @@ fn fetchTarget(
 
     var it = mem.splitScalar(u8, headers_list_str, '\n');
     while (it.next()) |line| {
-        if (mem.lastIndexOf(u8, line, "clang") != null) continue;
-        if (mem.lastIndexOf(u8, line, prefix[0..])) |idx| {
+        if (mem.findLast(u8, line, "clang") != null) continue;
+        if (mem.findLast(u8, line, prefix[0..])) |idx| {
             const out_rel_path = line[idx + prefix.len + 1 ..];
             const out_rel_path_stripped = mem.trim(u8, out_rel_path, " \\");
             const dirname = Dir.path.dirname(out_rel_path_stripped) orelse ".";

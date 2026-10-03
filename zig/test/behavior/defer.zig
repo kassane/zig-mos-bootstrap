@@ -89,6 +89,7 @@ fn runSomeErrorDefers(x: bool) !bool {
 }
 
 test "mixing normal and error defers" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
 
@@ -109,7 +110,6 @@ test "mixing normal and error defers" {
 test "simple else prong doesn't emit an error for unreachable else prong" {
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
-
     const S = struct {
         fn foo() error{Foo}!void {
             return error.Foo;

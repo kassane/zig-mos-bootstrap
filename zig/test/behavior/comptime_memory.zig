@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const endian = builtin.cpu.arch.endian();
-const testing = @import("std").testing;
+const testing = std.testing;
+const assert = std.debug.assert;
 const ptr_size = @sizeOf(usize);
 
 test "type pun signed and unsigned as single pointer" {
@@ -431,12 +432,16 @@ test "type pun @ptrFromInt" {
 }
 
 test "type pun null pointer-like optional" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+
     const p: ?*u8 = null;
     // note that expectEqual hides the bug
     try testing.expect(@as(*const ?*i8, @ptrCast(&p)).* == null);
 }
 
 test "write empty array to end" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+
     comptime var array: [5]u8 = "hello".*;
     array[5..5].* = .{};
     array[5..5].* = [0]u8{};
@@ -516,7 +521,6 @@ fn fieldPtrTest() u32 {
 }
 test "pointer in aggregate field can mutate comptime state" {
     if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
-
     try comptime std.testing.expect(fieldPtrTest() == 2);
 }
 
@@ -553,6 +557,8 @@ test "comptime store of packed struct with void field into array" {
 }
 
 test "comptime store of reinterpreted zero-bit type" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+
     const S = struct {
         fn doTheTest(comptime T: type) void {
             comptime var buf: T = undefined;
@@ -581,4 +587,32 @@ test "comptime store to extern struct reinterpreted as byte array" {
     @memset(bytes, 0);
 
     comptime std.debug.assert(val.x == 0);
+}
+
+test "reinterpret sentinel-terminated array as packed struct" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+
+    const S = packed struct(u16) { lo: u8, hi: u8 };
+    const data: [2:0]u8 = .{ 0x12, 0x34 };
+    const ptr: *align(1) const S = @ptrCast(&data);
+    switch (endian) {
+        .little => {
+            try testing.expect(ptr.lo == 0x12);
+            try testing.expect(ptr.hi == 0x34);
+        },
+        .big => {
+            try testing.expect(ptr.lo == 0x34);
+            try testing.expect(ptr.hi == 0x12);
+        },
+    }
+}
+
+test "reinterpret pointer as optional pointer via double-pointer coercion" {
+    const p0: *const *anyopaque = &@ptrFromInt(0x1000);
+    const p1: *const ?*anyopaque = p0;
+
+    const loaded = p1.*;
+
+    comptime assert(@TypeOf(loaded) == ?*anyopaque);
+    comptime assert(@intFromPtr(loaded) == 0x1000);
 }

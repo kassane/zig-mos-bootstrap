@@ -52,7 +52,7 @@ within_fn: bool = false,
 fn_ret_ty: Zir.Inst.Ref = .none,
 /// Maps string table indexes to the first `@import` ZIR instruction
 /// that uses this string as the operand.
-imports: std.AutoArrayHashMapUnmanaged(Zir.NullTerminatedString, Ast.TokenIndex) = .empty,
+imports: std.array_hash_map.Auto(Zir.NullTerminatedString, Ast.TokenIndex) = .empty,
 /// Used for temporary storage when building payloads.
 scratch: std.ArrayList(u32) = .empty,
 /// Whenever a `ref` instruction is needed, it is created and saved in this
@@ -74,13 +74,13 @@ src_hasher: std.zig.SrcHasher,
 const InnerError = error{ OutOfMemory, AnalysisFail };
 
 fn addExtra(astgen: *AstGen, extra: anytype) Allocator.Error!u32 {
-    const field_count = std.meta.fieldNames(@TypeOf(extra)).len;
+    const field_count = @typeInfo(@TypeOf(extra)).@"struct".field_names.len;
     try astgen.extra.ensureUnusedCapacity(astgen.gpa, field_count);
     return addExtraAssumeCapacity(astgen, extra);
 }
 
 fn addExtraAssumeCapacity(astgen: *AstGen, extra: anytype) u32 {
-    const field_count = std.meta.fieldNames(@TypeOf(extra)).len;
+    const field_count = @typeInfo(@TypeOf(extra)).@"struct".field_names.len;
     const extra_index: u32 = @intCast(astgen.extra.items.len);
     astgen.extra.items.len += field_count;
     setExtra(astgen, extra_index, extra);
@@ -103,13 +103,13 @@ fn setExtra(astgen: *AstGen, index: usize, extra: anytype) void {
             Ast.OptionalTokenIndex,
             Ast.Node.Index,
             Ast.Node.OptionalIndex,
-            => @intFromEnum(@field(extra, field_name)),
+            => @backingInt(@field(extra, field_name)),
 
             Ast.TokenOffset,
             Ast.OptionalTokenOffset,
             Ast.Node.Offset,
             Ast.Node.OptionalOffset,
-            => @bitCast(@intFromEnum(@field(extra, field_name))),
+            => @bitCast(@backingInt(@field(extra, field_name))),
 
             i32,
             Zir.Inst.Call.Flags,
@@ -176,7 +176,7 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
     var gen_scope: GenZir = .{
         .is_comptime = true,
         .parent = &top_scope.base,
-        .decl_node_index = .root,
+        .src_baseline = .root,
         .decl_line = 0,
         .astgen = &astgen,
         .instructions = &gz_instructions,
@@ -207,7 +207,7 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         break :fatal true;
     };
 
-    const err_index = @intFromEnum(Zir.ExtraIndex.compile_errors);
+    const err_index = @backingInt(Zir.ExtraIndex.compile_errors);
     if (astgen.compile_errors.items.len == 0) {
         astgen.extra.items[err_index] = 0;
     } else {
@@ -223,7 +223,7 @@ pub fn generate(gpa: Allocator, tree: Ast) Allocator.Error!Zir {
         }
     }
 
-    const imports_index = @intFromEnum(Zir.ExtraIndex.imports);
+    const imports_index = @backingInt(Zir.ExtraIndex.imports);
     if (astgen.imports.count() == 0) {
         astgen.extra.items[imports_index] = 0;
     } else {
@@ -927,15 +927,14 @@ fn expr(gz: *GenZir, scope: *Scope, ri: ResultInfo, node: Ast.Node.Index) InnerE
 
         .deref => {
             const lhs = try expr(gz, scope, .{ .rl = .none }, tree.nodeData(node).node);
-            _ = try gz.addUnNode(.validate_deref, lhs, node);
             switch (ri.rl) {
                 .ref,
                 .ref_coerced_ty,
                 .ref_const,
-                => return lhs,
+                => return gz.addUnNode(.ref_deref, lhs, node),
 
                 else => {
-                    const result = try gz.addUnNode(.load, lhs, node);
+                    const result = try gz.addUnNode(.deref, lhs, node);
                     return rvalue(gz, ri, result, node);
                 },
             }
@@ -1381,7 +1380,7 @@ fn fnProtoExprInner(
                 defer param_gz.unstack();
                 param_gz.is_comptime = true;
                 const param_type = try fullBodyExpr(&param_gz, scope, coerced_type_ri, param_type_node, .normal);
-                const param_inst_expected: Zir.Inst.Index = @enumFromInt(astgen.instructions.len + 1);
+                const param_inst_expected: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len + 1));
                 _ = try param_gz.addBreakWithSrcNode(.break_inline, param_inst_expected, param_type, param_type_node);
                 const name_token = param.name_token orelse tree.nodeMainToken(param_type_node);
                 const tag: Zir.Inst.Tag = if (is_comptime) .param_comptime else .param;
@@ -1507,7 +1506,7 @@ fn arrayInitExpr(
                             .tag = .array_init_elem_type,
                             .data = .{ .bin = .{
                                 .lhs = array_ty,
-                                .rhs = @enumFromInt(i),
+                                .rhs = @fromBackingInt(@intCast(i)),
                             } },
                         });
                         _ = try expr(gz, scope, .{ .rl = .{ .ty = this_elem_ty } }, elem_init);
@@ -1599,7 +1598,7 @@ fn arrayInitExprAnon(
 
     for (elements) |elem_init| {
         const elem_ref = try expr(gz, scope, .{ .rl = .none }, elem_init);
-        astgen.extra.items[extra_index] = @intFromEnum(elem_ref);
+        astgen.extra.items[extra_index] = @backingInt(elem_ref);
         extra_index += 1;
     }
     return try gz.addPlNodePayloadIndex(.array_init_anon, node, payload_index);
@@ -1622,14 +1621,14 @@ fn arrayInitExprTyped(
         .operands_len = @intCast(len),
     });
     var extra_index = try reserveExtra(astgen, len);
-    astgen.extra.items[extra_index] = @intFromEnum(ty_inst);
+    astgen.extra.items[extra_index] = @backingInt(ty_inst);
     extra_index += 1;
 
     if (maybe_elem_ty_inst != .none) {
         const elem_ri: ResultInfo = .{ .rl = .{ .coerced_ty = maybe_elem_ty_inst } };
         for (elements) |elem_init| {
             const elem_inst = try expr(gz, scope, elem_ri, elem_init);
-            astgen.extra.items[extra_index] = @intFromEnum(elem_inst);
+            astgen.extra.items[extra_index] = @backingInt(elem_inst);
             extra_index += 1;
         }
     } else {
@@ -1638,12 +1637,12 @@ fn arrayInitExprTyped(
                 .tag = .array_init_elem_type,
                 .data = .{ .bin = .{
                     .lhs = ty_inst,
-                    .rhs = @enumFromInt(i),
+                    .rhs = @fromBackingInt(@intCast(i)),
                 } },
             }) } };
 
             const elem_inst = try expr(gz, scope, ri, elem_init);
-            astgen.extra.items[extra_index] = @intFromEnum(elem_inst);
+            astgen.extra.items[extra_index] = @backingInt(elem_inst);
             extra_index += 1;
         }
     }
@@ -1674,7 +1673,7 @@ fn arrayInitExprPtr(
             .ptr = array_ptr_inst,
             .index = @intCast(i),
         });
-        astgen.extra.items[extra_index] = @intFromEnum(elem_ptr_inst.toIndex().?);
+        astgen.extra.items[extra_index] = @backingInt(elem_ptr_inst.toIndex().?);
         extra_index += 1;
         _ = try expr(gz, scope, .{ .rl = .{ .ptr = .{ .inst = elem_ptr_inst } } }, elem_init);
     }
@@ -1885,7 +1884,8 @@ fn structInitExprAnon(
 
     const payload_index = try addExtra(astgen, Zir.Inst.StructInitAnon{
         .abs_node = node,
-        .abs_line = astgen.source_line,
+        .src_line = astgen.source_line,
+        .src_column = astgen.source_column,
         .fields_len = @intCast(struct_init.ast.fields.len),
     });
     const field_size = @typeInfo(Zir.Inst.StructInitAnon.Item).@"struct".field_names.len;
@@ -1918,7 +1918,8 @@ fn structInitExprTyped(
 
     const payload_index = try addExtra(astgen, Zir.Inst.StructInit{
         .abs_node = node,
-        .abs_line = astgen.source_line,
+        .src_line = astgen.source_line,
+        .src_column = astgen.source_column,
         .fields_len = @intCast(struct_init.ast.fields.len),
     });
     const field_size = @typeInfo(Zir.Inst.StructInit.Item).@"struct".field_names.len;
@@ -1967,7 +1968,7 @@ fn structInitExprPtr(
             .lhs = struct_ptr_inst,
             .field_name_start = str_index,
         });
-        astgen.extra.items[extra_index] = @intFromEnum(field_ptr.toIndex().?);
+        astgen.extra.items[extra_index] = @backingInt(field_ptr.toIndex().?);
         extra_index += 1;
         _ = try expr(gz, scope, .{ .rl = .{ .ptr = .{ .inst = field_ptr } } }, field_init);
     }
@@ -2659,11 +2660,11 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
         // Note that this array becomes invalid after appending more items to it
         // in the above while loop.
         const zir_tags = gz.astgen.instructions.items(.tag);
-        switch (zir_tags[@intFromEnum(inst)]) {
+        switch (zir_tags[@backingInt(inst)]) {
             // For some instructions, modify the zir data
             // so we can avoid a separate ensure_result_used instruction.
             .call, .field_call => {
-                const break_extra = gz.astgen.instructions.items(.data)[@intFromEnum(inst)].pl_node.payload_index;
+                const break_extra = gz.astgen.instructions.items(.data)[@backingInt(inst)].pl_node.payload_index;
                 comptime assert(std.meta.fieldIndex(Zir.Inst.Call, "flags") ==
                     std.meta.fieldIndex(Zir.Inst.FieldCall, "flags"));
                 const flags: *Zir.Inst.Call.Flags = @ptrCast(&gz.astgen.extra.items[
@@ -2673,7 +2674,7 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
                 break :b true;
             },
             .builtin_call => {
-                const break_extra = gz.astgen.instructions.items(.data)[@intFromEnum(inst)].pl_node.payload_index;
+                const break_extra = gz.astgen.instructions.items(.data)[@backingInt(inst)].pl_node.payload_index;
                 const flags: *Zir.Inst.BuiltinCall.Flags = @ptrCast(&gz.astgen.extra.items[
                     break_extra + std.meta.fieldIndex(Zir.Inst.BuiltinCall, "flags").?
                 ]);
@@ -2704,6 +2705,7 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .elem_type,
             .indexable_ptr_elem_type,
             .splat_op_result_ty,
+            .from_backing_int_arg_ty,
             .reify_int,
             .vector_type,
             .indexable_ptr_len,
@@ -2759,6 +2761,8 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .mulwrap,
             .mul_sat,
             .ref,
+            .deref,
+            .ref_deref,
             .shl,
             .shl_sat,
             .shr,
@@ -2802,6 +2806,8 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .error_set_decl,
             .enum_from_int,
             .int_from_enum,
+            .backing_int,
+            .from_backing_int,
             .type_info,
             .size_of,
             .bit_size_of,
@@ -2844,6 +2850,7 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .bit_reverse,
             .div_exact,
             .div_floor,
+            .div_ceil,
             .div_trunc,
             .mod,
             .rem,
@@ -2883,7 +2890,7 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .array_init_elem_ptr,
             => break :b false,
 
-            .extended => switch (gz.astgen.instructions.items(.data)[@intFromEnum(inst)].extended.opcode) {
+            .extended => switch (gz.astgen.instructions.items(.data)[@backingInt(inst)].extended.opcode) {
                 .breakpoint,
                 .disable_instrumentation,
                 .disable_intrinsics,
@@ -2932,7 +2939,6 @@ fn addEnsureResult(gz: *GenZir, maybe_unused_result: Zir.Inst.Ref, statement: As
             .memcpy,
             .memset,
             .memmove,
-            .validate_deref,
             .validate_destructure,
             .save_err_ret_index,
             .restore_err_ret_index_unconditional,
@@ -3071,7 +3077,7 @@ fn deferStmt(
     const expr_node = tree.nodeData(node).node;
     _ = try unusedResultExpr(&defer_gen, &defer_gen.base, expr_node);
     try checkUsed(gz, scope, &defer_gen.base);
-    _ = try defer_gen.addBreak(.break_inline, @enumFromInt(0), .void_value);
+    _ = try defer_gen.addBreak(.break_inline, @fromBackingInt(@intCast(0)), .void_value);
 
     const body = defer_gen.instructionsSlice();
     const body_len = gz.astgen.countBodyLenAfterFixupsExtraRefs(body, &.{});
@@ -3130,7 +3136,7 @@ fn varDecl(
     }
 
     const align_inst: Zir.Inst.Ref = if (var_decl.ast.align_node.unwrap()) |align_node|
-        try expr(gz, scope, coerced_align_ri, align_node)
+        try comptimeExpr(gz, scope, coerced_align_ri, align_node, .@"align")
     else
         .none;
 
@@ -3477,7 +3483,7 @@ fn assignDestructureMaybeDecls(
                 const this_variable_comptime = is_comptime or (is_const and value_is_comptime);
 
                 const align_inst: Zir.Inst.Ref = if (full_var_decl.ast.align_node.unwrap()) |align_node|
-                    try expr(gz, scope, coerced_align_ri, align_node)
+                    try comptimeExpr(gz, scope, coerced_align_ri, align_node, .@"align")
                 else
                     .none;
 
@@ -3485,10 +3491,10 @@ fn assignDestructureMaybeDecls(
                     // Typed alloc
                     const type_inst = try typeExpr(gz, scope, type_node);
                     const ptr = if (align_inst == .none) ptr: {
-                        const tag: Zir.Inst.Tag = if (is_const)
-                            .alloc
-                        else if (this_variable_comptime)
+                        const tag: Zir.Inst.Tag = if (this_variable_comptime)
                             .alloc_comptime_mut
+                        else if (is_const)
+                            .alloc
                         else
                             .alloc_mut;
                         break :ptr try gz.addUnNode(tag, type_inst, node);
@@ -3659,12 +3665,12 @@ fn assignOp(
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = .inplace_arith_result_ty,
-                .small = @intFromEnum(@as(Zir.Inst.InplaceOp, switch (op_inst_tag) {
+                .small = @backingInt(@as(Zir.Inst.InplaceOp, switch (op_inst_tag) {
                     .add => .add_eq,
                     .sub => .sub_eq,
                     else => unreachable,
                 })),
-                .operand = @intFromEnum(lhs),
+                .operand = @backingInt(lhs),
             } },
         }),
         else => try gz.addUnNode(.typeof, lhs, infix_node), // same as LHS type
@@ -3745,6 +3751,9 @@ fn ptrType(
     if (ptr_info.size == .c and ptr_info.allowzero_token != null) {
         return gz.astgen.failTok(ptr_info.allowzero_token.?, "C pointers always allow address zero", .{});
     }
+    if (ptr_info.duplicate_token) |duplicate| {
+        return gz.astgen.failTok(duplicate, "Extra pointer qualifier", .{});
+    }
 
     const source_offset = gz.astgen.source_offset;
     const source_line = gz.astgen.source_line;
@@ -3812,20 +3821,20 @@ fn ptrType(
         .src_node = gz.nodeIndexToRelative(node),
     });
     if (sentinel_ref != .none) {
-        gz.astgen.extra.appendAssumeCapacity(@intFromEnum(sentinel_ref));
+        gz.astgen.extra.appendAssumeCapacity(@backingInt(sentinel_ref));
     }
     if (align_ref != .none) {
-        gz.astgen.extra.appendAssumeCapacity(@intFromEnum(align_ref));
+        gz.astgen.extra.appendAssumeCapacity(@backingInt(align_ref));
     }
     if (addrspace_ref != .none) {
-        gz.astgen.extra.appendAssumeCapacity(@intFromEnum(addrspace_ref));
+        gz.astgen.extra.appendAssumeCapacity(@backingInt(addrspace_ref));
     }
     if (bit_start_ref != .none) {
-        gz.astgen.extra.appendAssumeCapacity(@intFromEnum(bit_start_ref));
-        gz.astgen.extra.appendAssumeCapacity(@intFromEnum(bit_end_ref));
+        gz.astgen.extra.appendAssumeCapacity(@backingInt(bit_start_ref));
+        gz.astgen.extra.appendAssumeCapacity(@backingInt(bit_end_ref));
     }
 
-    const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+    const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
     const result = new_index.toRef();
     gz.astgen.instructions.appendAssumeCapacity(.{ .tag = .ptr_type, .data = .{
         .ptr_type = .{
@@ -3950,7 +3959,7 @@ const WipDecls = struct {
         wip.* = undefined;
     }
     fn nextDecl(wip: *WipDecls, decl_inst: Zir.Inst.Index) void {
-        wip.slice.get(wip.astgen)[wip.index] = @intFromEnum(decl_inst);
+        wip.slice.get(wip.astgen)[wip.index] = @backingInt(decl_inst);
         wip.index += 1;
     }
 };
@@ -4005,7 +4014,7 @@ fn fnDecl(
     };
     const lib_name = if (fn_proto.lib_name) |lib_name_token| blk: {
         const lib_name_str = try astgen.strLitAsString(lib_name_token);
-        const lib_name_slice = astgen.string_bytes.items[@intFromEnum(lib_name_str.index)..][0..lib_name_str.len];
+        const lib_name_slice = astgen.string_bytes.items[@backingInt(lib_name_str.index)..][0..lib_name_str.len];
         if (mem.findScalar(u8, lib_name_slice, 0) != null) {
             return astgen.failTok(lib_name_token, "library name cannot contain null bytes", .{});
         } else if (lib_name_str.len == 0) {
@@ -4039,7 +4048,7 @@ fn fnDecl(
 
     var type_gz: GenZir = .{
         .is_comptime = true,
-        .decl_node_index = fn_proto.ast.proto_node,
+        .src_baseline = fn_proto.ast.proto_node,
         .decl_line = astgen.source_line,
         .parent = scope,
         .astgen = astgen,
@@ -4224,7 +4233,7 @@ fn fnDeclInner(
                 var param_gz = decl_gz.makeSubBlock(scope);
                 defer param_gz.unstack();
                 const param_type = try fullBodyExpr(&param_gz, params_scope, coerced_type_ri, param_type_node, .normal);
-                const param_inst_expected: Zir.Inst.Index = @enumFromInt(astgen.instructions.len + 1);
+                const param_inst_expected: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len + 1));
                 _ = try param_gz.addBreakWithSrcNode(.break_inline, param_inst_expected, param_type, param_type_node);
                 const param_type_is_generic = any_param_used;
 
@@ -4269,7 +4278,7 @@ fn fnDeclInner(
             // In this case we will send a len=0 body which can be encoded more efficiently.
             break :inst inst;
         }
-        _ = try ret_gz.addBreak(.break_inline, @enumFromInt(0), inst);
+        _ = try ret_gz.addBreak(.break_inline, @fromBackingInt(@intCast(0)), inst);
         break :inst inst;
     };
     const ret_body_param_refs = try astgen.fetchRemoveRefEntries(param_insts.items);
@@ -4292,11 +4301,11 @@ fn fnDeclInner(
                 // In this case we will send a len=0 body which can be encoded more efficiently.
                 break :blk inst;
             }
-            _ = try cc_gz.addBreak(.break_inline, @enumFromInt(0), inst);
+            _ = try cc_gz.addBreak(.break_inline, @fromBackingInt(@intCast(0)), inst);
             break :blk inst;
         } else if (has_inline_keyword) {
             const inst = try cc_gz.addStdLangValue(decl_node, .calling_convention_inline);
-            _ = try cc_gz.addBreak(.break_inline, @enumFromInt(0), inst);
+            _ = try cc_gz.addBreak(.break_inline, @fromBackingInt(@intCast(0)), inst);
             break :blk inst;
         } else {
             break :blk .none;
@@ -4305,7 +4314,7 @@ fn fnDeclInner(
 
     var body_gz: GenZir = .{
         .is_comptime = false,
-        .decl_node_index = fn_proto.ast.proto_node,
+        .src_baseline = fn_proto.ast.proto_node,
         .decl_line = decl_gz.decl_line,
         .parent = params_scope,
         .astgen = astgen,
@@ -4421,7 +4430,7 @@ fn globalVarDecl(
     } else false;
     const lib_name = if (var_decl.lib_name) |lib_name_token| blk: {
         const lib_name_str = try astgen.strLitAsString(lib_name_token);
-        const lib_name_slice = astgen.string_bytes.items[@intFromEnum(lib_name_str.index)..][0..lib_name_str.len];
+        const lib_name_slice = astgen.string_bytes.items[@backingInt(lib_name_str.index)..][0..lib_name_str.len];
         if (mem.findScalar(u8, lib_name_slice, 0) != null) {
             return astgen.failTok(lib_name_token, "library name cannot contain null bytes", .{});
         } else if (lib_name_str.len == 0) {
@@ -4459,7 +4468,7 @@ fn globalVarDecl(
 
     var type_gz: GenZir = .{
         .parent = scope,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = astgen.source_line,
         .astgen = astgen,
         .is_comptime = true,
@@ -4561,7 +4570,7 @@ fn comptimeDecl(
 
     var comptime_gz: GenZir = .{
         .is_comptime = true,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = astgen.source_line,
         .parent = scope,
         .astgen = astgen,
@@ -4625,7 +4634,7 @@ fn testDecl(
 
     var decl_block: GenZir = .{
         .is_comptime = true,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = astgen.source_line,
         .parent = scope,
         .astgen = astgen,
@@ -4643,7 +4652,7 @@ fn testDecl(
         else => .empty,
         .string_literal => name: {
             const name = try astgen.strLitAsString(test_name_token);
-            const slice = astgen.string_bytes.items[@intFromEnum(name.index)..][0..name.len];
+            const slice = astgen.string_bytes.items[@backingInt(name.index)..][0..name.len];
             if (mem.findScalar(u8, slice, 0) != null) {
                 return astgen.failTok(test_name_token, "test name cannot contain null bytes", .{});
             } else if (slice.len == 0) {
@@ -4723,7 +4732,7 @@ fn testDecl(
 
     var fn_block: GenZir = .{
         .is_comptime = false,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = decl_block.decl_line,
         .parent = &decl_block.base,
         .astgen = astgen,
@@ -4839,11 +4848,17 @@ fn structDeclInner(
     astgen.advanceSourceCursorToNode(node);
 
     const decl_inst = try gz.reserveInstructionIndex();
+    const src_line = astgen.source_line;
+    const src_column = astgen.source_column;
 
     if (container_decl.ast.members.len == 0 and maybe_backing_int_node == .none) {
         try gz.setStruct(decl_inst, .{
+            .src_line = src_line,
+            .src_column = src_column,
             .src_node = node,
             .name_strat = name_strat,
+            .arg_baseline_src_node = .none,
+            .fields_baseline_src_node = .none,
             .layout = layout,
             .backing_int_type_body_len = null,
             .decls_len = 0,
@@ -4873,7 +4888,7 @@ fn structDeclInner(
     // can refer to decls within the struct itself.
     var block_scope: GenZir = .{
         .parent = &namespace.base,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = gz.decl_line,
         .astgen = astgen,
         .is_comptime = true,
@@ -4895,7 +4910,7 @@ fn structDeclInner(
     const field_default_body_lens = try scratch.addOptionalSlice(scan_result.any_field_values, scan_result.fields_len);
     const field_comptime_bits = try scratch.addOptionalSlice(
         scan_result.any_comptime_fields,
-        std.math.divCeil(u32, scan_result.fields_len, 32) catch unreachable,
+        @divCeil(scan_result.fields_len, 32),
     );
     if (field_comptime_bits) |bits| @memset(bits.get(astgen), 0);
 
@@ -4920,6 +4935,7 @@ fn structDeclInner(
         break :len body_len;
     } else null;
 
+    var fields_src_baseline: Ast.Node.OptionalIndex = .none;
     var next_field_idx: u32 = 0;
     for (container_decl.ast.members) |member_node| {
         var member = switch (try containerMember(&block_scope, &namespace.base, &wip_decls, member_node)) {
@@ -4929,12 +4945,19 @@ fn structDeclInner(
         const field_idx = next_field_idx;
         next_field_idx += 1;
 
+        if (field_idx == 0) {
+            assert(fields_src_baseline == .none);
+            fields_src_baseline = member_node.toOptional();
+        }
+        block_scope.src_baseline = fields_src_baseline.unwrap().?;
+        defer block_scope.src_baseline = node;
+
         astgen.src_hasher.update(tree.getNodeSource(member_node));
 
         member.convertToNonTupleLike(astgen.tree);
         assert(!member.ast.tuple_like);
 
-        field_names.get(astgen)[field_idx] = @intFromEnum(try astgen.identAsString(member.ast.main_token));
+        field_names.get(astgen)[field_idx] = @backingInt(try astgen.identAsString(member.ast.main_token));
 
         {
             const type_node = member.ast.type_expr.unwrap() orelse {
@@ -4996,8 +5019,12 @@ fn structDeclInner(
     astgen.src_hasher.final(&fields_hash);
 
     try gz.setStruct(decl_inst, .{
+        .src_line = src_line,
+        .src_column = src_column,
         .src_node = node,
         .name_strat = name_strat,
+        .arg_baseline_src_node = maybe_backing_int_node,
+        .fields_baseline_src_node = fields_src_baseline,
         .layout = layout,
         .backing_int_type_body_len = backing_int_type_body_len,
         .decls_len = scan_result.decls_len,
@@ -5080,13 +5107,13 @@ fn tupleDecl(
         }
 
         const field_type_ref = try typeExpr(gz, scope, field.ast.type_expr.unwrap().?);
-        astgen.scratch.appendAssumeCapacity(@intFromEnum(field_type_ref));
+        astgen.scratch.appendAssumeCapacity(@backingInt(field_type_ref));
 
         if (field.ast.value_expr.unwrap()) |value_expr| {
             const field_init_ref = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_type_ref } }, value_expr, .tuple_field_default_value);
-            astgen.scratch.appendAssumeCapacity(@intFromEnum(field_init_ref));
+            astgen.scratch.appendAssumeCapacity(@backingInt(field_init_ref));
         } else {
-            astgen.scratch.appendAssumeCapacity(@intFromEnum(Zir.Inst.Ref.none));
+            astgen.scratch.appendAssumeCapacity(@backingInt(Zir.Inst.Ref.none));
         }
     }
 
@@ -5144,6 +5171,8 @@ fn unionDeclInner(
     astgen.advanceSourceCursorToNode(node);
 
     const decl_inst = try gz.reserveInstructionIndex();
+    const src_line = astgen.source_line;
+    const src_column = astgen.source_column;
 
     var namespace: Scope.Namespace = .{
         .parent = scope,
@@ -5159,7 +5188,7 @@ fn unionDeclInner(
     // can refer to decls within the union itself.
     var block_scope: GenZir = .{
         .parent = &namespace.base,
-        .decl_node_index = node,
+        .src_baseline = node,
         .decl_line = gz.decl_line,
         .astgen = astgen,
         .is_comptime = true,
@@ -5196,6 +5225,7 @@ fn unionDeclInner(
         break :len body_len;
     } else null;
 
+    var fields_src_baseline: Ast.Node.OptionalIndex = .none;
     var next_field_idx: u32 = 0;
     for (members) |member_node| {
         var member = switch (try containerMember(&block_scope, &namespace.base, &wip_decls, member_node)) {
@@ -5204,6 +5234,13 @@ fn unionDeclInner(
         };
         const field_idx = next_field_idx;
         next_field_idx += 1;
+
+        if (field_idx == 0) {
+            assert(fields_src_baseline == .none);
+            fields_src_baseline = member_node.toOptional();
+        }
+        block_scope.src_baseline = fields_src_baseline.unwrap().?;
+        defer block_scope.src_baseline = node;
 
         astgen.src_hasher.update(astgen.tree.getNodeSource(member_node));
         member.convertToNonTupleLike(astgen.tree);
@@ -5214,7 +5251,7 @@ fn unionDeclInner(
             return astgen.failTok(comptime_token, "union fields cannot be marked comptime", .{});
         }
 
-        field_names.get(astgen)[field_idx] = @intFromEnum(try astgen.identAsString(member.ast.main_token));
+        field_names.get(astgen)[field_idx] = @backingInt(try astgen.identAsString(member.ast.main_token));
 
         if (member.ast.type_expr.unwrap()) |type_node| {
             const type_ref = try typeExpr(&block_scope, &namespace.base, type_node);
@@ -5277,8 +5314,12 @@ fn unionDeclInner(
     astgen.src_hasher.final(&fields_hash);
 
     try gz.setUnion(decl_inst, .{
+        .src_line = src_line,
+        .src_column = src_column,
         .src_node = node,
         .name_strat = name_strat,
+        .arg_baseline_src_node = opt_arg_node,
+        .fields_baseline_src_node = fields_src_baseline,
         .kind = switch (layout) {
             .auto => if (auto_enum_tok == null) l: {
                 break :l if (opt_arg_node == .none) .auto else .tagged_explicit;
@@ -5351,6 +5392,8 @@ fn containerDecl(
             astgen.advanceSourceCursorToNode(node);
 
             const decl_inst = try gz.reserveInstructionIndex();
+            const src_line = astgen.source_line;
+            const src_column = astgen.source_column;
 
             var namespace: Scope.Namespace = .{
                 .parent = scope,
@@ -5365,7 +5408,7 @@ fn containerDecl(
             // are in scope, so that tag values can refer to decls within the enum itself.
             var block_scope: GenZir = .{
                 .parent = &namespace.base,
-                .decl_node_index = node,
+                .src_baseline = node,
                 .decl_line = gz.decl_line,
                 .astgen = astgen,
                 .is_comptime = true,
@@ -5403,6 +5446,7 @@ fn containerDecl(
             } else null;
 
             var next_field_idx: u32 = 0;
+            var fields_src_baseline: Ast.Node.OptionalIndex = .none;
             var opt_nonexhaustive_node: Ast.Node.OptionalIndex = .none;
             for (container_decl.ast.members) |member_node| {
                 var member = switch (try containerMember(&block_scope, &namespace.base, &wip_decls, member_node)) {
@@ -5445,9 +5489,16 @@ fn containerDecl(
                 const field_idx = next_field_idx;
                 next_field_idx += 1;
 
+                if (field_idx == 0) {
+                    assert(fields_src_baseline == .none);
+                    fields_src_baseline = member_node.toOptional();
+                }
+                block_scope.src_baseline = fields_src_baseline.unwrap().?;
+                defer block_scope.src_baseline = node;
+
                 astgen.src_hasher.update(tree.getNodeSource(member_node));
 
-                field_names.get(astgen)[field_idx] = @intFromEnum(try astgen.identAsString(member.ast.main_token));
+                field_names.get(astgen)[field_idx] = @backingInt(try astgen.identAsString(member.ast.main_token));
 
                 if (member.ast.value_expr.unwrap()) |value_node| {
                     if (tag_type_body_len == null) {
@@ -5475,8 +5526,12 @@ fn containerDecl(
             astgen.src_hasher.final(&fields_hash);
 
             try gz.setEnum(decl_inst, .{
+                .src_line = src_line,
+                .src_column = src_column,
                 .src_node = node,
                 .name_strat = name_strat,
+                .arg_baseline_src_node = container_decl.ast.arg,
+                .fields_baseline_src_node = fields_src_baseline,
                 .tag_type_body_len = tag_type_body_len,
                 .nonexhaustive = scan_result.has_underscore_field,
                 .decls_len = scan_result.decls_len,
@@ -5497,6 +5552,8 @@ fn containerDecl(
             astgen.advanceSourceCursorToNode(node);
 
             const decl_inst = try gz.reserveInstructionIndex();
+            const src_line = astgen.source_line;
+            const src_column = astgen.source_column;
 
             var namespace: Scope.Namespace = .{
                 .parent = scope,
@@ -5509,7 +5566,7 @@ fn containerDecl(
 
             var block_scope: GenZir = .{
                 .parent = &namespace.base,
-                .decl_node_index = node,
+                .src_baseline = node,
                 .decl_line = gz.decl_line,
                 .astgen = astgen,
                 .is_comptime = true,
@@ -5538,6 +5595,8 @@ fn containerDecl(
             wip_decls.finish();
 
             try gz.setOpaque(decl_inst, .{
+                .src_line = src_line,
+                .src_column = src_column,
                 .src_node = node,
                 .name_strat = name_strat,
                 .decls_len = scan_result.decls_len,
@@ -5702,7 +5761,7 @@ fn errorSetDecl(gz: *GenZir, ri: ResultInfo, node: Ast.Node.Index) InnerError!Zi
                     }
                     gop.value_ptr.* = tok_i;
 
-                    try astgen.extra.append(gpa, @intFromEnum(str_index));
+                    try astgen.extra.append(gpa, @backingInt(str_index));
                     fields_len += 1;
                 },
                 else => unreachable,
@@ -6336,7 +6395,7 @@ fn setCondBrPayload(
     );
 
     const zir_datas = astgen.instructions.items(.data);
-    zir_datas[@intFromEnum(condbr)].pl_node.payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.CondBr{
+    zir_datas[@backingInt(condbr)].pl_node.payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.CondBr{
         .condition = cond,
         .then_body_len = then_body_len,
         .else_body_len = else_body_len,
@@ -6708,6 +6767,9 @@ fn forExpr(
         for (for_full.ast.inputs, indexables, lens) |input, *indexable_ref, *len_refs| {
             const capture_is_ref = tree.tokenTag(capture_token) == .asterisk;
             const ident_tok = capture_token + @intFromBool(capture_is_ref);
+            if (tree.tokenTag(ident_tok) != .identifier) {
+                return astgen.failNode(input, "for input is not captured", .{});
+            }
             const is_discard = mem.eql(u8, tree.tokenSlice(ident_tok), "_");
 
             if (is_discard and capture_is_ref) {
@@ -6749,6 +6811,10 @@ fn forExpr(
                 indexable_ref.* = indexable;
                 len_refs.* = .{ indexable, .none };
             }
+        }
+        // There may or may not be a trailing comma after the final capture
+        if (tree.tokenTag(capture_token) != .pipe and tree.tokenTag(capture_token - 1) != .pipe) {
+            return astgen.failTok(capture_token, "extra capture in for loop", .{});
         }
     }
 
@@ -7305,7 +7371,7 @@ fn switchExpr(
             // this lowering to avoiding a rather complex special case in Sema.
 
             assert(switch_full.label_token != null); // use `switch_block_err_union` code path instead!
-            assert(.block == astgen.instructions.items(.tag)[@intFromEnum(peer_break_target.block_inst)]);
+            assert(.block == astgen.instructions.items(.tag)[@backingInt(peer_break_target.block_inst)]);
             block_scope.break_target = peer_break_target.block_inst;
             block_scope.setBreakResultInfo(peer_break_target.block_ri);
         },
@@ -7439,6 +7505,7 @@ fn switchExpr(
                         const ident_name = try astgen.identAsString(ident_token);
                         const ident_name_str = tree.tokenSlice(ident_token);
                         if (mem.eql(u8, "_", ident_name_str)) {
+                            if (non_err_is_ref != .no) return astgen.failTok(payload_token, "pointer modifier invalid on discard", .{});
                             break :scope &scratch_scope.base;
                         }
                         non_err_capture = if (non_err_is_ref != .no) .by_ref else .by_val;
@@ -7815,14 +7882,14 @@ fn switchExpr(
             .scalar_cases_len = @intCast(scalar_cases_len),
         },
     });
-    astgen.instructions.items(.data)[@intFromEnum(switch_block)].pl_node.payload_index = zir_payload_index;
+    astgen.instructions.items(.data)[@backingInt(switch_block)].pl_node.payload_index = zir_payload_index;
 
     if (multi_cases_len > 0) astgen.extra.appendAssumeCapacity(multi_cases_len);
-    if (payload_capture_inst_is_placeholder) astgen.extra.appendAssumeCapacity(@intFromEnum(payload_capture_inst));
-    if (tag_capture_inst_is_placeholder) astgen.extra.appendAssumeCapacity(@intFromEnum(tag_capture_inst));
+    if (payload_capture_inst_is_placeholder) astgen.extra.appendAssumeCapacity(@backingInt(payload_capture_inst));
+    if (tag_capture_inst_is_placeholder) astgen.extra.appendAssumeCapacity(@backingInt(tag_capture_inst));
     if (needs_non_err_handling) {
         const catch_or_if_src_node_offset = parent_gz.nodeIndexToRelative(catch_or_if_node);
-        astgen.extra.appendAssumeCapacity(@bitCast(@intFromEnum(catch_or_if_src_node_offset)));
+        astgen.extra.appendAssumeCapacity(@bitCast(@backingInt(catch_or_if_src_node_offset)));
         astgen.extra.appendAssumeCapacity(@bitCast(non_err_info));
     }
     if (has_else) astgen.extra.appendAssumeCapacity(@bitCast(else_info));
@@ -8069,14 +8136,6 @@ fn identifier(
             if (std.mem.eql(u8, ident_name_raw, "i0")) {
                 return astgen.failNode(ident, "signed integer cannot have bit width 0", .{});
             }
-            if (ident_name_raw[1] == '0') {
-                assert(ident_name_raw.len >= 3); // `u0` and `i0` handled
-                return astgen.failNode(
-                    ident,
-                    "primitive integer type '{s}' has leading zero",
-                    .{ident_name_raw},
-                );
-            }
             const bit_count = parseBitCount(ident_name_raw[1..]) catch |err| switch (err) {
                 error.Overflow => return astgen.failNode(
                     ident,
@@ -8085,6 +8144,14 @@ fn identifier(
                 ),
                 error.InvalidCharacter => break :int_type,
             };
+            if (ident_name_raw[1] == '0') {
+                assert(ident_name_raw.len >= 3); // `u0` and `i0` handled
+                return astgen.failNode(
+                    ident,
+                    "primitive integer type '{s}' has leading zero",
+                    .{ident_name_raw},
+                );
+            }
             const result = try gz.add(.{
                 .tag = .int_type,
                 .data = .{ .int_type = .{
@@ -8470,7 +8537,7 @@ fn numberLiteral(gz: *GenZir, ri: ResultInfo, node: Ast.Node.Index, source_node:
             var big_int = try std.math.big.int.Managed.init(gpa);
             defer big_int.deinit();
             const prefix_offset: usize = if (base == .decimal) 0 else 2;
-            big_int.setString(@intFromEnum(base), bytes[prefix_offset..]) catch |err| switch (err) {
+            big_int.setString(@backingInt(base), bytes[prefix_offset..]) catch |err| switch (err) {
                 error.InvalidCharacter => unreachable, // caught in `parseNumberLiteral`
                 error.InvalidBase => unreachable, // we only pass 16, 8, 2, see above
                 error.OutOfMemory => |e| return e,
@@ -8482,7 +8549,7 @@ fn numberLiteral(gz: *GenZir, ri: ResultInfo, node: Ast.Node.Index, source_node:
         },
         .float => {
             const unsigned_float_number = std.fmt.parseFloat(f128, bytes) catch |err| switch (err) {
-                error.InvalidCharacter => unreachable, // validated by tokenizer
+                error.InvalidCharacter => unreachable, // validated by `parseNumberLiteral`
             };
             const float_number = switch (sign) {
                 .negative => -unsigned_float_number,
@@ -8572,7 +8639,7 @@ fn asmExpr(
         },
         else => .{
             .tag = .asm_expr,
-            .tmpl = @enumFromInt(@intFromEnum(try comptimeExpr(gz, scope, .{ .rl = .none }, full.ast.template, .inline_assembly_code))),
+            .tmpl = @fromBackingInt(@intCast(@backingInt(try comptimeExpr(gz, scope, .{ .rl = .none }, full.ast.template, .inline_assembly_code)))),
         },
     };
 
@@ -8710,8 +8777,11 @@ fn bitCast(
     node: Ast.Node.Index,
     operand_node: Ast.Node.Index,
 ) InnerError!Zir.Inst.Ref {
+    const cursor = maybeAdvanceSourceCursorToMainToken(gz, node);
     const dest_type = try ri.rl.resultTypeForCast(gz, node, "@bitCast");
     const operand = try reachableExpr(gz, scope, .{ .rl = .none }, operand_node, node);
+
+    try emitDbgStmt(gz, cursor);
     const result = try gz.addPlNode(.bitcast, node, Zir.Inst.Bin{
         .lhs = dest_type,
         .rhs = operand,
@@ -8889,7 +8959,7 @@ fn typeOf(
 
     for (args, 0..) |arg, i| {
         const param_ref = try reachableExpr(&typeof_scope, &typeof_scope.base, .{ .rl = .none }, arg, node);
-        astgen.extra.items[args_index + i] = @intFromEnum(param_ref);
+        astgen.extra.items[args_index + i] = @backingInt(param_ref);
     }
     _ = try typeof_scope.addBreak(.break_inline, typeof_inst.toIndex().?, .void_value);
 
@@ -8938,7 +9008,7 @@ fn minMax(
     var extra_index = try reserveExtra(gz.astgen, args.len);
     for (args) |arg| {
         const arg_ref = try expr(gz, scope, .{ .rl = .none }, arg);
-        astgen.extra.items[extra_index] = @intFromEnum(arg_ref);
+        astgen.extra.items[extra_index] = @backingInt(arg_ref);
         extra_index += 1;
     }
     const tag: Zir.Inst.Extended = switch (op) {
@@ -9009,7 +9079,7 @@ fn builtinCall(
             }
             const str_lit_token = tree.nodeMainToken(operand_node);
             const str = try astgen.strLitAsString(str_lit_token);
-            const str_slice = astgen.string_bytes.items[@intFromEnum(str.index)..][0..str.len];
+            const str_slice = astgen.string_bytes.items[@backingInt(str.index)..][0..str.len];
             if (mem.findScalar(u8, str_slice, 0) != null) {
                 return astgen.failTok(str_lit_token, "import path cannot contain null bytes", .{});
             } else if (str.len == 0) {
@@ -9040,7 +9110,7 @@ fn builtinCall(
             var extra_index = try reserveExtra(gz.astgen, params.len);
             for (params) |param| {
                 const param_ref = try expr(gz, scope, .{ .rl = .none }, param);
-                astgen.extra.items[extra_index] = @intFromEnum(param_ref);
+                astgen.extra.items[extra_index] = @backingInt(param_ref);
                 extra_index += 1;
             }
             const result = try gz.addExtendedMultiOpPayloadIndex(.compile_log, payload_index, params.len);
@@ -9157,6 +9227,7 @@ fn builtinCall(
         .set_eval_branch_quota => return simpleUnOp(gz, scope, ri, node, .{ .rl = .{ .coerced_ty = .u32_type } },              params[0], .set_eval_branch_quota),
         .int_from_enum         => return simpleUnOp(gz, scope, ri, node, .{ .rl = .none },                                     params[0], .int_from_enum),
         .int_from_bool         => return simpleUnOp(gz, scope, ri, node, .{ .rl = .none },                                     params[0], .int_from_bool),
+        .backing_int           => return simpleUnOp(gz, scope, ri, node, .{ .rl = .none },                                     params[0], .backing_int),
         .embed_file            => return simpleUnOp(gz, scope, ri, node, .{ .rl = .{ .coerced_ty = .slice_const_u8_type } },   params[0], .embed_file),
         .error_name            => return simpleUnOp(gz, scope, ri, node, .{ .rl = .{ .coerced_ty = .anyerror_type } },         params[0], .error_name),
         .set_runtime_safety    => return simpleUnOp(gz, scope, ri, node, coerced_bool_ri,                                      params[0], .set_runtime_safety),
@@ -9187,6 +9258,20 @@ fn builtinCall(
         .int_cast       => return typeCast(gz, scope, ri, node, params[0], .int_cast, builtin_name),
         .truncate       => return typeCast(gz, scope, ri, node, params[0], .truncate, builtin_name),
         // zig fmt: on
+
+        .from_backing_int => {
+            const cursor = maybeAdvanceSourceCursorToMainToken(gz, node);
+            const result_ty = try ri.rl.resultTypeForCast(gz, node, builtin_name);
+            const backing_int_ty = try gz.addUnNode(.from_backing_int_arg_ty, result_ty, node);
+            const operand = try expr(gz, scope, .{ .rl = .{ .coerced_ty = backing_int_ty } }, params[0]);
+
+            try emitDbgStmt(gz, cursor);
+            const result = try gz.addPlNode(.from_backing_int, node, Zir.Inst.Bin{
+                .lhs = result_ty,
+                .rhs = operand,
+            });
+            return rvalue(gz, ri, result, node);
+        },
 
         .in_comptime => if (gz.is_comptime) {
             return astgen.failNode(node, "redundant '@inComptime' in comptime scope", .{});
@@ -9235,7 +9320,7 @@ fn builtinCall(
             const param_types = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = .slice_const_type_type } }, params[0], .fn_param_types);
             const param_attrs_ty = try gz.addExtendedPayloadSmall(
                 .reify_slice_arg_ty,
-                @intFromEnum(Zir.Inst.ReifySliceArgInfo.type_to_fn_param_attrs),
+                @backingInt(Zir.Inst.ReifySliceArgInfo.type_to_fn_param_attrs),
                 Zir.Inst.UnNode{ .node = gz.nodeIndexToRelative(params[0]), .operand = param_types },
             );
             const param_attrs = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = param_attrs_ty } }, params[1], .fn_param_attrs);
@@ -9257,18 +9342,19 @@ fn builtinCall(
             const field_names = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = .slice_const_slice_const_u8_type } }, params[2], .struct_field_names);
             const field_types_ty = try gz.addExtendedPayloadSmall(
                 .reify_slice_arg_ty,
-                @intFromEnum(Zir.Inst.ReifySliceArgInfo.string_to_struct_field_type),
+                @backingInt(Zir.Inst.ReifySliceArgInfo.string_to_struct_field_type),
                 Zir.Inst.UnNode{ .node = gz.nodeIndexToRelative(params[2]), .operand = field_names },
             );
             const field_attrs_ty = try gz.addExtendedPayloadSmall(
                 .reify_slice_arg_ty,
-                @intFromEnum(Zir.Inst.ReifySliceArgInfo.string_to_struct_field_attrs),
+                @backingInt(Zir.Inst.ReifySliceArgInfo.string_to_struct_field_attrs),
                 Zir.Inst.UnNode{ .node = gz.nodeIndexToRelative(params[2]), .operand = field_names },
             );
             const field_types = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_types_ty } }, params[3], .struct_field_types);
             const field_attrs = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_attrs_ty } }, params[4], .struct_field_attrs);
-            const result = try gz.addExtendedPayloadSmall(.reify_struct, @intFromEnum(reify_name_strat), Zir.Inst.ReifyStruct{
+            const result = try gz.addExtendedPayloadSmall(.reify_struct, @backingInt(reify_name_strat), Zir.Inst.ReifyStruct{
                 .src_line = gz.astgen.source_line,
+                .src_column = gz.astgen.source_column,
                 .node = node,
                 .layout = layout,
                 .backing_ty = backing_ty,
@@ -9285,18 +9371,19 @@ fn builtinCall(
             const field_names = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = .slice_const_slice_const_u8_type } }, params[2], .union_field_names);
             const field_types_ty = try gz.addExtendedPayloadSmall(
                 .reify_slice_arg_ty,
-                @intFromEnum(Zir.Inst.ReifySliceArgInfo.string_to_union_field_type),
+                @backingInt(Zir.Inst.ReifySliceArgInfo.string_to_union_field_type),
                 Zir.Inst.UnNode{ .node = gz.nodeIndexToRelative(params[2]), .operand = field_names },
             );
             const field_attrs_ty = try gz.addExtendedPayloadSmall(
                 .reify_slice_arg_ty,
-                @intFromEnum(Zir.Inst.ReifySliceArgInfo.string_to_union_field_attrs),
+                @backingInt(Zir.Inst.ReifySliceArgInfo.string_to_union_field_attrs),
                 Zir.Inst.UnNode{ .node = gz.nodeIndexToRelative(params[2]), .operand = field_names },
             );
             const field_types = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_types_ty } }, params[3], .union_field_types);
             const field_attrs = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_attrs_ty } }, params[4], .union_field_attrs);
-            const result = try gz.addExtendedPayloadSmall(.reify_union, @intFromEnum(reify_name_strat), Zir.Inst.ReifyUnion{
+            const result = try gz.addExtendedPayloadSmall(.reify_union, @backingInt(reify_name_strat), Zir.Inst.ReifyUnion{
                 .src_line = gz.astgen.source_line,
+                .src_column = gz.astgen.source_column,
                 .node = node,
                 .layout = layout,
                 .arg_ty = arg_ty,
@@ -9317,13 +9404,25 @@ fn builtinCall(
                 .rhs = field_names,
             });
             const field_values = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = field_values_ty } }, params[3], .enum_field_values);
-            const result = try gz.addExtendedPayloadSmall(.reify_enum, @intFromEnum(reify_name_strat), Zir.Inst.ReifyEnum{
+            const result = try gz.addExtendedPayloadSmall(.reify_enum, @backingInt(reify_name_strat), Zir.Inst.ReifyEnum{
                 .src_line = gz.astgen.source_line,
+                .src_column = gz.astgen.source_column,
                 .node = node,
                 .tag_ty = tag_ty,
                 .mode = mode,
                 .field_names = field_names,
                 .field_values = field_values,
+            });
+            return rvalue(gz, ri, result, node);
+        },
+        .SpirvType => {
+            const spirv_type_options_ty = try gz.addStdLangValue(node, .spirv_type_options);
+            const operand = try comptimeExpr(gz, scope, .{ .rl = .{ .coerced_ty = spirv_type_options_ty } }, params[0], .type);
+            const result = try gz.addExtendedPayload(.reify_spirv_type, Zir.Inst.ReifySpirvType{
+                .src_line = gz.astgen.source_line,
+                .src_column = gz.astgen.source_column,
+                .node = node,
+                .operand = operand,
             });
             return rvalue(gz, ri, result, node);
         },
@@ -9382,6 +9481,7 @@ fn builtinCall(
 
         .div_exact => return divBuiltin(gz, scope, ri, node, params[0], params[1], .div_exact),
         .div_floor => return divBuiltin(gz, scope, ri, node, params[0], params[1], .div_floor),
+        .div_ceil  => return divBuiltin(gz, scope, ri, node, params[0], params[1], .div_ceil),
         .div_trunc => return divBuiltin(gz, scope, ri, node, params[0], params[1], .div_trunc),
         .mod       => return divBuiltin(gz, scope, ri, node, params[0], params[1], .mod),
         .rem       => return divBuiltin(gz, scope, ri, node, params[0], params[1], .rem),
@@ -9739,7 +9839,7 @@ fn floatRoundOp(
             .trunc => .trunc,
             else => unreachable,
         };
-        const result = try gz.addExtendedPayloadSmall(.round_op, @intFromEnum(round_op), Zir.Inst.BinNode{
+        const result = try gz.addExtendedPayloadSmall(.round_op, @backingInt(round_op), Zir.Inst.BinNode{
             .node = gz.nodeIndexToRelative(node),
             .lhs = dest_type,
             .rhs = operand,
@@ -9945,7 +10045,7 @@ fn callExpr(
         .field => |field| assert(field.obj_ptr != .none),
     }
 
-    const call_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+    const call_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
     const call_inst = call_index.toRef();
     try gz.astgen.instructions.append(astgen.gpa, undefined);
     try gz.instructions.append(astgen.gpa, call_index);
@@ -9986,14 +10086,14 @@ fn callExpr(
                 .callee = callee_obj,
                 .flags = .{
                     .pop_error_return_trace = !propagate_error_trace,
-                    .packed_modifier = @intCast(@intFromEnum(modifier)),
+                    .packed_modifier = @intCast(@backingInt(modifier)),
                     .args_len = @intCast(call.ast.params.len),
                 },
             });
             if (call.ast.params.len != 0) {
                 try astgen.extra.appendSlice(astgen.gpa, astgen.scratch.items[scratch_top..]);
             }
-            gz.astgen.instructions.set(@intFromEnum(call_index), .{
+            gz.astgen.instructions.set(@backingInt(call_index), .{
                 .tag = .call,
                 .data = .{ .pl_node = .{
                     .src_node = gz.nodeIndexToRelative(node),
@@ -10007,14 +10107,14 @@ fn callExpr(
                 .field_name_start = callee_field.field_name_start,
                 .flags = .{
                     .pop_error_return_trace = !propagate_error_trace,
-                    .packed_modifier = @intCast(@intFromEnum(modifier)),
+                    .packed_modifier = @intCast(@backingInt(modifier)),
                     .args_len = @intCast(call.ast.params.len),
                 },
             });
             if (call.ast.params.len != 0) {
                 try astgen.extra.appendSlice(astgen.gpa, astgen.scratch.items[scratch_top..]);
             }
-            gz.astgen.instructions.set(@intFromEnum(call_index), .{
+            gz.astgen.instructions.set(@backingInt(call_index), .{
                 .tag = .field_call,
                 .data = .{ .pl_node = .{
                     .src_node = gz.nodeIndexToRelative(node),
@@ -10440,8 +10540,8 @@ fn rvalueInner(
     const result = r: {
         if (raw_result.toIndex()) |result_index| {
             const zir_tags = gz.astgen.instructions.items(.tag);
-            const data = gz.astgen.instructions.items(.data)[@intFromEnum(result_index)];
-            if (zir_tags[@intFromEnum(result_index)].isAlwaysVoid(data)) {
+            const data = gz.astgen.instructions.items(.data)[@backingInt(result_index)];
+            if (zir_tags[@backingInt(result_index)].isAlwaysVoid(data)) {
                 break :r Zir.Inst.Ref.void_value;
             }
         }
@@ -10480,108 +10580,108 @@ fn rvalueInner(
         },
         .ty => |ty_inst| {
             // Quickly eliminate some common, unnecessary type coercion.
-            const as_ty = @as(u64, @intFromEnum(Zir.Inst.Ref.type_type)) << 32;
-            const as_bool = @as(u64, @intFromEnum(Zir.Inst.Ref.bool_type)) << 32;
-            const as_void = @as(u64, @intFromEnum(Zir.Inst.Ref.void_type)) << 32;
-            const as_comptime_int = @as(u64, @intFromEnum(Zir.Inst.Ref.comptime_int_type)) << 32;
-            const as_usize = @as(u64, @intFromEnum(Zir.Inst.Ref.usize_type)) << 32;
-            const as_u1 = @as(u64, @intFromEnum(Zir.Inst.Ref.u1_type)) << 32;
-            const as_u8 = @as(u64, @intFromEnum(Zir.Inst.Ref.u8_type)) << 32;
-            switch ((@as(u64, @intFromEnum(ty_inst)) << 32) | @as(u64, @intFromEnum(result))) {
-                as_ty | @intFromEnum(Zir.Inst.Ref.u1_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u8_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.i8_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u16_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u29_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.i16_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u32_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.i32_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u64_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.i64_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.u128_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.i128_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.usize_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.isize_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_char_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_short_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_ushort_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_int_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_uint_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_long_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_ulong_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_longlong_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_ulonglong_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.c_longdouble_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.f16_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.f32_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.f64_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.f80_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.f128_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.anyopaque_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.bool_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.void_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.type_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.anyerror_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.comptime_int_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.comptime_float_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.noreturn_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.anyframe_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.null_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.undefined_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.enum_literal_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.ptr_usize_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.ptr_const_comptime_int_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.manyptr_u8_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.manyptr_const_u8_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.manyptr_const_u8_sentinel_0_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.slice_const_u8_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.slice_const_u8_sentinel_0_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.anyerror_void_error_union_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.generic_poison_type),
-                as_ty | @intFromEnum(Zir.Inst.Ref.empty_tuple_type),
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.zero),
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.one),
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.negative_one),
-                as_usize | @intFromEnum(Zir.Inst.Ref.undef_usize),
-                as_usize | @intFromEnum(Zir.Inst.Ref.zero_usize),
-                as_usize | @intFromEnum(Zir.Inst.Ref.one_usize),
-                as_u1 | @intFromEnum(Zir.Inst.Ref.undef_u1),
-                as_u1 | @intFromEnum(Zir.Inst.Ref.zero_u1),
-                as_u1 | @intFromEnum(Zir.Inst.Ref.one_u1),
-                as_u8 | @intFromEnum(Zir.Inst.Ref.zero_u8),
-                as_u8 | @intFromEnum(Zir.Inst.Ref.one_u8),
-                as_u8 | @intFromEnum(Zir.Inst.Ref.four_u8),
-                as_bool | @intFromEnum(Zir.Inst.Ref.undef_bool),
-                as_bool | @intFromEnum(Zir.Inst.Ref.bool_true),
-                as_bool | @intFromEnum(Zir.Inst.Ref.bool_false),
-                as_void | @intFromEnum(Zir.Inst.Ref.void_value),
+            const as_ty = @as(u64, @backingInt(Zir.Inst.Ref.type_type)) << 32;
+            const as_bool = @as(u64, @backingInt(Zir.Inst.Ref.bool_type)) << 32;
+            const as_void = @as(u64, @backingInt(Zir.Inst.Ref.void_type)) << 32;
+            const as_comptime_int = @as(u64, @backingInt(Zir.Inst.Ref.comptime_int_type)) << 32;
+            const as_usize = @as(u64, @backingInt(Zir.Inst.Ref.usize_type)) << 32;
+            const as_u1 = @as(u64, @backingInt(Zir.Inst.Ref.u1_type)) << 32;
+            const as_u8 = @as(u64, @backingInt(Zir.Inst.Ref.u8_type)) << 32;
+            switch ((@as(u64, @backingInt(ty_inst)) << 32) | @as(u64, @backingInt(result))) {
+                as_ty | @backingInt(Zir.Inst.Ref.u1_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u8_type),
+                as_ty | @backingInt(Zir.Inst.Ref.i8_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u16_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u29_type),
+                as_ty | @backingInt(Zir.Inst.Ref.i16_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u32_type),
+                as_ty | @backingInt(Zir.Inst.Ref.i32_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u64_type),
+                as_ty | @backingInt(Zir.Inst.Ref.i64_type),
+                as_ty | @backingInt(Zir.Inst.Ref.u128_type),
+                as_ty | @backingInt(Zir.Inst.Ref.i128_type),
+                as_ty | @backingInt(Zir.Inst.Ref.usize_type),
+                as_ty | @backingInt(Zir.Inst.Ref.isize_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_char_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_short_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_ushort_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_int_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_uint_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_long_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_ulong_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_longlong_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_ulonglong_type),
+                as_ty | @backingInt(Zir.Inst.Ref.c_longdouble_type),
+                as_ty | @backingInt(Zir.Inst.Ref.f16_type),
+                as_ty | @backingInt(Zir.Inst.Ref.f32_type),
+                as_ty | @backingInt(Zir.Inst.Ref.f64_type),
+                as_ty | @backingInt(Zir.Inst.Ref.f80_type),
+                as_ty | @backingInt(Zir.Inst.Ref.f128_type),
+                as_ty | @backingInt(Zir.Inst.Ref.anyopaque_type),
+                as_ty | @backingInt(Zir.Inst.Ref.bool_type),
+                as_ty | @backingInt(Zir.Inst.Ref.void_type),
+                as_ty | @backingInt(Zir.Inst.Ref.type_type),
+                as_ty | @backingInt(Zir.Inst.Ref.anyerror_type),
+                as_ty | @backingInt(Zir.Inst.Ref.comptime_int_type),
+                as_ty | @backingInt(Zir.Inst.Ref.comptime_float_type),
+                as_ty | @backingInt(Zir.Inst.Ref.noreturn_type),
+                as_ty | @backingInt(Zir.Inst.Ref.anyframe_type),
+                as_ty | @backingInt(Zir.Inst.Ref.null_type),
+                as_ty | @backingInt(Zir.Inst.Ref.undefined_type),
+                as_ty | @backingInt(Zir.Inst.Ref.enum_literal_type),
+                as_ty | @backingInt(Zir.Inst.Ref.ptr_usize_type),
+                as_ty | @backingInt(Zir.Inst.Ref.ptr_const_comptime_int_type),
+                as_ty | @backingInt(Zir.Inst.Ref.manyptr_u8_type),
+                as_ty | @backingInt(Zir.Inst.Ref.manyptr_const_u8_type),
+                as_ty | @backingInt(Zir.Inst.Ref.manyptr_const_u8_sentinel_0_type),
+                as_ty | @backingInt(Zir.Inst.Ref.slice_const_u8_type),
+                as_ty | @backingInt(Zir.Inst.Ref.slice_const_u8_sentinel_0_type),
+                as_ty | @backingInt(Zir.Inst.Ref.anyerror_void_error_union_type),
+                as_ty | @backingInt(Zir.Inst.Ref.generic_poison_type),
+                as_ty | @backingInt(Zir.Inst.Ref.empty_tuple_type),
+                as_comptime_int | @backingInt(Zir.Inst.Ref.zero),
+                as_comptime_int | @backingInt(Zir.Inst.Ref.one),
+                as_comptime_int | @backingInt(Zir.Inst.Ref.negative_one),
+                as_usize | @backingInt(Zir.Inst.Ref.undef_usize),
+                as_usize | @backingInt(Zir.Inst.Ref.zero_usize),
+                as_usize | @backingInt(Zir.Inst.Ref.one_usize),
+                as_u1 | @backingInt(Zir.Inst.Ref.undef_u1),
+                as_u1 | @backingInt(Zir.Inst.Ref.zero_u1),
+                as_u1 | @backingInt(Zir.Inst.Ref.one_u1),
+                as_u8 | @backingInt(Zir.Inst.Ref.zero_u8),
+                as_u8 | @backingInt(Zir.Inst.Ref.one_u8),
+                as_u8 | @backingInt(Zir.Inst.Ref.four_u8),
+                as_bool | @backingInt(Zir.Inst.Ref.undef_bool),
+                as_bool | @backingInt(Zir.Inst.Ref.bool_true),
+                as_bool | @backingInt(Zir.Inst.Ref.bool_false),
+                as_void | @backingInt(Zir.Inst.Ref.void_value),
                 => return result, // type of result is already correct
 
-                as_bool | @intFromEnum(Zir.Inst.Ref.undef) => return .undef_bool,
-                as_usize | @intFromEnum(Zir.Inst.Ref.undef) => return .undef_usize,
-                as_usize | @intFromEnum(Zir.Inst.Ref.undef_u1) => return .undef_usize,
-                as_u1 | @intFromEnum(Zir.Inst.Ref.undef) => return .undef_u1,
+                as_bool | @backingInt(Zir.Inst.Ref.undef) => return .undef_bool,
+                as_usize | @backingInt(Zir.Inst.Ref.undef) => return .undef_usize,
+                as_usize | @backingInt(Zir.Inst.Ref.undef_u1) => return .undef_usize,
+                as_u1 | @backingInt(Zir.Inst.Ref.undef) => return .undef_u1,
 
-                as_usize | @intFromEnum(Zir.Inst.Ref.zero) => return .zero_usize,
-                as_u1 | @intFromEnum(Zir.Inst.Ref.zero) => return .zero_u1,
-                as_u8 | @intFromEnum(Zir.Inst.Ref.zero) => return .zero_u8,
-                as_usize | @intFromEnum(Zir.Inst.Ref.one) => return .one_usize,
-                as_u1 | @intFromEnum(Zir.Inst.Ref.one) => return .one_u1,
-                as_u8 | @intFromEnum(Zir.Inst.Ref.one) => return .one_u8,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.zero_usize) => return .zero,
-                as_u1 | @intFromEnum(Zir.Inst.Ref.zero_usize) => return .zero_u1,
-                as_u8 | @intFromEnum(Zir.Inst.Ref.zero_usize) => return .zero_u8,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.one_usize) => return .one,
-                as_u1 | @intFromEnum(Zir.Inst.Ref.one_usize) => return .one_u1,
-                as_u8 | @intFromEnum(Zir.Inst.Ref.one_usize) => return .one_u8,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.zero_u1) => return .zero,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.zero_u8) => return .zero,
-                as_usize | @intFromEnum(Zir.Inst.Ref.zero_u1) => return .zero_usize,
-                as_usize | @intFromEnum(Zir.Inst.Ref.zero_u8) => return .zero_usize,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.one_u1) => return .one,
-                as_comptime_int | @intFromEnum(Zir.Inst.Ref.one_u8) => return .one,
-                as_usize | @intFromEnum(Zir.Inst.Ref.one_u1) => return .one_usize,
-                as_usize | @intFromEnum(Zir.Inst.Ref.one_u8) => return .one_usize,
+                as_usize | @backingInt(Zir.Inst.Ref.zero) => return .zero_usize,
+                as_u1 | @backingInt(Zir.Inst.Ref.zero) => return .zero_u1,
+                as_u8 | @backingInt(Zir.Inst.Ref.zero) => return .zero_u8,
+                as_usize | @backingInt(Zir.Inst.Ref.one) => return .one_usize,
+                as_u1 | @backingInt(Zir.Inst.Ref.one) => return .one_u1,
+                as_u8 | @backingInt(Zir.Inst.Ref.one) => return .one_u8,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.zero_usize) => return .zero,
+                as_u1 | @backingInt(Zir.Inst.Ref.zero_usize) => return .zero_u1,
+                as_u8 | @backingInt(Zir.Inst.Ref.zero_usize) => return .zero_u8,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.one_usize) => return .one,
+                as_u1 | @backingInt(Zir.Inst.Ref.one_usize) => return .one_u1,
+                as_u8 | @backingInt(Zir.Inst.Ref.one_usize) => return .one_u8,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.zero_u1) => return .zero,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.zero_u8) => return .zero,
+                as_usize | @backingInt(Zir.Inst.Ref.zero_u1) => return .zero_usize,
+                as_usize | @backingInt(Zir.Inst.Ref.zero_u8) => return .zero_usize,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.one_u1) => return .one,
+                as_comptime_int | @backingInt(Zir.Inst.Ref.one_u8) => return .one,
+                as_usize | @backingInt(Zir.Inst.Ref.one_u1) => return .one_usize,
+                as_usize | @backingInt(Zir.Inst.Ref.one_u8) => return .one_usize,
 
                 // Need an explicit type coercion instruction.
                 else => return gz.addPlNode(ri.zirTag(), src_node, Zir.Inst.As{
@@ -10751,7 +10851,7 @@ fn appendErrorNodeNotes(
     @branchHint(.cold);
     const gpa = astgen.gpa;
     const string_bytes = &astgen.string_bytes;
-    const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
+    const msg: Zir.NullTerminatedString = @fromBackingInt(@intCast(string_bytes.items.len));
     try string_bytes.print(gpa, format ++ "\x00", args);
     const notes_index: u32 = if (notes.len != 0) blk: {
         const notes_start = astgen.extra.items.len;
@@ -10843,7 +10943,7 @@ fn appendErrorTokNotesOff(
     @branchHint(.cold);
     const gpa = astgen.gpa;
     const string_bytes = &astgen.string_bytes;
-    const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
+    const msg: Zir.NullTerminatedString = @fromBackingInt(@intCast(string_bytes.items.len));
     try string_bytes.print(gpa, format ++ "\x00", args);
     const notes_index: u32 = if (notes.len != 0) blk: {
         const notes_start = astgen.extra.items.len;
@@ -10879,7 +10979,7 @@ fn errNoteTokOff(
 ) Allocator.Error!u32 {
     @branchHint(.cold);
     const string_bytes = &astgen.string_bytes;
-    const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
+    const msg: Zir.NullTerminatedString = @fromBackingInt(@intCast(string_bytes.items.len));
     try string_bytes.print(astgen.gpa, format ++ "\x00", args);
     return astgen.addExtra(Zir.Inst.CompileErrors.Item{
         .msg = msg,
@@ -10898,7 +10998,7 @@ fn errNoteNode(
 ) Allocator.Error!u32 {
     @branchHint(.cold);
     const string_bytes = &astgen.string_bytes;
-    const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
+    const msg: Zir.NullTerminatedString = @fromBackingInt(@intCast(string_bytes.items.len));
     try string_bytes.print(astgen.gpa, format ++ "\x00", args);
     return astgen.addExtra(Zir.Inst.CompileErrors.Item{
         .msg = msg,
@@ -10922,11 +11022,11 @@ fn identAsString(astgen: *AstGen, ident_token: Ast.TokenIndex) !Zir.NullTerminat
     });
     if (gop.found_existing) {
         string_bytes.shrinkRetainingCapacity(str_index);
-        return @enumFromInt(gop.key_ptr.*);
+        return @fromBackingInt(@intCast(gop.key_ptr.*));
     } else {
         gop.key_ptr.* = str_index;
         try string_bytes.append(gpa, 0);
-        return @enumFromInt(str_index);
+        return @fromBackingInt(@intCast(str_index));
     }
 }
 
@@ -10940,7 +11040,7 @@ fn strLitAsString(astgen: *AstGen, str_lit_token: Ast.TokenIndex) !IndexSlice {
     try astgen.parseStrLit(str_lit_token, string_bytes, token_bytes, 0);
     const key: []const u8 = string_bytes.items[str_index..];
     if (std.mem.findScalar(u8, key, 0)) |_| return .{
-        .index = @enumFromInt(str_index),
+        .index = @fromBackingInt(@intCast(str_index)),
         .len = @intCast(key.len),
     };
     const gop = try astgen.string_table.getOrPutContextAdapted(gpa, key, StringIndexAdapter{
@@ -10951,7 +11051,7 @@ fn strLitAsString(astgen: *AstGen, str_lit_token: Ast.TokenIndex) !IndexSlice {
     if (gop.found_existing) {
         string_bytes.shrinkRetainingCapacity(str_index);
         return .{
-            .index = @enumFromInt(gop.key_ptr.*),
+            .index = @fromBackingInt(@intCast(gop.key_ptr.*)),
             .len = @intCast(key.len),
         };
     } else {
@@ -10961,7 +11061,7 @@ fn strLitAsString(astgen: *AstGen, str_lit_token: Ast.TokenIndex) !IndexSlice {
         // be null terminated for that to work.
         try string_bytes.append(gpa, 0);
         return .{
-            .index = @enumFromInt(str_index),
+            .index = @fromBackingInt(@intCast(str_index)),
             .len = @intCast(key.len),
         };
     }
@@ -10995,7 +11095,7 @@ fn strLitNodeAsString(astgen: *AstGen, node: Ast.Node.Index) !IndexSlice {
     const len = string_bytes.items.len - str_index;
     try string_bytes.append(gpa, 0);
     return IndexSlice{
-        .index = @enumFromInt(str_index),
+        .index = @fromBackingInt(@intCast(str_index)),
         .len = @intCast(len),
     };
 }
@@ -11153,7 +11253,7 @@ const Scope = struct {
         declaring_gz: ?*GenZir,
 
         /// Set of captures used by this namespace.
-        captures: std.AutoArrayHashMapUnmanaged(Zir.Inst.Capture, Zir.NullTerminatedString) = .empty,
+        captures: std.array_hash_map.Auto(Zir.Inst.Capture, Zir.NullTerminatedString) = .empty,
 
         fn deinit(self: *Namespace, gpa: Allocator) void {
             self.decls.deinit(gpa);
@@ -11184,7 +11284,7 @@ const GenZir = struct {
     /// exits from this block should use `break_inline` rather than `break`.
     is_inline: bool = false,
     /// The containing decl AST node.
-    decl_node_index: Ast.Node.Index,
+    src_baseline: Ast.Node.Index,
     /// The containing decl line index, absolute.
     decl_line: u32,
     /// Parents can be: `LocalVal`, `LocalPtr`, `GenZir`, `Defer`, `Namespace`.
@@ -11270,7 +11370,7 @@ const GenZir = struct {
         return .{
             .is_comptime = gz.is_comptime,
             .is_typeof = gz.is_typeof,
-            .decl_node_index = gz.decl_node_index,
+            .src_baseline = gz.src_baseline,
             .decl_line = gz.decl_line,
             .parent = scope,
             .astgen = gz.astgen,
@@ -11293,28 +11393,24 @@ const GenZir = struct {
         if (gz.isEmpty()) return false;
         const tags = gz.astgen.instructions.items(.tag);
         const last_inst = gz.instructions.items[gz.instructions.items.len - 1];
-        return tags[@intFromEnum(last_inst)].isNoReturn();
+        return tags[@backingInt(last_inst)].isNoReturn();
     }
 
     /// TODO all uses of this should be replaced with uses of `endsWithNoReturn`.
     fn refIsNoReturn(gz: GenZir, inst_ref: Zir.Inst.Ref) bool {
         if (inst_ref == .unreachable_value) return true;
         if (inst_ref.toIndex()) |inst_index| {
-            return gz.astgen.instructions.items(.tag)[@intFromEnum(inst_index)].isNoReturn();
+            return gz.astgen.instructions.items(.tag)[@backingInt(inst_index)].isNoReturn();
         }
         return false;
     }
 
     fn nodeIndexToRelative(gz: GenZir, node_index: Ast.Node.Index) Ast.Node.Offset {
-        return gz.decl_node_index.toOffset(node_index);
+        return gz.src_baseline.toOffset(node_index);
     }
 
     fn tokenIndexToRelative(gz: GenZir, token: Ast.TokenIndex) Ast.TokenOffset {
-        return .init(gz.srcToken(), token);
-    }
-
-    fn srcToken(gz: GenZir) Ast.TokenIndex {
-        return gz.astgen.tree.firstToken(gz.decl_node_index);
+        return .init(gz.astgen.tree.firstToken(gz.src_baseline), token);
     }
 
     fn setBreakResultInfo(gz: *GenZir, parent_ri: AstGen.ResultInfo) void {
@@ -11351,7 +11447,7 @@ const GenZir = struct {
             @typeInfo(Zir.Inst.BoolBr).@"struct".field_names.len + body_len,
         );
         const zir_datas = astgen.instructions.items(.data);
-        zir_datas[@intFromEnum(bool_br)].pl_node.payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.BoolBr{
+        zir_datas[@backingInt(bool_br)].pl_node.payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.BoolBr{
             .lhs = bool_br_lhs,
             .body_len = body_len,
         });
@@ -11368,14 +11464,14 @@ const GenZir = struct {
         const body_len = astgen.countBodyLenAfterFixups(body);
 
         const zir_tags = astgen.instructions.items(.tag);
-        assert(zir_tags[@intFromEnum(inst)] != .block_comptime); // use `setComptimeBlockBody` instead
+        assert(zir_tags[@backingInt(inst)] != .block_comptime); // use `setComptimeBlockBody` instead
 
         try astgen.extra.ensureUnusedCapacity(
             gpa,
             @typeInfo(Zir.Inst.Block).@"struct".field_names.len + body_len,
         );
         const zir_datas = astgen.instructions.items(.data);
-        zir_datas[@intFromEnum(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
+        zir_datas[@backingInt(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
             Zir.Inst.Block{ .body_len = body_len },
         );
         astgen.appendBodyWithFixups(body);
@@ -11391,14 +11487,14 @@ const GenZir = struct {
         const body_len = astgen.countBodyLenAfterFixups(body);
 
         const zir_tags = astgen.instructions.items(.tag);
-        assert(zir_tags[@intFromEnum(inst)] == .block_comptime); // use `setBlockBody` instead
+        assert(zir_tags[@backingInt(inst)] == .block_comptime); // use `setBlockBody` instead
 
         try astgen.extra.ensureUnusedCapacity(
             gpa,
             @typeInfo(Zir.Inst.BlockComptime).@"struct".field_names.len + body_len,
         );
         const zir_datas = astgen.instructions.items(.data);
-        zir_datas[@intFromEnum(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
+        zir_datas[@backingInt(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
             Zir.Inst.BlockComptime{
                 .reason = comptime_reason,
                 .body_len = body_len,
@@ -11419,7 +11515,7 @@ const GenZir = struct {
             @typeInfo(Zir.Inst.Try).@"struct".field_names.len + body_len,
         );
         const zir_datas = astgen.instructions.items(.data);
-        zir_datas[@intFromEnum(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
+        zir_datas[@backingInt(inst)].pl_node.payload_index = astgen.addExtraAssumeCapacity(
             Zir.Inst.Try{
                 .operand = operand,
                 .body_len = body_len,
@@ -11467,7 +11563,7 @@ const GenZir = struct {
         const astgen = gz.astgen;
         const gpa = astgen.gpa;
         const ret_ref = if (args.ret_ref == .void_type) .none else args.ret_ref;
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
 
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
         try astgen.instructions.ensureUnusedCapacity(gpa, 1);
@@ -11558,11 +11654,11 @@ const GenZir = struct {
             if (cc_body.len != 0) {
                 astgen.extra.appendAssumeCapacity(astgen.countBodyLenAfterFixups(cc_body));
                 astgen.appendBodyWithFixups(cc_body);
-                const break_extra = zir_datas[@intFromEnum(cc_body[cc_body.len - 1])].@"break".payload_index;
+                const break_extra = zir_datas[@backingInt(cc_body[cc_body.len - 1])].@"break".payload_index;
                 astgen.extra.items[break_extra + std.meta.fieldIndex(Zir.Inst.Break, "block_inst").?] =
-                    @intFromEnum(new_index);
+                    @backingInt(new_index);
             } else if (args.cc_ref != .none) {
-                astgen.extra.appendAssumeCapacity(@intFromEnum(args.cc_ref));
+                astgen.extra.appendAssumeCapacity(@backingInt(args.cc_ref));
             }
             if (ret_body.len != 0) {
                 astgen.extra.appendAssumeCapacity(
@@ -11571,11 +11667,11 @@ const GenZir = struct {
                 );
                 astgen.appendBodyWithFixups(args.ret_param_refs);
                 astgen.appendBodyWithFixups(ret_body);
-                const break_extra = zir_datas[@intFromEnum(ret_body[ret_body.len - 1])].@"break".payload_index;
+                const break_extra = zir_datas[@backingInt(ret_body[ret_body.len - 1])].@"break".payload_index;
                 astgen.extra.items[break_extra + std.meta.fieldIndex(Zir.Inst.Break, "block_inst").?] =
-                    @intFromEnum(new_index);
+                    @backingInt(new_index);
             } else if (ret_ref != .none) {
-                astgen.extra.appendAssumeCapacity(@intFromEnum(ret_ref));
+                astgen.extra.appendAssumeCapacity(@backingInt(ret_ref));
             }
 
             if (args.noalias_bits != 0) {
@@ -11612,11 +11708,11 @@ const GenZir = struct {
                 astgen.appendBodyWithFixups(args.ret_param_refs);
                 astgen.appendBodyWithFixups(ret_body);
 
-                const break_extra = zir_datas[@intFromEnum(ret_body[ret_body.len - 1])].@"break".payload_index;
+                const break_extra = zir_datas[@backingInt(ret_body[ret_body.len - 1])].@"break".payload_index;
                 astgen.extra.items[break_extra + std.meta.fieldIndex(Zir.Inst.Break, "block_inst").?] =
-                    @intFromEnum(new_index);
+                    @backingInt(new_index);
             } else if (ret_ref != .none) {
-                astgen.extra.appendAssumeCapacity(@intFromEnum(ret_ref));
+                astgen.extra.appendAssumeCapacity(@backingInt(ret_ref));
             }
             astgen.appendBodyWithFixupsExtraRefsArrayList(&astgen.extra, body, args.param_insts);
             astgen.extra.appendSliceAssumeCapacity(src_locs_and_hash);
@@ -11664,11 +11760,11 @@ const GenZir = struct {
         try astgen.instructions.ensureUnusedCapacity(gpa, 1);
         try astgen.string_bytes.ensureUnusedCapacity(gpa, @sizeOf(std.math.big.Limb) * limbs.len);
 
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .int_big,
             .data = .{ .str = .{
-                .start = @enumFromInt(astgen.string_bytes.items.len),
+                .start = @fromBackingInt(@intCast(astgen.string_bytes.items.len)),
                 .len = @intCast(limbs.len),
             } },
         });
@@ -11709,7 +11805,7 @@ const GenZir = struct {
         src_node: Ast.Node.Index,
     ) !Zir.Inst.Index {
         assert(operand != .none);
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         try gz.astgen.instructions.append(gz.astgen.gpa, .{
             .tag = tag,
             .data = .{ .un_node = .{
@@ -11732,7 +11828,7 @@ const GenZir = struct {
         try gz.astgen.instructions.ensureUnusedCapacity(gpa, 1);
 
         const payload_index = try gz.astgen.addExtra(extra);
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.appendAssumeCapacity(.{
             .tag = tag,
             .data = .{ .pl_node = .{
@@ -11789,7 +11885,7 @@ const GenZir = struct {
         gz.astgen.appendBodyWithFixupsExtraRefsArrayList(&gz.astgen.extra, param_body, prev_param_insts);
         param_gz.unstack();
 
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.appendAssumeCapacity(.{
             .tag = tag,
             .data = .{ .pl_tok = .{
@@ -11802,7 +11898,7 @@ const GenZir = struct {
     }
 
     fn addStdLangValue(gz: *GenZir, src_node: Ast.Node.Index, val: Zir.Inst.StdLangValue) !Zir.Inst.Ref {
-        return addExtendedNodeSmall(gz, .std_lang_value, src_node, @intFromEnum(val));
+        return addExtendedNodeSmall(gz, .std_lang_value, src_node, @backingInt(val));
     }
 
     fn addExtendedPayload(gz: *GenZir, opcode: Zir.Inst.Extended, extra: anytype) !Zir.Inst.Ref {
@@ -11821,7 +11917,7 @@ const GenZir = struct {
         try gz.astgen.instructions.ensureUnusedCapacity(gpa, 1);
 
         const payload_index = try gz.astgen.addExtra(extra);
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
@@ -11853,7 +11949,7 @@ const GenZir = struct {
         const payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.NodeMultiOp{
             .src_node = gz.nodeIndexToRelative(node),
         });
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
@@ -11878,7 +11974,7 @@ const GenZir = struct {
 
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
         try astgen.instructions.ensureUnusedCapacity(gpa, 1);
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
@@ -11902,13 +11998,13 @@ const GenZir = struct {
 
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
         try astgen.instructions.ensureUnusedCapacity(gpa, 1);
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = opcode,
                 .small = small,
-                .operand = @bitCast(@intFromEnum(gz.nodeIndexToRelative(src_node))),
+                .operand = @bitCast(@backingInt(gz.nodeIndexToRelative(src_node))),
             } },
         });
         gz.instructions.appendAssumeCapacity(new_index);
@@ -11940,7 +12036,7 @@ const GenZir = struct {
         abs_tok_index: Ast.TokenIndex,
     ) !Zir.Inst.Index {
         const astgen = gz.astgen;
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         assert(operand != .none);
         try astgen.instructions.append(astgen.gpa, .{
             .tag = tag,
@@ -12090,7 +12186,7 @@ const GenZir = struct {
         try gz.astgen.instructions.ensureUnusedCapacity(gpa, 1);
         try gz.astgen.extra.ensureUnusedCapacity(gpa, @typeInfo(Zir.Inst.Break).@"struct".field_names.len);
 
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.appendAssumeCapacity(.{
             .tag = tag,
             .data = .{ .@"break" = .{
@@ -12188,7 +12284,7 @@ const GenZir = struct {
             .data = .{ .extended = .{
                 .opcode = opcode,
                 .small = undefined,
-                .operand = @bitCast(@intFromEnum(gz.nodeIndexToRelative(src_node))),
+                .operand = @bitCast(@backingInt(gz.nodeIndexToRelative(src_node))),
             } },
         });
     }
@@ -12219,10 +12315,10 @@ const GenZir = struct {
             .src_node = gz.nodeIndexToRelative(args.node),
         });
         if (args.type_inst != .none) {
-            astgen.extra.appendAssumeCapacity(@intFromEnum(args.type_inst));
+            astgen.extra.appendAssumeCapacity(@backingInt(args.type_inst));
         }
         if (args.align_inst != .none) {
-            astgen.extra.appendAssumeCapacity(@intFromEnum(args.align_inst));
+            astgen.extra.appendAssumeCapacity(@backingInt(args.align_inst));
         }
 
         const has_type: u4 = @intFromBool(args.type_inst != .none);
@@ -12231,7 +12327,7 @@ const GenZir = struct {
         const is_comptime: u4 = @intFromBool(args.is_comptime);
         const small: u16 = has_type | (has_align << 1) | (is_const << 2) | (is_comptime << 3);
 
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
@@ -12286,7 +12382,7 @@ const GenZir = struct {
             .inputs_len = @intCast(args.inputs.len),
         };
 
-        const new_index: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
         astgen.instructions.appendAssumeCapacity(.{
             .tag = .extended,
             .data = .{ .extended = .{
@@ -12303,7 +12399,7 @@ const GenZir = struct {
     /// Does *not* append the block instruction to the scope.
     /// Leaves the `payload_index` field undefined.
     fn makeBlockInst(gz: *GenZir, tag: Zir.Inst.Tag, node: Ast.Node.Index) !Zir.Inst.Index {
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         const gpa = gz.astgen.gpa;
         try gz.astgen.instructions.append(gpa, .{
             .tag = tag,
@@ -12319,7 +12415,7 @@ const GenZir = struct {
     /// Does *not* append the block instruction to the scope.
     /// Leaves the `payload_index` field undefined. Use `setDeclaration` to finalize.
     fn makeDeclaration(gz: *GenZir, node: Ast.Node.Index) !Zir.Inst.Index {
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         try gz.astgen.instructions.append(gz.astgen.gpa, .{
             .tag = .declaration,
             .data = .{ .declaration = .{
@@ -12335,7 +12431,7 @@ const GenZir = struct {
     fn addCondBr(gz: *GenZir, tag: Zir.Inst.Tag, node: Ast.Node.Index) !Zir.Inst.Index {
         const gpa = gz.astgen.gpa;
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         try gz.astgen.instructions.append(gpa, .{
             .tag = tag,
             .data = .{ .pl_node = .{
@@ -12348,8 +12444,12 @@ const GenZir = struct {
     }
 
     fn setStruct(gz: *GenZir, inst: Zir.Inst.Index, args: struct {
+        src_line: u32,
+        src_column: u32,
         src_node: Ast.Node.Index,
         name_strat: Zir.Inst.NameStrategy,
+        arg_baseline_src_node: Ast.Node.OptionalIndex,
+        fields_baseline_src_node: Ast.Node.OptionalIndex,
         layout: std.lang.Type.ContainerLayout,
         backing_int_type_body_len: ?u32,
         decls_len: u32,
@@ -12375,7 +12475,9 @@ const GenZir = struct {
         const fields_hash_arr: [4]u32 = @bitCast(args.fields_hash);
 
         try astgen.extra.ensureUnusedCapacity(gpa, @typeInfo(Zir.Inst.StructDecl).@"struct".field_names.len +
-            4 + // `captures_len`, `decls_len`, `fields_len`, `backing_int_type_body_len`
+            3 + // `captures_len`, `decls_len`, `fields_len`
+            2 + // `arg_baseline_src_node`, `fields_baseline_src_node`
+            1 + // `backing_int_type_body_len`
             captures_len * 2 + // `capture`, `capture_name`
             args.remaining.len);
 
@@ -12384,19 +12486,26 @@ const GenZir = struct {
             .fields_hash_1 = fields_hash_arr[1],
             .fields_hash_2 = fields_hash_arr[2],
             .fields_hash_3 = fields_hash_arr[3],
-            .src_line = astgen.source_line,
+            .src_line = args.src_line,
+            .src_column = args.src_column,
             .src_node = args.src_node,
         });
 
         if (captures_len != 0) astgen.extra.appendAssumeCapacity(captures_len);
         if (args.decls_len != 0) astgen.extra.appendAssumeCapacity(args.decls_len);
         if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(args.fields_len);
+        if (args.backing_int_type_body_len != null) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.arg_baseline_src_node.unwrap().?),
+        );
+        if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.fields_baseline_src_node.unwrap().?),
+        );
         if (args.backing_int_type_body_len) |n| astgen.extra.appendAssumeCapacity(n);
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.captures));
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.capture_names));
         astgen.extra.appendSliceAssumeCapacity(args.remaining);
 
-        astgen.instructions.set(@intFromEnum(inst), .{
+        astgen.instructions.set(@backingInt(inst), .{
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = .struct_decl,
@@ -12417,8 +12526,12 @@ const GenZir = struct {
     }
 
     fn setUnion(gz: *GenZir, inst: Zir.Inst.Index, args: struct {
+        src_line: u32,
+        src_column: u32,
         src_node: Ast.Node.Index,
         name_strat: Zir.Inst.NameStrategy,
+        arg_baseline_src_node: Ast.Node.OptionalIndex,
+        fields_baseline_src_node: Ast.Node.OptionalIndex,
         kind: Zir.Inst.UnionDecl.Kind,
         arg_type_body_len: ?u32,
         decls_len: u32,
@@ -12442,7 +12555,9 @@ const GenZir = struct {
         const fields_hash_arr: [4]u32 = @bitCast(args.fields_hash);
 
         try astgen.extra.ensureUnusedCapacity(gpa, @typeInfo(Zir.Inst.UnionDecl).@"struct".field_names.len +
-            4 + // `captures_len`, `decls_len`, `fields_len`, `arg_type_body_len`
+            3 + // `captures_len`, `decls_len`, `fields_len`
+            2 + // `arg_baseline_src_node`, `fields_baseline_src_node`
+            1 + // `arg_type_body_len`
             captures_len * 2 + // `capture`, `capture_name`
             args.remaining.len);
 
@@ -12451,13 +12566,20 @@ const GenZir = struct {
             .fields_hash_1 = fields_hash_arr[1],
             .fields_hash_2 = fields_hash_arr[2],
             .fields_hash_3 = fields_hash_arr[3],
-            .src_line = astgen.source_line,
+            .src_line = args.src_line,
+            .src_column = args.src_column,
             .src_node = args.src_node,
         });
 
         if (captures_len != 0) astgen.extra.appendAssumeCapacity(captures_len);
         if (args.decls_len != 0) astgen.extra.appendAssumeCapacity(args.decls_len);
         if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(args.fields_len);
+        if (args.kind.hasArgType()) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.arg_baseline_src_node.unwrap().?),
+        );
+        if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.fields_baseline_src_node.unwrap().?),
+        );
         if (args.kind.hasArgType()) {
             astgen.extra.appendAssumeCapacity(args.arg_type_body_len.?);
         } else {
@@ -12467,7 +12589,7 @@ const GenZir = struct {
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.capture_names));
         astgen.extra.appendSliceAssumeCapacity(args.remaining);
 
-        astgen.instructions.set(@intFromEnum(inst), .{
+        astgen.instructions.set(@backingInt(inst), .{
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = .union_decl,
@@ -12486,8 +12608,12 @@ const GenZir = struct {
     }
 
     fn setEnum(gz: *GenZir, inst: Zir.Inst.Index, args: struct {
+        src_line: u32,
+        src_column: u32,
         src_node: Ast.Node.Index,
         name_strat: Zir.Inst.NameStrategy,
+        arg_baseline_src_node: Ast.Node.OptionalIndex,
+        fields_baseline_src_node: Ast.Node.OptionalIndex,
         tag_type_body_len: ?u32,
         nonexhaustive: bool,
         decls_len: u32,
@@ -12510,7 +12636,9 @@ const GenZir = struct {
         const fields_hash_arr: [4]u32 = @bitCast(args.fields_hash);
 
         try astgen.extra.ensureUnusedCapacity(gpa, @typeInfo(Zir.Inst.EnumDecl).@"struct".field_names.len +
-            4 + // `captures_len`, `decls_len`, `fields_len`, `tag_type_body_len`
+            3 + // `captures_len`, `decls_len`, `fields_len`
+            2 + // `arg_baseline_src_node`, `fields_baseline_src_node`
+            1 + // `tag_type_body_len`
             captures_len * 2 + // `capture`, `capture_name`
             args.remaining.len);
 
@@ -12519,19 +12647,26 @@ const GenZir = struct {
             .fields_hash_1 = fields_hash_arr[1],
             .fields_hash_2 = fields_hash_arr[2],
             .fields_hash_3 = fields_hash_arr[3],
-            .src_line = astgen.source_line,
+            .src_line = args.src_line,
+            .src_column = args.src_column,
             .src_node = args.src_node,
         });
 
         if (captures_len != 0) astgen.extra.appendAssumeCapacity(captures_len);
         if (args.decls_len != 0) astgen.extra.appendAssumeCapacity(args.decls_len);
         if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(args.fields_len);
+        if (args.tag_type_body_len != null) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.arg_baseline_src_node.unwrap().?),
+        );
+        if (args.fields_len != 0) astgen.extra.appendAssumeCapacity(
+            @backingInt(args.fields_baseline_src_node.unwrap().?),
+        );
         if (args.tag_type_body_len) |n| astgen.extra.appendAssumeCapacity(n);
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.captures));
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.capture_names));
         astgen.extra.appendSliceAssumeCapacity(args.remaining);
 
-        astgen.instructions.set(@intFromEnum(inst), .{
+        astgen.instructions.set(@backingInt(inst), .{
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = .enum_decl,
@@ -12550,6 +12685,8 @@ const GenZir = struct {
     }
 
     fn setOpaque(gz: *GenZir, inst: Zir.Inst.Index, args: struct {
+        src_line: u32,
+        src_column: u32,
         src_node: Ast.Node.Index,
         name_strat: Zir.Inst.NameStrategy,
         decls_len: u32,
@@ -12571,7 +12708,8 @@ const GenZir = struct {
             args.decls.len);
 
         const payload_index = astgen.addExtraAssumeCapacity(Zir.Inst.OpaqueDecl{
-            .src_line = astgen.source_line,
+            .src_line = args.src_line,
+            .src_column = args.src_column,
             .src_node = args.src_node,
         });
         if (captures_len != 0) astgen.extra.appendAssumeCapacity(captures_len);
@@ -12580,7 +12718,7 @@ const GenZir = struct {
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.capture_names));
         astgen.extra.appendSliceAssumeCapacity(@ptrCast(args.decls));
 
-        astgen.instructions.set(@intFromEnum(inst), .{
+        astgen.instructions.set(@backingInt(inst), .{
             .tag = .extended,
             .data = .{ .extended = .{
                 .opcode = .opaque_decl,
@@ -12603,7 +12741,7 @@ const GenZir = struct {
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
         try gz.astgen.instructions.ensureUnusedCapacity(gpa, 1);
 
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.appendAssumeCapacity(inst);
         gz.instructions.appendAssumeCapacity(new_index);
         return new_index;
@@ -12614,7 +12752,7 @@ const GenZir = struct {
         try gz.instructions.ensureUnusedCapacity(gpa, 1);
         try gz.astgen.instructions.ensureUnusedCapacity(gpa, 1);
 
-        const new_index: Zir.Inst.Index = @enumFromInt(gz.astgen.instructions.len);
+        const new_index: Zir.Inst.Index = @fromBackingInt(@intCast(gz.astgen.instructions.len));
         gz.astgen.instructions.len += 1;
         gz.instructions.appendAssumeCapacity(new_index);
         return new_index;
@@ -12643,7 +12781,7 @@ const GenZir = struct {
 /// This can only be for short-lived references; the memory becomes invalidated
 /// when another string is added.
 fn nullTerminatedString(astgen: AstGen, index: Zir.NullTerminatedString) [*:0]const u8 {
-    return @ptrCast(astgen.string_bytes.items[@intFromEnum(index)..]);
+    return @ptrCast(astgen.string_bytes.items[@backingInt(index)..]);
 }
 
 /// Local variables shadowing detection, including function parameters.
@@ -12846,9 +12984,9 @@ fn scanContainer(
     var bfa_state: std.heap.BufferFirstAllocator = .init(&bfa_buf, astgen.gpa);
     const bfa = bfa_state.allocator();
 
-    var names: std.AutoArrayHashMapUnmanaged(Zir.NullTerminatedString, NameEntry) = .empty;
-    var test_names: std.AutoArrayHashMapUnmanaged(Zir.NullTerminatedString, NameEntry) = .empty;
-    var decltest_names: std.AutoArrayHashMapUnmanaged(Zir.NullTerminatedString, NameEntry) = .empty;
+    var names: std.array_hash_map.Auto(Zir.NullTerminatedString, NameEntry) = .empty;
+    var test_names: std.array_hash_map.Auto(Zir.NullTerminatedString, NameEntry) = .empty;
+    var decltest_names: std.array_hash_map.Auto(Zir.NullTerminatedString, NameEntry) = .empty;
     defer {
         names.deinit(bfa);
         test_names.deinit(bfa);
@@ -13096,7 +13234,7 @@ fn scanContainer(
 }
 
 fn appendPlaceholder(astgen: *AstGen) Allocator.Error!Zir.Inst.Index {
-    const inst: Zir.Inst.Index = @enumFromInt(astgen.instructions.len);
+    const inst: Zir.Inst.Index = @fromBackingInt(@intCast(astgen.instructions.len));
     try astgen.instructions.append(astgen.gpa, .{
         .tag = .extended,
         .data = .{ .extended = .{
@@ -13143,7 +13281,7 @@ fn appendPossiblyRefdBodyInst(
     list: *std.ArrayList(u32),
     body_inst: Zir.Inst.Index,
 ) void {
-    list.appendAssumeCapacity(@intFromEnum(body_inst));
+    list.appendAssumeCapacity(@backingInt(body_inst));
     const kv = astgen.ref_table.fetchRemove(body_inst) orelse return;
     const ref_inst = kv.value;
     return appendPossiblyRefdBodyInst(astgen, list, ref_inst);
@@ -13181,8 +13319,8 @@ fn emitDbgStmt(gz: *GenZir, lc: LineColumn) !void {
     if (gz.instructions.items.len > gz.instructions_top) {
         const astgen = gz.astgen;
         const last = gz.instructions.items[gz.instructions.items.len - 1];
-        if (astgen.instructions.items(.tag)[@intFromEnum(last)] == .dbg_stmt) {
-            astgen.instructions.items(.data)[@intFromEnum(last)].dbg_stmt = .{
+        if (astgen.instructions.items(.tag)[@backingInt(last)] == .dbg_stmt) {
+            astgen.instructions.items(.data)[@backingInt(last)].dbg_stmt = .{
                 .line = lc[0],
                 .column = lc[1],
             };
@@ -13205,7 +13343,7 @@ fn emitDbgStmt(gz: *GenZir, lc: LineColumn) !void {
 fn emitDbgStmtForceCurrentIndex(gz: *GenZir, lc: LineColumn) !void {
     const astgen = gz.astgen;
     if (gz.instructions.items.len > gz.instructions_top and
-        @intFromEnum(gz.instructions.items[gz.instructions.items.len - 1]) == astgen.instructions.len - 1)
+        @backingInt(gz.instructions.items[gz.instructions.items.len - 1]) == astgen.instructions.len - 1)
     {
         const last = astgen.instructions.len - 1;
         if (astgen.instructions.items(.tag)[last] == .dbg_stmt) {
@@ -13483,14 +13621,14 @@ fn setDeclaration(
         .flags_0 = flags_arr[0],
         .flags_1 = flags_arr[1],
     };
-    astgen.instructions.items(.data)[@intFromEnum(decl_inst)].declaration.payload_index =
+    astgen.instructions.items(.data)[@backingInt(decl_inst)].declaration.payload_index =
         astgen.addExtraAssumeCapacity(extra);
 
     if (id.hasName()) {
-        astgen.extra.appendAssumeCapacity(@intFromEnum(args.name));
+        astgen.extra.appendAssumeCapacity(@backingInt(args.name));
     }
     if (id.hasLibName()) {
-        astgen.extra.appendAssumeCapacity(@intFromEnum(args.lib_name));
+        astgen.extra.appendAssumeCapacity(@backingInt(args.lib_name));
     }
     if (id.hasTypeBody()) {
         astgen.extra.appendAssumeCapacity(type_len);

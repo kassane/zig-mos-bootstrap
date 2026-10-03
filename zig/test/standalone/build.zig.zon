@@ -141,9 +141,6 @@
         .strip_struct_init = .{
             .path = "strip_struct_init",
         },
-        .cmakedefine = .{
-            .path = "cmakedefine",
-        },
         .zerolength_check = .{
             .path = "zerolength_check",
         },
@@ -190,8 +187,11 @@
         .posix = .{
             .path = "posix",
         },
-        .debug_io_color = .{
-            .path = "debug_io_color",
+        .elf2 = .{
+            .path = "elf2",
+        },
+        .run_args = .{
+            .path = "run_args",
         },
     },
     .paths = .{

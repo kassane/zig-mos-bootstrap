@@ -20,6 +20,8 @@ pub const Version = enum {
 /// https://datatracker.ietf.org/doc/html/rfc7231#section-4 Initial definition
 ///
 /// https://datatracker.ietf.org/doc/html/rfc5789#section-2 PATCH
+///
+/// https://datatracker.ietf.org/doc/html/rfc10008#name-query-method QUERY
 pub const Method = enum {
     GET,
     HEAD,
@@ -30,12 +32,13 @@ pub const Method = enum {
     OPTIONS,
     TRACE,
     PATCH,
+    QUERY,
 
     /// Returns true if a request of this method is allowed to have a body
     /// Actual behavior from servers may vary and should still be checked
     pub fn requestHasBody(m: Method) bool {
         return switch (m) {
-            .POST, .PUT, .PATCH => true,
+            .POST, .PUT, .PATCH, .QUERY => true,
             .GET, .HEAD, .DELETE, .CONNECT, .OPTIONS, .TRACE => false,
         };
     }
@@ -44,7 +47,7 @@ pub const Method = enum {
     /// Actual behavior from clients may vary and should still be checked
     pub fn responseHasBody(m: Method) bool {
         return switch (m) {
-            .GET, .POST, .PUT, .DELETE, .CONNECT, .OPTIONS, .PATCH => true,
+            .GET, .POST, .PUT, .DELETE, .CONNECT, .OPTIONS, .PATCH, .QUERY => true,
             .HEAD, .TRACE => false,
         };
     }
@@ -56,7 +59,7 @@ pub const Method = enum {
     /// https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
     pub fn safe(m: Method) bool {
         return switch (m) {
-            .GET, .HEAD, .OPTIONS, .TRACE => true,
+            .GET, .HEAD, .OPTIONS, .TRACE, .QUERY => true,
             .POST, .PUT, .DELETE, .CONNECT, .PATCH => false,
         };
     }
@@ -70,7 +73,7 @@ pub const Method = enum {
     /// https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.2
     pub fn idempotent(m: Method) bool {
         return switch (m) {
-            .GET, .HEAD, .PUT, .DELETE, .OPTIONS, .TRACE => true,
+            .GET, .HEAD, .PUT, .DELETE, .OPTIONS, .TRACE, .QUERY => true,
             .CONNECT, .POST, .PATCH => false,
         };
     }
@@ -83,7 +86,7 @@ pub const Method = enum {
     /// https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.3
     pub fn cacheable(m: Method) bool {
         return switch (m) {
-            .GET, .HEAD => true,
+            .GET, .HEAD, .QUERY => true,
             .POST, .PUT, .DELETE, .CONNECT, .OPTIONS, .TRACE, .PATCH => false,
         };
     }
@@ -247,7 +250,7 @@ pub const Status = enum(u10) {
     };
 
     pub fn class(self: Status) Class {
-        return switch (@intFromEnum(self)) {
+        return switch (@backingInt(self)) {
             100...199 => .informational,
             200...299 => .success,
             300...399 => .redirect,
@@ -338,11 +341,11 @@ pub const Reader = struct {
         _,
 
         pub fn init(integer: u64) RemainingChunkLen {
-            return @enumFromInt(integer);
+            return @fromBackingInt(@intCast(integer));
         }
 
         pub fn int(rcl: RemainingChunkLen) u64 {
-            return @intFromEnum(rcl);
+            return @backingInt(rcl);
         }
     };
 
@@ -597,8 +600,8 @@ pub const Reader = struct {
                 continue :len .head;
             },
             else => |remaining_chunk_len| {
-                const n = try in.stream(w, limit.min(.limited64(@intFromEnum(remaining_chunk_len) - 2)));
-                chunk_len_ptr.* = .init(@intFromEnum(remaining_chunk_len) - n);
+                const n = try in.stream(w, limit.min(.limited64(@backingInt(remaining_chunk_len) - 2)));
+                chunk_len_ptr.* = .init(@backingInt(remaining_chunk_len) - n);
                 return n;
             },
         }

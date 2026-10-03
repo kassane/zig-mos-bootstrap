@@ -15,11 +15,9 @@ pub const StackTrace = struct {
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const GlobalLinkage = enum(u2) {
-    internal,
+pub const GlobalLinkage = enum(u1) {
     strong,
     weak,
-    link_once,
 };
 
 /// This data structure is used by the Zig language code generation and
@@ -107,13 +105,52 @@ pub const CodeModel = enum(u4) {
     tiny,
 };
 
+/// Deprecated, to be removed after 0.18.0
+pub const OptimizeMode = Optimize;
+
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const OptimizeMode = enum {
-    Debug,
-    ReleaseSafe,
-    ReleaseFast,
-    ReleaseSmall,
+pub const Optimize = enum {
+    /// Safety checks enabled. Optimize for bug detection, accurate debug info,
+    /// and compilation speed (in that order).
+    debug,
+    /// Safety checks enabled. Optimize for runtime performance.
+    safe,
+    /// Safety checks disabled. Optimize for runtime performance.
+    fast,
+    /// Safety checks disabled. Optimize for machine code size, then runtime performance.
+    small,
+
+    /// Deprecated, to be removed after 0.18.0
+    pub const Debug: @This() = .debug;
+    /// Deprecated, to be removed after 0.18.0
+    pub const ReleaseSafe: @This() = .safe;
+    /// Deprecated, to be removed after 0.18.0
+    pub const ReleaseFast: @This() = .fast;
+    /// Deprecated, to be removed after 0.18.0
+    pub const ReleaseSmall: @This() = .small;
+    /// Deprecated, to be removed after 0.18.0
+    pub fn fromString(s: []const u8) ?@This() {
+        return std.StaticStringMap(@This()).initComptime(&.{
+            .{ "Debug", .debug },
+            .{ "ReleaseSafe", .safe },
+            .{ "ReleaseFast", .fast },
+            .{ "ReleaseSmall", .small },
+            .{ "debug", .debug },
+            .{ "safe", .safe },
+            .{ "fast", .fast },
+            .{ "small", .small },
+        }).get(s);
+    }
+
+    /// Returns whether illegal behavior safety checks are enabled based on the
+    /// provided optimization mode.
+    pub fn runtimeSafety(o: @This()) bool {
+        return switch (o) {
+            .debug, .safe => true,
+            .fast, .small => false,
+        };
+    }
 };
 
 /// The calling convention of a function defines how arguments and return values are passed, as well
@@ -140,7 +177,7 @@ pub const CallingConvention = union(enum(u8)) {
     pub const kernel: CallingConvention = switch (builtin.target.cpu.arch) {
         .amdgcn => .amdgcn_kernel,
         .nvptx, .nvptx64 => .nvptx_kernel,
-        .spirv32, .spirv64 => .spirv_kernel,
+        .spirv32, .spirv64 => .{ .spirv_kernel = .{ .x = 1, .y = 1, .z = 1 } },
         else => unreachable,
     };
 
@@ -171,10 +208,12 @@ pub const CallingConvention = union(enum(u8)) {
     x86_64_regcall_v4_win: CommonOptions,
     x86_64_vectorcall: CommonOptions,
     x86_64_interrupt: CommonOptions,
+    x86_64_preserve_none: CommonOptions,
 
     // Calling conventions for the `x86` architecture.
     x86_sysv: X86RegparmOptions,
     x86_win: X86RegparmOptions,
+    x86_mingw: X86RegparmOptions,
     x86_stdcall: X86RegparmOptions,
     x86_fastcall: CommonOptions,
     x86_thiscall: CommonOptions,
@@ -197,6 +236,7 @@ pub const CallingConvention = union(enum(u8)) {
     aarch64_aapcs_win: CommonOptions,
     aarch64_vfabi: CommonOptions,
     aarch64_vfabi_sve: CommonOptions,
+    aarch64_preserve_none: CommonOptions,
 
     /// The standard `alpha` calling convention.
     alpha_osf: CommonOptions,
@@ -341,15 +381,21 @@ pub const CallingConvention = union(enum(u8)) {
     nvptx_device,
     nvptx_kernel,
 
-    // Calling conventions for kernels and shaders on the `spirv`, `spirv32`, and `spirv64` architectures.
+    // Calling conventions for kernels and shaders on the `spirv32` and `spirv64` architectures.
     spirv_device,
-    spirv_kernel,
-    spirv_fragment,
     spirv_vertex,
+    spirv_kernel: SpirvKernelOptions,
+    spirv_fragment: SpirvFragmentOptions,
+    spirv_task: SpirvKernelOptions,
+    spirv_mesh: SpirvMeshOptions,
 
     // Calling conventions for the `ez80` architecture.
     ez80_cet,
     ez80_tiflags,
+
+    // Calling convention used by
+    // [snake2p example program](https://github.com/benanderman/spork-8/blob/1bce10a2c3a3888a3f4ca8208112afbc5973fda4/Code/programs/snake2p.asm)
+    spork8,
 
     /// Options shared across most calling conventions.
     pub const CommonOptions = struct {
@@ -477,6 +523,39 @@ pub const CallingConvention = union(enum(u8)) {
         };
     };
 
+    pub const SpirvKernelOptions = struct {
+        x: u32,
+        y: u32,
+        z: u32,
+    };
+
+    pub const SpirvFragmentOptions = struct {
+        pub const DepthAssumption = enum(u2) {
+            none = 0,
+            greater = 1,
+            less = 2,
+            unchanged = 3,
+        };
+
+        pixel_centered_integer: bool = false,
+        depth_assumption: DepthAssumption = .none,
+    };
+
+    pub const SpirvMeshOptions = struct {
+        pub const StageOutput = enum(u2) {
+            output_points = 0,
+            output_lines = 1,
+            output_triangles = 2,
+        };
+
+        stage_output: StageOutput = .output_triangles,
+        max_primitives: u32 = 1,
+        max_vertices: u32 = 3,
+        x: u32,
+        y: u32,
+        z: u32,
+    };
+
     /// Returns the array of `std.Target.Cpu.Arch` to which this `CallingConvention` applies.
     /// Asserts that `cc` is not `.auto`, `.@"async"`, `.naked`, or `.@"inline"`.
     pub fn archs(cc: CallingConvention) []const std.Target.Cpu.Arch {
@@ -514,6 +593,7 @@ pub const AddressSpace = enum(u5) {
     param,
     shared,
     local,
+    private,
     input,
     output,
     uniform,
@@ -540,6 +620,10 @@ pub const AddressSpace = enum(u5) {
     /// This address space only addresses the "lookup" ram
     lut,
 
+    // Web Assembly
+    externref,
+    funcref,
+    
     /// This address space only addresses the zero page (first 256 bytes; 8-bit pointer).
     zp,
 };
@@ -585,6 +669,7 @@ pub const Type = union(enum) {
     @"anyframe": AnyFrame,
     vector: Vector,
     enum_literal,
+    spirv: Spirv,
 
     /// This data structure is used by the Zig language code generation and
     /// therefore must be kept in sync with the compiler implementation.
@@ -790,6 +875,59 @@ pub const Type = union(enum) {
 
     /// This data structure is used by the Zig language code generation and
     /// therefore must be kept in sync with the compiler implementation.
+    pub const Spirv = union(enum(u2)) {
+        sampler,
+        image: Image,
+        sampled_image: type,
+        runtime_array: type,
+
+        pub const Image = struct {
+            usage: Usage,
+            format: Format,
+            dim: Dimensionality,
+            depth: Depth,
+            access: Access,
+            arrayed: bool,
+            multisampled: bool,
+
+            pub const Usage = union(enum(u2)) {
+                unknown: type,
+                sampled: type,
+                storage: type,
+            };
+
+            pub const Format = enum(u4) {
+                unknown,
+                rgba32f,
+                rgba32i,
+                rgba32u,
+                rgba16f,
+                rgba16i,
+                rgba16u,
+                rgba8unorm,
+                rgba8snorm,
+                rgba8i,
+                rgba8u,
+                r32f,
+                r32i,
+                r32u,
+            };
+
+            pub const Dimensionality = enum(u2) {
+                @"1d",
+                @"2d",
+                @"3d",
+                cube,
+            };
+
+            pub const Depth = enum(u2) { unknown, depth, not_depth };
+
+            pub const Access = enum(u2) { unknown, read_only, write_only, read_write };
+        };
+    };
+
+    /// This data structure is used by the Zig language code generation and
+    /// therefore must be kept in sync with the compiler implementation.
     pub const Opaque = struct {
         decl_names: []const [:0]const u8,
     };
@@ -828,7 +966,7 @@ pub const Endian = enum {
     little,
 
     pub const native = builtin.target.cpu.arch.endian();
-    pub const foreign: Endian = @enumFromInt(1 - @intFromEnum(native));
+    pub const foreign: Endian = @fromBackingInt(@intCast(1 - @backingInt(native)));
 };
 
 /// This data structure is used by the Zig language code generation and
@@ -840,7 +978,7 @@ pub const Signedness = enum(u1) {
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const OutputMode = enum {
+pub const OutputMode = enum(u2) {
     Exe,
     Lib,
     Obj,
@@ -921,10 +1059,9 @@ pub const VaListArm = extern struct {
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
 pub const VaListHexagon = extern struct {
-    __gpr: c_long,
-    __fpr: c_long,
-    __overflow_arg_area: *anyopaque,
-    __reg_save_area: *anyopaque,
+    __current_saved_reg_area_pointer: *anyopaque,
+    __saved_reg_area_end_pointer: *anyopaque,
+    __overflow_area_pointer: *anyopaque,
 };
 
 /// This data structure is used by the Zig language code generation and
@@ -940,9 +1077,10 @@ pub const VaListPowerPc = extern struct {
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
 pub const VaListS390x = extern struct {
-    __current_saved_reg_area_pointer: *anyopaque,
-    __saved_reg_area_end_pointer: *anyopaque,
-    __overflow_area_pointer: *anyopaque,
+    __gpr: c_long,
+    __fpr: c_long,
+    __overflow_arg_area: *anyopaque,
+    __reg_save_area: *anyopaque,
 };
 
 /// This data structure is used by the Zig language code generation and
@@ -1090,11 +1228,12 @@ pub const ExternOptions = struct {
 
     pub const Decoration = union(enum) {
         location: u32,
+        flat: u32,
         descriptor: Descriptor,
 
         pub const Descriptor = struct {
-            binding: u32,
             set: u32,
+            binding: u32,
         };
     };
 
@@ -1126,21 +1265,23 @@ pub const BranchHint = enum(u3) {
     unpredictable,
 };
 
-/// This enum is set by the compiler and communicates which compiler backend is
-/// used to produce machine code.
-/// Think carefully before deciding to observe this value. Nearly all code should
-/// be agnostic to the backend that implements the language. The use case
-/// to use this value is to **work around problems with compiler implementations.**
+/// This enum is set by the compiler and communicates which compiler
+/// implementation is used to produce machine code.
 ///
-/// Avoid failing the compilation if the compiler backend does not match a
-/// whitelist of backends; rather one should detect that a known problem would
-/// occur in a blacklist of backends.
+/// In theory, Zig code should be agnostic to the backend that implements the
+/// language. The only reason to observe this value is to **work around
+/// problems with compiler implementations.**
 ///
-/// The enum is nonexhaustive so that alternate Zig language implementations may
-/// choose a number as their tag (please use a random number generator rather
-/// than a "cute" number) and codebases can interact with these values even if
+/// A common pitful is failing the compilation if the compiler backend does not
+/// match a whitelist of backends; a more resilient strategy is to detect that
+/// a known problem would occur in a blacklist of backends.
+///
+/// The enum is nonexhaustive so that alternate Zig language implementations
+/// may choose a random number as their tag, thereby avoiding conflicts with
+/// other implementations, and codebases can interact with these values even if
 /// this upstream enum does not have a name for the number. Of course, upstream
-/// is happy to accept pull requests to add Zig implementations to this enum.
+/// is happy to accept patches to add additional Zig implementations to this
+/// enum.
 ///
 /// This data structure is part of the Zig language specification.
 pub const CompilerBackend = enum(u64) {
@@ -1157,6 +1298,7 @@ pub const CompilerBackend = enum(u64) {
     stage2_llvm = 2,
     /// The reference implementation self-hosted compiler of Zig, using the
     /// backend that generates C source code.
+    ///
     /// Note that one can observe whether the compilation will output C code
     /// directly with `object_format` value rather than the `compiler_backend` value.
     stage2_c = 3,
@@ -1187,6 +1329,12 @@ pub const CompilerBackend = enum(u64) {
     /// The reference implementation self-hosted compiler of Zig, using the
     /// powerpc backend.
     stage2_powerpc = 12,
+    /// The reference implementation self-hosted compiler of Zig, using the
+    /// loongarch backend.
+    stage2_loongarch = 13,
+    /// The Zig Software Foundation self-hosted implementation of Zig. Backend
+    /// originally contributed by Ben Anderman in 2026.
+    zsf_spork8 = 14,
 
     _,
 };
@@ -1214,6 +1362,7 @@ pub const panic: type = p: {
         break :p root.panic;
     }
     break :p switch (builtin.zig_backend) {
+        .stage2_loongarch,
         .stage2_powerpc,
         .stage2_riscv64,
         => std.debug.simple_panic,

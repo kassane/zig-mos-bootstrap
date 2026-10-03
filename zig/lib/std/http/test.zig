@@ -1,5 +1,4 @@
 const builtin = @import("builtin");
-const native_endian = builtin.cpu.arch.endian();
 
 const std = @import("std");
 const http = std.http;
@@ -34,7 +33,6 @@ test "content length reader state update" {
 }
 
 test "trailers" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -121,7 +119,6 @@ test "trailers" {
 }
 
 test "HTTP server handles a chunked transfer coding request" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -190,7 +187,6 @@ test "HTTP server handles a chunked transfer coding request" {
 }
 
 test "echo content server" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -281,12 +277,11 @@ test "echo content server" {
 }
 
 test "Server.Request.respondStreaming non-chunked, unknown content-length" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.cpu.arch == .aarch64 and builtin.os.tag == .windows) {
         // https://github.com/ziglang/zig/issues/21457
         return error.SkipZigTest;
     }
@@ -349,7 +344,7 @@ test "Server.Request.respondStreaming non-chunked, unknown content-length" {
         var total: usize = 0;
         for (0..500) |i| {
             var buf: [30]u8 = undefined;
-            const line = try std.fmt.bufPrint(&buf, "{d}, ah ha ha!\n", .{i});
+            const line = try std.mem.print(&buf, "{d}, ah ha ha!\n", .{i});
             try expected_response.appendSlice(line);
             total += line.len;
         }
@@ -360,7 +355,6 @@ test "Server.Request.respondStreaming non-chunked, unknown content-length" {
 }
 
 test "receiving arbitrary http headers from the client" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -426,15 +420,10 @@ test "receiving arbitrary http headers from the client" {
 }
 
 test "general client/server API coverage" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
+    if (builtin.os.tag == .netbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/36649
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
-
-    if (builtin.os.tag == .windows) {
-        // This test was never passing on Windows.
-        return error.SkipZigTest;
-    }
 
     const test_server = try createTestServer(io, struct {
         fn run(test_server: *TestServer) anyerror!void {
@@ -922,7 +911,6 @@ test "general client/server API coverage" {
 }
 
 test "Server streams both reading and writing" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -1029,7 +1017,7 @@ fn echoTests(client: *http.Client, port: u16) !void {
     try expect(client.http_proxy != null or client.connection_pool.free_len == 1);
 
     { // send chunked request
-        const uri = try std.Uri.parse(try std.fmt.bufPrint(
+        const uri = try std.Uri.parse(try std.mem.print(
             &location_buffer,
             "http://127.0.0.1:{d}/echo-content",
             .{port},
@@ -1162,10 +1150,6 @@ const TestServer = struct {
 
 fn createTestServer(io: Io, S: type) !*TestServer {
     if (builtin.single_threaded) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_llvm and native_endian == .big) {
-        // https://github.com/ziglang/zig/issues/13782
-        return error.SkipZigTest;
-    }
 
     const address = try net.IpAddress.parse("127.0.0.1", 0);
 
@@ -1192,7 +1176,6 @@ fn createTestServer(io: Io, S: type) !*TestServer {
 }
 
 test "redirect to different connection" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -1230,7 +1213,7 @@ test "redirect to different connection" {
             defer stream.close(io);
 
             var loc_buf: [50]u8 = undefined;
-            const new_loc = try std.fmt.bufPrint(&loc_buf, "http://127.0.0.1:{d}/ok", .{
+            const new_loc = try std.mem.print(&loc_buf, "http://127.0.0.1:{d}/ok", .{
                 global.other_port.?,
             });
 
@@ -1258,7 +1241,7 @@ test "redirect to different connection" {
     defer client.deinit();
 
     var loc_buf: [100]u8 = undefined;
-    const location = try std.fmt.bufPrint(&loc_buf, "http://127.0.0.1:{d}/help", .{
+    const location = try std.mem.print(&loc_buf, "http://127.0.0.1:{d}/help", .{
         test_server_orig.port(),
     });
     const uri = try std.Uri.parse(location);
@@ -1280,7 +1263,6 @@ test "redirect to different connection" {
 }
 
 test "boot failed connections from the pool" {
-    if (builtin.cpu.arch.isPowerPC64() and builtin.mode != .Debug) return error.SkipZigTest; // https://github.com/llvm/llvm-project/issues/194257
     if (builtin.os.tag == .openbsd) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30806
 
     const io = std.testing.io;
@@ -1318,7 +1300,7 @@ test "boot failed connections from the pool" {
     defer client.deinit();
 
     var loc_buf: [100]u8 = undefined;
-    const location = try std.fmt.bufPrint(&loc_buf, "http://127.0.0.1:{d}/", .{
+    const location = try std.mem.print(&loc_buf, "http://127.0.0.1:{d}/", .{
         test_server_orig.port(),
     });
     const uri = try std.Uri.parse(location);

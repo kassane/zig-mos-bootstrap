@@ -3,9 +3,8 @@ const TranslateC = @This();
 const std = @import("std");
 const Io = std.Io;
 const Configuration = std.Build.Configuration;
-const allocPrint = std.fmt.allocPrint;
 const assert = std.debug.assert;
-const OptimizeMode = std.lang.OptimizeMode;
+const OptimizeMode = std.lang.Optimize;
 
 const Step = @import("../Step.zig");
 const Maker = @import("../../Maker.zig");
@@ -50,23 +49,22 @@ pub fn make(
 
     const opt: ?OptimizeMode = switch (conf_tc.flags.optimize) {
         .debug, .default => null, // Skip since it's the default
-        .safe => .ReleaseSafe,
-        .fast => .ReleaseFast,
-        .small => .ReleaseSmall,
+        .safe => .safe,
+        .fast => .fast,
+        .small => .small,
     };
-    if (opt) |o| argv.appendAssumeCapacity(try allocPrint(arena, "-O{t}", .{o}));
+    if (opt) |o| argv.appendAssumeCapacity(try arena.print("-O{t}", .{o}));
 
     try argv.ensureUnusedCapacity(arena, conf_tc.include_dirs.len * 2);
     for (0..conf_tc.include_dirs.len) |i|
         try Step.Compile.appendIncludeDirFlags(arena, conf_tc.include_dirs.get(conf.extra, i), &argv, step_index, maker);
 
-    for (conf_tc.c_macros.slice) |c_macro| {
-        (try argv.addManyAsArray(arena, 2)).* = .{ "-D", c_macro.slice(conf) };
-    }
+    try argv.ensureUnusedCapacity(arena, conf_tc.cc_argv.slice.len);
+    for (conf_tc.cc_argv.slice) |arg| argv.appendAssumeCapacity(arg.slice(conf));
 
     var prev_search_strategy: std.Build.Module.SystemLib.SearchStrategy = .paths_first;
     var prev_preferred_link_mode: std.builtin.LinkMode = .dynamic;
-    var seen_system_libs: std.AutoArrayHashMapUnmanaged(Configuration.String, []const []const u8) = .empty;
+    var seen_system_libs: std.array_hash_map.Auto(Configuration.String, []const []const u8) = .empty;
 
     for (conf_tc.system_libs.slice) |system_lib_index| {
         const system_lib = system_lib_index.get(conf);
@@ -133,7 +131,7 @@ pub fn make(
                     else => |e| return e,
                 }
             }
-            try argv.append(arena, try allocPrint(arena, "{s}{s}", .{
+            try argv.append(arena, try arena.print("{s}{s}", .{
                 prefix, system_lib_name,
             }));
         }
@@ -145,13 +143,14 @@ pub fn make(
     argv.appendAssumeCapacity(c_source_path);
 
     argv.appendAssumeCapacity("--listen=-");
-    const output_dir_path = (Step.evalZigProcess(step_index, maker, argv.items, progress_node, false) catch |err| switch (err) {
+    const opt_cache_digest = Step.evalZigProcess(step_index, maker, argv.items, progress_node, false) catch |err| switch (err) {
         error.NeedCompileErrorCheck => unreachable,
         else => |e| return e,
-    }).?;
+    };
+    const o_hex_digest = opt_cache_digest.toHex().?;
 
     const stem = Io.Dir.path.stem(Io.Dir.path.basename(c_source_path));
-    const out_basename = try allocPrint(arena, "{s}.zig", .{stem});
+    const out_basename = try arena.print("{s}.zig", .{stem});
 
-    maker.generatedPath(conf_tc.output_file).* = try output_dir_path.join(arena, out_basename);
+    _ = try maker.setGeneratedPath(conf_tc.output_file, .local_cache, &.{ "o", &o_hex_digest, out_basename });
 }

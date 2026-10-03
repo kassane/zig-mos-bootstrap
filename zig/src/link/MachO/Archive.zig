@@ -17,7 +17,7 @@ pub fn unpack(self: *Archive, macho_file: *MachO, path: Path, handle_index: File
     const offset = if (fat_arch) |ar| ar.offset else 0;
     const end_pos = if (fat_arch) |ar| offset + ar.size else (try handle.stat(io)).size;
 
-    var pos: usize = offset + SARMAG;
+    var pos: usize = offset + macho.ARMAG.len;
     while (true) {
         if (pos >= end_pos) break;
         if (!mem.isAligned(pos, 2)) pos += 1;
@@ -30,9 +30,9 @@ pub fn unpack(self: *Archive, macho_file: *MachO, path: Path, handle_index: File
         const hdr = @as(*align(1) const ar_hdr, @ptrCast(&hdr_buffer)).*;
         pos += @sizeOf(ar_hdr);
 
-        if (!mem.eql(u8, &hdr.ar_fmag, ARFMAG)) {
+        if (!mem.eql(u8, &hdr.ar_fmag, macho.ARFMAG)) {
             return diags.failParse(path, "invalid header delimiter: expected '{f}', found '{f}'", .{
-                std.ascii.hexEscape(ARFMAG, .lower), std.ascii.hexEscape(&hdr.ar_fmag, .lower),
+                std.ascii.hexEscape(macho.ARFMAG, .lower), std.ascii.hexEscape(&hdr.ar_fmag, .lower),
             });
         }
 
@@ -45,7 +45,7 @@ pub fn unpack(self: *Archive, macho_file: *MachO, path: Path, handle_index: File
                 const amt = try handle.readPositionalAll(io, buf, pos);
                 if (amt != len) return error.InputOutput;
                 pos += len;
-                const actual_len = mem.indexOfScalar(u8, buf, @as(u8, 0)) orelse len;
+                const actual_len = mem.findScalar(u8, buf, @as(u8, 0)) orelse len;
                 break :name buf[0..actual_len];
             }
             unreachable;
@@ -89,12 +89,13 @@ pub fn unpack(self: *Archive, macho_file: *MachO, path: Path, handle_index: File
 pub fn writeHeader(
     object_name: []const u8,
     object_size: usize,
-    format: Format,
     writer: *Writer,
 ) !void {
     var hdr: ar_hdr = .{};
 
-    const object_name_len = mem.alignForward(usize, object_name.len + 1, ptrWidth(format));
+    const object_name_start = writer.end + @sizeOf(ar_hdr);
+    const object_start = mem.alignForward(usize, object_name_start + object_name.len + 1, 8);
+    const object_name_len = object_start - object_name_start;
     const total_object_size = object_size + object_name_len;
 
     {
@@ -115,17 +116,6 @@ pub fn writeHeader(
     }
 }
 
-// Archive files start with the ARMAG identifying string.  Then follows a
-// `struct ar_hdr', and as many bytes of member file data as its `ar_size'
-// member indicates, for each member file.
-/// String that begins an archive file.
-pub const ARMAG: *const [SARMAG:0]u8 = "!<arch>\n";
-/// Size of that string.
-pub const SARMAG: u4 = 8;
-
-/// String in ar_fmag at the end of each header.
-const ARFMAG: *const [2:0]u8 = "`\n";
-
 pub const SYMDEF = "__.SYMDEF";
 pub const SYMDEF64 = "__.SYMDEF_64";
 pub const SYMDEF_SORTED = "__.SYMDEF SORTED";
@@ -145,7 +135,7 @@ pub const ar_hdr = extern struct {
     /// File size, in ASCII decimal.
     ar_size: [10]u8 = "0\x20\x20\x20\x20\x20\x20\x20\x20\x20".*,
     /// Always contains ARFMAG.
-    ar_fmag: [2]u8 = ARFMAG.*,
+    ar_fmag: [2]u8 = macho.ARFMAG.*,
 
     fn date(self: ar_hdr) !u64 {
         const value = mem.trimEnd(u8, &self.ar_date, &[_]u8{@as(u8, 0x20)});
@@ -160,7 +150,7 @@ pub const ar_hdr = extern struct {
     fn name(self: *const ar_hdr) ?[]const u8 {
         const value = &self.ar_name;
         if (mem.startsWith(u8, value, "#1/")) return null;
-        const sentinel = mem.indexOfScalar(u8, value, '/') orelse value.len;
+        const sentinel = mem.findScalar(u8, value, '/') orelse value.len;
         return value[0..sentinel];
     }
 
@@ -193,7 +183,7 @@ pub const ArSymtab = struct {
     pub fn write(ar: ArSymtab, format: Format, macho_file: *MachO, writer: *Writer) !void {
         const ptr_width = ptrWidth(format);
         // Header
-        try writeHeader(SYMDEF, ar.size(format), format, writer);
+        try writeHeader(SYMDEF, ar.size(format), writer);
         // Symtab size
         try writeInt(format, ar.entries.items.len * 2 * ptr_width, writer);
         // Symtab entries

@@ -1,31 +1,17 @@
+/* SPDX-License-Identifier: MIT */
 /*
  * Copyright (c) 2007 Dave Airlie <airlied@linux.ie>
  * Copyright (c) 2007 Jakob Bornecrantz <wallbraker@gmail.com>
  * Copyright (c) 2008 Red Hat Inc.
  * Copyright (c) 2007-2008 Tungsten Graphics, Inc., Cedar Park, TX., USA
  * Copyright (c) 2007-2008 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
  */
 
 #ifndef _DRM_MODE_H
 #define _DRM_MODE_H
+
+#include <linux/bits.h>
+#include <linux/const.h>
 
 #include "drm.h"
 
@@ -165,6 +151,10 @@ extern "C" {
 /* Link Status options */
 #define DRM_MODE_LINK_STATUS_GOOD	0
 #define DRM_MODE_LINK_STATUS_BAD	1
+
+/* Panel type property */
+#define DRM_MODE_PANEL_TYPE_UNKNOWN	0
+#define DRM_MODE_PANEL_TYPE_OLED	1
 
 /*
  * DRM_MODE_ROTATE_<degrees>
@@ -1544,6 +1534,83 @@ struct drm_mode_closefb {
 	__u32 fb_id;
 	__u32 pad;
 };
+
+/*
+ * Put 16-bit ARGB values into a standard 64-bit representation that can be
+ * used for ioctl parameters, inter-driver communication, etc.
+ *
+ * If the component values being provided contain less than 16 bits of
+ * precision, use a conversion ratio to get a better color approximation.
+ * The ratio is computed as (2^16 - 1) / (2^bpc - 1), where bpc and 16 are
+ * the input and output precision, respectively.
+ * Also note bpc must be greater than 0.
+ */
+#define __DRM_ARGB64_PREP(c, shift)					\
+	(((__u64)(c) & __GENMASK(15, 0)) << (shift))
+
+#define __DRM_ARGB64_PREP_BPC(c, shift, bpc)				\
+({									\
+	__u16 mask = __GENMASK((bpc) - 1, 0);				\
+	__u16 conv = __KERNEL_DIV_ROUND_CLOSEST((mask & (c)) *		\
+						__GENMASK(15, 0), mask);\
+	__DRM_ARGB64_PREP(conv, shift);					\
+})
+
+#define DRM_ARGB64_PREP(alpha, red, green, blue)			\
+(									\
+	__DRM_ARGB64_PREP(alpha, 48) |					\
+	__DRM_ARGB64_PREP(red,   32) |					\
+	__DRM_ARGB64_PREP(green, 16) |					\
+	__DRM_ARGB64_PREP(blue,   0)					\
+)
+
+#define DRM_ARGB64_PREP_BPC(alpha, red, green, blue, bpc)		\
+({									\
+	__typeof__(bpc) __bpc = bpc;					\
+	__DRM_ARGB64_PREP_BPC(alpha, 48, __bpc) |			\
+	__DRM_ARGB64_PREP_BPC(red,   32, __bpc) |			\
+	__DRM_ARGB64_PREP_BPC(green, 16, __bpc) |			\
+	__DRM_ARGB64_PREP_BPC(blue,   0, __bpc);			\
+})
+
+/*
+ * Extract the specified color component from a standard 64-bit ARGB value.
+ *
+ * If the requested precision is less than 16 bits, make use of a conversion
+ * ratio calculated as (2^bpc - 1) / (2^16 - 1), where bpc and 16 are the
+ * output and input precision, respectively.
+ *
+ * If speed is more important than accuracy, use DRM_ARGB64_GET*_BPCS()
+ * instead of DRM_ARGB64_GET*_BPC() in order to replace the expensive
+ * division with a simple bit right-shift operation.
+ */
+#define __DRM_ARGB64_GET(c, shift)					\
+	((__u16)(((__u64)(c) >> (shift)) & __GENMASK(15, 0)))
+
+#define __DRM_ARGB64_GET_BPC(c, shift, bpc)				\
+({									\
+	__u16 comp = __DRM_ARGB64_GET(c, shift);			\
+	__KERNEL_DIV_ROUND_CLOSEST(comp * __GENMASK((bpc) - 1, 0),	\
+				   __GENMASK(15, 0));			\
+})
+
+#define __DRM_ARGB64_GET_BPCS(c, shift, bpc)				\
+	(__DRM_ARGB64_GET(c, shift) >> (16 - (bpc)))
+
+#define DRM_ARGB64_GETA(c)		__DRM_ARGB64_GET(c, 48)
+#define DRM_ARGB64_GETR(c)		__DRM_ARGB64_GET(c, 32)
+#define DRM_ARGB64_GETG(c)		__DRM_ARGB64_GET(c, 16)
+#define DRM_ARGB64_GETB(c)		__DRM_ARGB64_GET(c, 0)
+
+#define DRM_ARGB64_GETA_BPC(c, bpc)	__DRM_ARGB64_GET_BPC(c, 48, bpc)
+#define DRM_ARGB64_GETR_BPC(c, bpc)	__DRM_ARGB64_GET_BPC(c, 32, bpc)
+#define DRM_ARGB64_GETG_BPC(c, bpc)	__DRM_ARGB64_GET_BPC(c, 16, bpc)
+#define DRM_ARGB64_GETB_BPC(c, bpc)	__DRM_ARGB64_GET_BPC(c, 0, bpc)
+
+#define DRM_ARGB64_GETA_BPCS(c, bpc)	__DRM_ARGB64_GET_BPCS(c, 48, bpc)
+#define DRM_ARGB64_GETR_BPCS(c, bpc)	__DRM_ARGB64_GET_BPCS(c, 32, bpc)
+#define DRM_ARGB64_GETG_BPCS(c, bpc)	__DRM_ARGB64_GET_BPCS(c, 16, bpc)
+#define DRM_ARGB64_GETB_BPCS(c, bpc)	__DRM_ARGB64_GET_BPCS(c, 0, bpc)
 
 #if defined(__cplusplus)
 }

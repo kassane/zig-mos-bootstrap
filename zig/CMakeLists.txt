@@ -335,14 +335,9 @@ set(ZIG_STAGE2_SOURCES
     src/Compilation.zig
     src/Compilation/Config.zig
     src/InternPool.zig
-    src/Package.zig
-    src/Package/Fetch.zig
-    src/Package/Fetch/git.zig
-    src/Package/Manifest.zig
-    src/Package/Module.zig
     src/RangeSet.zig
     src/Sema.zig
-    src/Sema/bitcast.zig
+    src/Sema/reinterpret.zig
     src/Sema/comptime_ptr_access.zig
     src/Sema/type_resolution.zig
     src/Type.zig
@@ -363,13 +358,23 @@ set(ZIG_STAGE2_SOURCES
     src/codegen/c/type/render_defs.zig
     src/codegen/llvm.zig
     src/codegen/llvm/bindings.zig
+    src/codegen/loongarch/abi.zig
+    src/codegen/loongarch/encoding.zig
+    src/codegen/loongarch/decode_tree.zon
+    src/codegen/loongarch/inst_formats.zon
+    src/codegen/loongarch/Assemble.zig
+    src/codegen/loongarch/Disassemble.zig
+    src/codegen/loongarch/Mir.zig
+    src/codegen/loongarch/bits.zig
+    src/codegen/loongarch/Select.zig
+    src/codegen/loongarch.zig
+    src/codegen/s390x/abi.zig
     src/crash_report.zig
     src/dev.zig
     src/libs/freebsd.zig
     src/libs/glibc.zig
     src/libs/netbsd.zig
     src/libs/openbsd.zig
-    src/introspect.zig
     src/libs/libcxx.zig
     src/libs/libtsan.zig
     src/libs/libunwind.zig
@@ -378,6 +383,7 @@ set(ZIG_STAGE2_SOURCES
     src/link/ConstPool.zig
     src/link/Coff.zig
     src/link/Dwarf.zig
+    src/link/Dwarf2.zig
     src/link/Elf.zig
     src/link/Elf/Archive.zig
     src/link/Elf/Atom.zig
@@ -606,23 +612,16 @@ if(MSVC)
   set(ZIG2_COMPILE_FLAGS "/Od")
   set(ZIG2_LINK_FLAGS "/STACK:16777216 /FORCE:MULTIPLE")
 else()
-  set(ZIG_WASM2C_COMPILE_FLAGS "-std=c99 -O2")
-  set(ZIG1_COMPILE_FLAGS "-std=c99 -Os -fno-strict-aliasing")
-  set(ZIG2_COMPILE_FLAGS "-std=c99 -O0 -fno-sanitize=undefined -fno-stack-protector -fno-strict-aliasing")
+  set(ZIG_WASM2C_COMPILE_FLAGS "-std=c99")
+  set(ZIG1_COMPILE_FLAGS "-std=c99 -Oz -fno-strict-aliasing")
+  set(ZIG2_COMPILE_FLAGS "-std=c99 -Oz -fno-sanitize=undefined -fno-stack-protector -fno-strict-aliasing")
+  if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND ZIG_HOST_TARGET_ARCH STREQUAL "s390x")
+    string(REPLACE -Oz -O0 ZIG2_COMPILE_FLAGS "${ZIG2_COMPILE_FLAGS}") # llvm 22 assertion failure
+  endif()
   # Must match the condition in build.zig.
   if(ZIG_HOST_TARGET_ARCH MATCHES "^(arm|thumb)(eb)?$" OR ZIG_HOST_TARGET_ARCH EQUAL "hexagon" OR ZIG_HOST_TARGET_ARCH MATCHES "^powerpc(64)?(le)?$")
     set(ZIG1_COMPILE_FLAGS "${ZIG1_COMPILE_FLAGS} -ffunction-sections -fdata-sections")
     set(ZIG2_COMPILE_FLAGS "${ZIG2_COMPILE_FLAGS} -ffunction-sections -fdata-sections")
-  endif()
-  if(APPLE)
-    set(ZIG2_LINK_FLAGS "-Wl,-stack_size,0x10000000")
-  elseif(MINGW)
-    set(ZIG2_LINK_FLAGS "-Wl,--stack,0x10000000")
-  # Solaris/illumos ld(1) does not provide a --stack-size option.
-  elseif(CMAKE_HOST_SOLARIS)
-    unset(ZIG2_LINK_FLAGS)
-  else()
-    set(ZIG2_LINK_FLAGS "-Wl,-z,stack-size=0x10000000")
   endif()
   if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
     # Prevent GCC from miscompiling 'zig2.c'. See also 'GCC_BUG_119085_PRESENT' workaround details in 'bootstrap.c'.
@@ -678,10 +677,8 @@ set(BUILD_ZIG2_ARGS
   -femit-bin="${ZIG2_C_SOURCE}"
   -target "${ZIG_HOST_TARGET_TRIPLE}"
   --dep "build_options"
-  --dep "aro"
   "-Mroot=src/main.zig"
   "-Mbuild_options=${ZIG_CONFIG_ZIG_OUT}"
-  "-Maro=lib/compiler/aro/aro.zig"
 )
 
 add_custom_command(
@@ -737,7 +734,7 @@ endif()
 
 
 set(ZIG_BUILD_ARGS
-  --zig-lib-dir "${PROJECT_SOURCE_DIR}/lib"
+  "--zig-lib=${PROJECT_SOURCE_DIR}/lib"
 
   "-Dversion-string=${RESOLVED_ZIG_VERSION}"
   "-Dtarget=${ZIG_TARGET_TRIPLE}"
@@ -801,7 +798,7 @@ set(ZIG2_WORKING_DIR "${PROJECT_SOURCE_DIR}")
 
 add_custom_command(
   OUTPUT "${PROJECT_BINARY_DIR}/stage3/bin/zig"
-  COMMAND zig2 build --prefix "${PROJECT_BINARY_DIR}/stage3" ${ZIG_BUILD_ARGS}
+  COMMAND zig2 build ${ZIG_BUILD_ARGS} --prefix "${PROJECT_BINARY_DIR}/stage3"
   COMMENT "Building stage3"
   WORKING_DIRECTORY "${ZIG2_WORKING_DIR}"
 )

@@ -513,7 +513,7 @@ pub const Installation = struct {
 
         const version = version: {
             var buf: [Dir.max_path_bytes]u8 = undefined;
-            const sdk_lib_dir_path = std.fmt.bufPrint(buf[0..], "{s}\\Lib\\", .{path}) catch |err| switch (err) {
+            const sdk_lib_dir_path = std.mem.print(buf[0..], "{s}\\Lib\\", .{path}) catch |err| switch (err) {
                 error.NoSpaceLeft => return error.PathTooLong,
             };
             if (!Dir.path.isAbsolute(sdk_lib_dir_path)) return error.InstallationNotFound;
@@ -891,7 +891,7 @@ const MsvcLibDir = struct {
 
         lib_dir_buf.appendSliceAssumeCapacity(installation_path);
 
-        if (!Dir.path.isSep(lib_dir_buf.getLast().?)) {
+        if (!Dir.path.isSep(lib_dir_buf.last().?)) {
             try lib_dir_buf.append('\\');
         }
         const installation_path_with_trailing_sep_len = lib_dir_buf.items.len;
@@ -985,7 +985,7 @@ const MsvcLibDir = struct {
                 io.random(std.mem.asBytes(&guid));
 
                 var guid_buf: [38]u8 = undefined;
-                const guid_str = std.fmt.bufPrint(&guid_buf, "{f}", .{guid}) catch unreachable;
+                const guid_str = std.mem.print(&guid_buf, "{f}", .{guid}) catch unreachable;
 
                 var buf: std.ArrayList(u16) = .initBuffer(&key_path_buf);
                 buf.appendSliceAssumeCapacity(L("\\REGISTRY\\A\\"));
@@ -1064,7 +1064,7 @@ const MsvcLibDir = struct {
             errdefer msvc_dir.deinit();
 
             // String might contain trailing slash, so trim it here
-            if (msvc_dir.items.len > "C:\\".len and msvc_dir.getLast().? == '\\') _ = msvc_dir.pop();
+            if (msvc_dir.items.len > "C:\\".len and msvc_dir.last().? == '\\') _ = msvc_dir.pop();
 
             // Remove `\include` at the end of path
             if (std.mem.endsWith(u8, msvc_dir.items, "\\include")) {
@@ -1108,7 +1108,7 @@ const MsvcLibDir = struct {
 
                     try list.appendSlice(VS140COMNTOOLS); // C:\Program Files (x86)\Microsoft Visual Studio 14.0\Common7\Tools
                     // String might contain trailing slash, so trim it here
-                    if (list.items.len > "C:\\".len and list.getLast().? == '\\') _ = list.pop();
+                    if (list.items.len > "C:\\".len and list.last().? == '\\') _ = list.pop();
                     list.shrinkRetainingCapacity(list.items.len - "\\Common7\\Tools".len); // C:\Program Files (x86)\Microsoft Visual Studio 14.0
                     break :base_path list;
                 }
@@ -1131,7 +1131,7 @@ const MsvcLibDir = struct {
                 errdefer path.deinit();
 
                 // String might contain trailing slash, so trim it here
-                if (path.items.len > "C:\\".len and path.getLast().? == '\\') _ = path.pop();
+                if (path.items.len > "C:\\".len and path.last().? == '\\') _ = path.pop();
                 break :base_path path;
             }
             return error.PathNotFound;

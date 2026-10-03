@@ -150,6 +150,8 @@ pub const blkcnt_t = system.blkcnt_t;
 pub const blksize_t = system.blksize_t;
 pub const clock_t = system.clock_t;
 pub const clockid_t = system.clockid_t;
+pub const cmsghdr = system.cmsghdr;
+pub const cmsg_align = system.cmsg_align;
 pub const timerfd_clockid_t = system.timerfd_clockid_t;
 pub const cpu_set_t = system.cpu_set_t;
 pub const dev_t = system.dev_t;
@@ -651,7 +653,7 @@ pub fn mmap(
     const rc = mmap_sym(ptr, length, prot, @bitCast(flags), fd, @bitCast(offset));
     const err: E = if (builtin.link_libc) blk: {
         if (rc != std.c.MAP_FAILED) return @as([*]align(page_size_min) u8, @ptrCast(@alignCast(rc)))[0..length];
-        break :blk @enumFromInt(system._errno().*);
+        break :blk @fromBackingInt(@intCast(system._errno().*));
     } else blk: {
         const err = errno(rc);
         if (err == .SUCCESS) return @as([*]align(page_size_min) u8, @ptrFromInt(rc))[0..length];
@@ -687,7 +689,7 @@ pub fn munmap(memory: []align(page_size_min) const u8) void {
         .INVAL => unreachable, // Invalid parameters.
         .NOMEM => unreachable, // Attempted to unmap a region in the middle of an existing mapping.
         else => |e| if (std.options.unexpected_error_tracing) {
-            std.debug.panic("unexpected errno: {d} ({t})", .{ @intFromEnum(e), e });
+            std.debug.panic("unexpected errno: {d} ({t})", .{ @backingInt(e), e });
         } else unreachable,
     }
 }
@@ -710,7 +712,7 @@ pub fn mremap(
     const rc = system.mremap(old_address, old_len, new_len, flags, new_address);
     const err: E = if (builtin.link_libc) blk: {
         if (rc != std.c.MAP_FAILED) return @as([*]align(page_size_min) u8, @ptrCast(@alignCast(rc)))[0..new_len];
-        break :blk @enumFromInt(system._errno().*);
+        break :blk @fromBackingInt(@intCast(system._errno().*));
     } else blk: {
         const err = errno(rc);
         if (err == .SUCCESS) return @as([*]align(page_size_min) u8, @ptrFromInt(rc))[0..new_len];
@@ -775,9 +777,9 @@ pub fn sysctl(
 
 pub fn getSelfPhdrs() []std.elf.ElfN.Phdr {
     const getauxval = if (builtin.link_libc) std.c.getauxval else std.os.linux.getauxval;
-    assert(getauxval(std.elf.AT_PHENT) == @sizeOf(std.elf.ElfN.Phdr));
-    const phdrs: [*]std.elf.ElfN.Phdr = @ptrFromInt(getauxval(std.elf.AT_PHDR));
-    return phdrs[0..getauxval(std.elf.AT_PHNUM)];
+    assert(getauxval(std.elf.AT.PHENT) == @sizeOf(std.elf.ElfN.Phdr));
+    const phdrs: [*]std.elf.ElfN.Phdr = @ptrFromInt(getauxval(std.elf.AT.PHDR));
+    return phdrs[0..getauxval(std.elf.AT.PHNUM)];
 }
 
 pub fn dl_iterate_phdr(
@@ -819,7 +821,7 @@ pub fn dl_iterate_phdr(
                 .PHDR => break @intFromPtr(phdrs.ptr) - phdr.vaddr,
                 else => {},
             } else unreachable,
-            .name = switch (getauxval(std.elf.AT_EXECFN)) {
+            .name = switch (getauxval(std.elf.AT.EXECFN)) {
                 0 => "/proc/self/exe",
                 else => |name| @ptrFromInt(name),
             },
@@ -1299,7 +1301,7 @@ pub fn prctl(option: PR, args: anytype) PrctlError!u31 {
         inline while (i < args.len) : (i += 1) buf[i] = args[i];
     }
 
-    const rc = system.prctl(@intFromEnum(option), buf[0], buf[1], buf[2], buf[3]);
+    const rc = system.prctl(@backingInt(option), buf[0], buf[1], buf[2], buf[3]);
     switch (errno(rc)) {
         .SUCCESS => return @intCast(rc),
         .ACCES => return error.AccessDenied,
@@ -1545,7 +1547,7 @@ pub fn ptrace(request: u32, pid: pid_t, addr: usize, data: usize) PtraceError!vo
         },
 
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => switch (errno(std.c.ptrace(
-            @enumFromInt(request),
+            @fromBackingInt(@intCast(request)),
             pid,
             @ptrFromInt(addr),
             @intCast(data),
@@ -1668,7 +1670,7 @@ pub const UnexpectedError = std.Io.UnexpectedError;
 /// and you get an unexpected error.
 pub fn unexpectedErrno(err: E) UnexpectedError {
     if (std.options.unexpected_error_tracing) {
-        std.debug.print("unexpected errno: {d}\n", .{@intFromEnum(err)});
+        std.debug.print("unexpected errno: {d}\n", .{@backingInt(err)});
         std.debug.dumpCurrentStackTrace(.{});
     }
     return error.Unexpected;

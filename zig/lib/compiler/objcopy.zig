@@ -214,11 +214,11 @@ fn cmdObjCopy(arena: Allocator, io: Io, args: []const []const u8) !void {
     if (listen) {
         var stdin_reader = Io.File.stdin().reader(io, &stdin_buffer);
         var stdout_writer = Io.File.stdout().writer(io, &stdout_buffer);
-        var server = try Server.init(.{
+        var server: Server = .{
             .in = &stdin_reader.interface,
             .out = &stdout_writer.interface,
-            .zig_version = builtin.zig_version_string,
-        });
+        };
+        try server.serveStringMessage(.zig_version, builtin.zig_version_string);
 
         var seen_update = false;
         while (true) {
@@ -234,9 +234,9 @@ fn cmdObjCopy(arena: Allocator, io: Io, args: []const []const u8) !void {
                     // The build system already knows what the output is at this point, we
                     // only need to communicate that the process has finished.
                     // Use the empty error bundle to indicate that the update is done.
-                    try server.serveErrorBundle(std.zig.ErrorBundle.empty);
+                    try server.serveErrorBundle(.error_bundle, std.zig.ErrorBundle.empty);
                 },
-                else => fatal("unsupported message: {s}", .{@tagName(hdr.tag)}),
+                else => fatal("unsupported message: {t}", .{hdr.tag}),
             }
         }
     }
@@ -409,7 +409,7 @@ const BinaryElfOutput = struct {
             const shstrtab_shdr = (try section_headers.next()).?;
 
             try in.seekTo(shstrtab_shdr.sh_offset);
-            break :blk try in.interface.readAlloc(allocator, shstrtab_shdr.sh_size);
+            break :blk try in.interface.readAllocAll(allocator, shstrtab_shdr.sh_size);
         };
 
         errdefer if (self.shstrtab) |shstrtab| allocator.free(shstrtab);
@@ -435,13 +435,13 @@ const BinaryElfOutput = struct {
 
         var program_headers = elf_hdr.iterateProgramHeaders(in);
         while (try program_headers.next()) |phdr| {
-            if (phdr.p_type == elf.PT_LOAD) {
+            if (phdr.type == .LOAD) {
                 const newSegment = try allocator.create(BinaryElfSegment);
 
-                newSegment.physicalAddress = phdr.p_paddr;
-                newSegment.virtualAddress = phdr.p_vaddr;
-                newSegment.fileSize = @intCast(phdr.p_filesz);
-                newSegment.elfOffset = phdr.p_offset;
+                newSegment.physicalAddress = phdr.paddr;
+                newSegment.virtualAddress = phdr.vaddr;
+                newSegment.fileSize = @intCast(phdr.filesz);
+                newSegment.elfOffset = phdr.offset;
                 newSegment.binaryOffset = 0;
                 newSegment.firstSection = null;
 
@@ -495,8 +495,8 @@ const BinaryElfOutput = struct {
         return self;
     }
 
-    fn sectionWithinSegment(section: *BinaryElfSection, segment: elf.Elf64_Phdr) bool {
-        return segment.p_offset <= section.elfOffset and (segment.p_offset + segment.p_filesz) >= (section.elfOffset + section.fileSize);
+    fn sectionWithinSegment(section: *BinaryElfSection, segment: elf.Elf64.Phdr) bool {
+        return segment.offset <= section.elfOffset and (segment.offset + segment.filesz) >= (section.elfOffset + section.fileSize);
     }
 
     fn sectionValidForOutput(shdr: anytype) bool {
@@ -600,7 +600,7 @@ const HexWriter = struct {
             const parts = addressParts(self.address);
             sum +%= parts[0];
             sum +%= parts[1];
-            sum +%= @intFromEnum(self.payload);
+            sum +%= @backingInt(self.payload);
             for (payload_bytes) |byte| {
                 sum +%= byte;
             }
@@ -615,10 +615,10 @@ const HexWriter = struct {
             const payload_bytes = self.getPayloadBytes();
             assert(payload_bytes.len <= max_payload_len);
 
-            const line = try std.fmt.bufPrint(&outbuf, ":{0X:0>2}{1X:0>4}{2X:0>2}{3X}{4X:0>2}" ++ linesep, .{
+            const line = try std.mem.print(&outbuf, ":{0X:0>2}{1X:0>4}{2X:0>2}{3X}{4X:0>2}" ++ linesep, .{
                 @as(u8, @intCast(payload_bytes.len)),
                 self.address,
-                @intFromEnum(self.payload),
+                @backingInt(self.payload),
                 payload_bytes,
                 self.checksum(),
             });

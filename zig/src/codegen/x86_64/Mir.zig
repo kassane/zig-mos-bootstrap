@@ -1519,33 +1519,33 @@ pub const Inst = struct {
         /// Uses `bytes` payload.
         pseudo_cfi_escape_bytes,
 
-        /// End of prologue
+        /// End of prologue.
         /// Uses `none` payload.
         pseudo_dbg_prologue_end_none,
-        /// Update debug line with is_stmt register set
+        /// Update debug line with is_stmt register set.
         /// Uses `line_column` payload.
         pseudo_dbg_line_stmt_line_column,
-        /// Update debug line with is_stmt register clear
+        /// Update debug line with is_stmt register clear.
         /// Uses `line_column` payload.
         pseudo_dbg_line_line_column,
-        /// Start of epilogue
-        /// Uses `none` payload.
-        pseudo_dbg_epilogue_begin_none,
-        /// Start of lexical block
+        /// Start of epilogue.
+        /// Uses `line_column` payload.
+        pseudo_dbg_epilogue_begin_line_column,
+        /// Start of lexical block.
         /// Uses `none` payload.
         pseudo_dbg_enter_block_none,
-        /// End of lexical block
+        /// End of lexical block.
         /// Uses `none` payload.
         pseudo_dbg_leave_block_none,
-        /// Start of inline function
+        /// Start of inline function.
         /// Uses `ip_index` payload.
         pseudo_dbg_enter_inline_func,
-        /// End of inline function
+        /// End of inline function.
         /// Uses `ip_index` payload.
         pseudo_dbg_leave_inline_func,
-        /// Local argument.
+        /// End of function.
         /// Uses `none` payload.
-        pseudo_dbg_arg_none,
+        pseudo_dbg_end_none,
         /// Local argument.
         /// Uses `i` payload.
         pseudo_dbg_arg_i_s,
@@ -1569,9 +1569,6 @@ pub const Inst = struct {
         pseudo_dbg_arg_val,
         /// Remaining arguments are varargs.
         pseudo_dbg_var_args_none,
-        /// Local variable.
-        /// Uses `none` payload.
-        pseudo_dbg_var_none,
         /// Local variable.
         /// Uses `i` payload.
         pseudo_dbg_var_i_s,
@@ -1745,8 +1742,8 @@ pub const Inst = struct {
             for (@typeInfo(Mnemonic).@"enum".field_names) |mnemonic_name| {
                 if (mnemonic_name[0] == '.') continue;
                 for (@typeInfo(Fixes).@"enum".field_names) |fixes_name| {
-                    const pattern = fixes_name[if (std.mem.indexOfScalar(u8, fixes_name, ' ')) |index| index + " ".len else 0..];
-                    const wildcard_index = std.mem.indexOfScalar(u8, pattern, '_').?;
+                    const pattern = fixes_name[if (std.mem.findScalar(u8, fixes_name, ' ')) |index| index + " ".len else 0..];
+                    const wildcard_index = std.mem.findScalar(u8, pattern, '_').?;
                     const mnem_prefix = pattern[0..wildcard_index];
                     const mnem_suffix = pattern[wildcard_index + "_".len ..];
                     if (!std.mem.startsWith(u8, mnemonic_name, mnem_prefix)) continue;
@@ -1822,8 +1819,8 @@ pub const NullTerminatedString = enum(u32) {
 
     pub fn toSlice(nts: NullTerminatedString, mir: *const Mir) ?[:0]const u8 {
         if (nts == .none) return null;
-        const string_bytes = mir.string_bytes[@intFromEnum(nts)..];
-        return string_bytes[0..std.mem.indexOfScalar(u8, string_bytes, 0).? :0];
+        const string_bytes = mir.string_bytes[@backingInt(nts)..];
+        return string_bytes[0..std.mem.findScalar(u8, string_bytes, 0).? :0];
     }
 };
 
@@ -1890,13 +1887,13 @@ pub const Memory = struct {
             },
             .base = switch (mem.base) {
                 .none, .table => undefined,
-                .reg => |reg| @intFromEnum(reg),
-                .frame => |frame_index| @intFromEnum(frame_index),
+                .reg => |reg| @backingInt(reg),
+                .frame => |frame_index| @backingInt(frame_index),
                 .rip_inst => |inst_index| inst_index,
-                .nav => |nav| @intFromEnum(nav),
-                .uav => |uav| @intFromEnum(uav.val),
-                .lazy_sym => |lazy_sym| @intFromEnum(lazy_sym.ty),
-                .extern_func => |extern_func| @intFromEnum(extern_func),
+                .nav => |nav| @backingInt(nav),
+                .uav => |uav| @backingInt(uav.val),
+                .lazy_sym => |lazy_sym| @backingInt(lazy_sym.ty),
+                .extern_func => |extern_func| @backingInt(extern_func),
             },
             .off = switch (mem.mod) {
                 .rm => |rm| @bitCast(rm.disp),
@@ -1905,8 +1902,8 @@ pub const Memory = struct {
             .extra = switch (mem.mod) {
                 .rm => switch (mem.base) {
                     else => undefined,
-                    .uav => |uav| @intFromEnum(uav.orig_ty),
-                    .lazy_sym => |lazy_sym| @intFromEnum(lazy_sym.kind),
+                    .uav => |uav| @backingInt(uav.orig_ty),
+                    .lazy_sym => |lazy_sym| @backingInt(lazy_sym.kind),
                 },
                 .off => switch (mem.base) {
                     .reg => @intCast(mem.mod.off >> 32),
@@ -1919,7 +1916,7 @@ pub const Memory = struct {
     pub fn decode(mem: Memory) encoder.Instruction.Memory {
         switch (mem.info.mod) {
             .rm => {
-                if (mem.info.base == .reg and @as(Register, @enumFromInt(mem.base)) == .rip) {
+                if (mem.info.base == .reg and @as(Register, @fromBackingInt(@intCast(mem.base))) == .rip) {
                     assert(mem.info.index == .none and mem.info.scale == .@"1");
                     return encoder.Instruction.Memory.initRip(mem.info.size, @bitCast(mem.off));
                 }
@@ -1927,14 +1924,14 @@ pub const Memory = struct {
                     .disp = @bitCast(mem.off),
                     .base = switch (mem.info.base) {
                         .none => .none,
-                        .reg => .{ .reg = @enumFromInt(mem.base) },
-                        .frame => .{ .frame = @enumFromInt(mem.base) },
+                        .reg => .{ .reg = @fromBackingInt(@intCast(mem.base)) },
+                        .frame => .{ .frame = @fromBackingInt(@intCast(mem.base)) },
                         .table => .table,
                         .rip_inst => .{ .rip_inst = mem.base },
-                        .nav => .{ .nav = @enumFromInt(mem.base) },
-                        .uav => .{ .uav = .{ .val = @enumFromInt(mem.base), .orig_ty = @enumFromInt(mem.extra) } },
-                        .lazy_sym => .{ .lazy_sym = .{ .kind = @enumFromInt(mem.extra), .ty = @enumFromInt(mem.base) } },
-                        .extern_func => .{ .extern_func = @enumFromInt(mem.base) },
+                        .nav => .{ .nav = @fromBackingInt(@intCast(mem.base)) },
+                        .uav => .{ .uav = .{ .val = @fromBackingInt(@intCast(mem.base)), .orig_ty = @fromBackingInt(@intCast(mem.extra)) } },
+                        .lazy_sym => .{ .lazy_sym = .{ .kind = @fromBackingInt(@intCast(mem.extra)), .ty = @fromBackingInt(@intCast(mem.base)) } },
+                        .extern_func => .{ .extern_func = @fromBackingInt(@intCast(mem.base)) },
                     },
                     .scale_index = switch (mem.info.index) {
                         .none => null,
@@ -1951,7 +1948,7 @@ pub const Memory = struct {
             .off => {
                 assert(mem.info.base == .reg);
                 return encoder.Instruction.Memory.initMoffs(
-                    @enumFromInt(mem.base),
+                    @fromBackingInt(@intCast(mem.base)),
                     @as(u64, mem.extra) << 32 | mem.off,
                 );
             },
@@ -1978,7 +1975,7 @@ pub fn emit(
     atom_id: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) codegen.Error!void {
+) link.EmitError!void {
     const zcu = pt.zcu;
     const comp = zcu.comp;
     const gpa = comp.gpa;
@@ -1986,7 +1983,7 @@ pub fn emit(
     const fn_info = zcu.typeToFunc(.fromInterned(func.ty)).?;
     const nav = func.owner_nav;
     const mod = zcu.navFileScope(nav).mod.?;
-    var e: Emit = .{
+    var em: Emit = .{
         .lower = .{
             .target = &mod.resolved_target.result,
             .allocator = gpa,
@@ -2006,7 +2003,8 @@ pub fn emit(
             .column = func.lbrace_column,
             .is_stmt = switch (debug_output) {
                 .dwarf => |dwarf| dwarf.dwarf.debug_line.header.default_is_stmt,
-                .none => undefined,
+                .dwarf2 => |dwarf| dwarf.wip_func.dwarf.debug_line.header.default_is_stmt,
+                .eh_frame, .none => undefined,
             },
         },
         .prev_di_pc = 0,
@@ -2015,11 +2013,12 @@ pub fn emit(
         .relocs = .empty,
         .table_relocs = .empty,
     };
-    defer e.deinit();
-    e.emitMir() catch |err| switch (err) {
-        error.LowerFail, error.EmitFail => return zcu.codegenFailMsg(nav, e.lower.err_msg.?),
+    defer em.deinit();
+    em.emitMir() catch |err| switch (err) {
+        error.LowerFail, error.EmitFail => return zcu.codegenFailMsg(nav, em.lower.err_msg.?),
         error.InvalidInstruction, error.CannotEncode => return zcu.codegenFail(nav, "emit MIR failed: {s} (Zig compiler bug)", .{@errorName(err)}),
         else => return zcu.codegenFail(nav, "emit MIR failed: {s}", .{@errorName(err)}),
+        error.AlreadyReported, error.Canceled, error.WriteFailed => |e| return e,
     };
 }
 
@@ -2031,12 +2030,12 @@ pub fn emitLazy(
     atom_id: link.File.AtomId,
     w: *std.Io.Writer,
     debug_output: link.File.DebugInfoOutput,
-) codegen.Error!void {
+) link.EmitError!void {
     const zcu = pt.zcu;
     const comp = zcu.comp;
     const gpa = comp.gpa;
     const mod = comp.root_mod;
-    var e: Emit = .{
+    var em: Emit = .{
         .lower = .{
             .target = &mod.resolved_target.result,
             .allocator = gpa,
@@ -2058,11 +2057,12 @@ pub fn emitLazy(
         .relocs = .empty,
         .table_relocs = .empty,
     };
-    defer e.deinit();
-    e.emitMir() catch |err| switch (err) {
-        error.LowerFail, error.EmitFail => return zcu.codegenFailTypeMsg(lazy_sym.ty, e.lower.err_msg.?),
+    defer em.deinit();
+    em.emitMir() catch |err| switch (err) {
+        error.LowerFail, error.EmitFail => return zcu.codegenFailTypeMsg(lazy_sym.ty, em.lower.err_msg.?),
         error.InvalidInstruction, error.CannotEncode => return zcu.codegenFailType(lazy_sym.ty, "emit MIR failed: {s} (Zig compiler bug)", .{@errorName(err)}),
         else => return zcu.codegenFailType(lazy_sym.ty, "emit MIR failed: {s}", .{@errorName(err)}),
+        error.AlreadyReported, error.Canceled, error.WriteFailed => |e| return e,
     };
 }
 
@@ -2074,7 +2074,7 @@ pub fn extraData(mir: Mir, comptime T: type, index: u32) struct { data: T, end: 
         @field(result, field_name) = switch (field_type) {
             u32 => mir.extra[i],
             i32, Memory.Info => @bitCast(mir.extra[i]),
-            bits.FrameIndex => @enumFromInt(mir.extra[i]),
+            bits.FrameIndex => @fromBackingInt(@intCast(mir.extra[i])),
             else => @compileError("bad field type: " ++ field_name ++ ": " ++ @typeName(field_type)),
         };
         i += 1;
@@ -2091,7 +2091,7 @@ pub const FrameLoc = struct {
 };
 
 pub fn resolveFrameAddr(mir: Mir, frame_addr: bits.FrameAddr) bits.RegisterOffset {
-    const frame_loc = mir.frame_locs.get(@intFromEnum(frame_addr.index));
+    const frame_loc = mir.frame_locs.get(@backingInt(frame_addr.index));
     return .{ .reg = frame_loc.base, .off = frame_loc.disp + frame_addr.off };
 }
 
@@ -2107,7 +2107,7 @@ pub fn resolveMemoryExtra(mir: Mir, payload: u32) Memory {
                 .index = mem.info.index,
                 .scale = mem.info.scale,
             },
-            .base = @intFromEnum(mir.frame_locs.items(.base)[mem.base]),
+            .base = @backingInt(mir.frame_locs.items(.base)[mem.base]),
             .off = @bitCast(mir.frame_locs.items(.disp)[mem.base] + @as(i32, @bitCast(mem.off))),
             .extra = mem.extra,
         } else mem,

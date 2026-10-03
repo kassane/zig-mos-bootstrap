@@ -27,7 +27,7 @@ prog_node: std.Progress.Node,
 
 /// Protects `coverage_files`.
 coverage_mutex: Io.Mutex,
-coverage_files: std.AutoArrayHashMapUnmanaged(u64, CoverageMap),
+coverage_files: std.array_hash_map.Auto(u64, CoverageMap),
 
 queue_mutex: Io.Mutex,
 queue_cond: Io.Condition,
@@ -161,14 +161,15 @@ pub fn deinit(fuzz: *Fuzz) void {
     fuzz.group.cancel(io);
     fuzz.prog_node.end();
     gpa.free(fuzz.run_steps);
+    fuzz.msg_queue.deinit(gpa);
 }
 
 fn rebuildTestsWorkerRun(
     maker: *Maker,
     run_index: Configuration.Step.Index,
-    parent_prog_node: std.Progress.Node,
+    parent_progress_node: std.Progress.Node,
 ) void {
-    rebuildTestsWorkerRunFallible(maker, run_index, parent_prog_node) catch |err| {
+    rebuildTestsWorkerRunFallible(maker, run_index, parent_progress_node) catch |err| {
         const conf = &maker.scanned_config.configuration;
         const conf_run = run_index.ptr(conf).extended.cast(conf, Configuration.Step.Run).?;
         const comp_index = conf_run.producer.value.?;
@@ -180,7 +181,7 @@ fn rebuildTestsWorkerRun(
 fn rebuildTestsWorkerRunFallible(
     maker: *Maker,
     run_index: Configuration.Step.Index,
-    parent_prog_node: std.Progress.Node,
+    parent_progress_node: std.Progress.Node,
 ) !void {
     const graph = maker.graph;
     const io = graph.io;
@@ -196,7 +197,7 @@ fn rebuildTestsWorkerRunFallible(
     const root_module = conf_comp.root_module.get(conf);
     const target = root_module.resolved_target.get(conf).?.result.get(conf);
 
-    const prog_node = parent_prog_node.start(conf_comp_step.name.slice(conf), 0);
+    const prog_node = parent_progress_node.start(conf_comp_step.name.slice(conf), 0);
     defer prog_node.end();
 
     const result = comp.rebuildInFuzzMode(maker, comp_index, prog_node);
@@ -212,7 +213,7 @@ fn rebuildTestsWorkerRunFallible(
         maker.printErrorMessages(comp_index, .{}, stderr.terminal(), .verbose, .indent) catch {};
     }
 
-    const rebuilt_bin_path = result catch |err| switch (err) {
+    const rebuilt_digest = result catch |err| switch (err) {
         error.MakeFailed => return,
         else => |other| return other,
     };
@@ -235,7 +236,12 @@ fn rebuildTestsWorkerRunFallible(
     });
     defer gpa.free(compile_filename);
 
-    run.rebuilt_executable = try rebuilt_bin_path.join(gpa, compile_filename);
+    const o_hex_digest = rebuilt_digest.toHex().?;
+
+    run.rebuilt_executable = .{
+        .root_dir = graph.local_cache_root,
+        .sub_path = try std.fs.path.join(gpa, &.{ "o", &o_hex_digest, compile_filename }),
+    };
 }
 
 fn fuzzWorkerRun(fuzz: *Fuzz, run_index: Configuration.Step.Index) void {
@@ -273,7 +279,7 @@ pub fn serveSourcesTar(fuzz: *Fuzz, req: *std.http.Server.Request) !void {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const DedupTable = std.ArrayHashMapUnmanaged(Build.Cache.Path, void, Build.Cache.Path.TableAdapter, false);
+    const DedupTable = std.array_hash_map.Custom(Build.Cache.Path, void, Build.Cache.Path.TableAdapter, false);
     var dedup_table: DedupTable = .empty;
     defer dedup_table.deinit(gpa);
 

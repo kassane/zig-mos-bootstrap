@@ -885,7 +885,7 @@ fn ktMultiThreaded(
 
         var select_outstanding: usize = 0;
         var select: Select = .init(io, select_buf);
-        defer select.cancel();
+        defer select.cancelDiscard();
         var batches_spawned: usize = 0;
         var next_to_process: usize = 0;
 
@@ -1398,7 +1398,7 @@ test "KT128 sequential and parallel produce same output for many random lengths"
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const num_tests = if (builtin.mode == .Debug) 10 else 1000;
+    const num_tests = if (builtin.mode == .debug) 10 else 1000;
     const max_length = 250000;
 
     for (0..num_tests) |_| {

@@ -77,7 +77,7 @@ pub const PS = struct {
             _,
 
             pub fn construct(num: NUM, thread: bool, input: bool, additive: bool) ULONG_PTR {
-                var val: ULONG_PTR = @intFromEnum(num);
+                var val: ULONG_PTR = @backingInt(num);
                 if (thread) val |= 0x10000;
                 if (input) val |= 0x20000;
                 if (additive) val |= 0x40000;
@@ -147,8 +147,22 @@ pub const OBJECT = struct {
         pub const Max: @typeInfo(@This()).@"enum".tag_type = @typeInfo(@This()).@"enum".field_names.len;
     };
 
+    pub const BASIC_INFORMATION = extern struct {
+        Attributes: ATTRIBUTES.Flags,
+        GrantedAccess: ACCESS_MASK,
+        HandleCount: ULONG,
+        PointerCount: ULONG,
+        Reserved: [10]ULONG,
+    };
+
     pub const NAME_INFORMATION = extern struct {
         Name: UNICODE_STRING,
+    };
+
+    pub const HANDLE_FLAG = packed struct(USHORT) {
+        INHERIT: bool = false,
+        PROTECT_FROM_CLOSE: bool = false,
+        Reserved1: u14 = 0,
     };
 };
 
@@ -739,7 +753,7 @@ pub const FILE = struct {
             SYNCHRONOUS_NONALERT = 0b10,
             _,
 
-            pub const VALID_FLAGS: @This() = @enumFromInt(0b11);
+            pub const VALID_FLAGS: @This() = @fromBackingInt(@intCast(0b11));
         },
         /// The file being opened must not be a directory file or this call
         /// fails. The file object being opened can represent a data file, a
@@ -1925,19 +1939,6 @@ pub const THREAD = struct {
     };
 };
 
-pub const MEMORY = struct {
-    pub const BASIC_INFORMATION = extern struct {
-        BaseAddress: PVOID,
-        AllocationBase: PVOID,
-        AllocationProtect: DWORD,
-        PartitionId: WORD,
-        RegionSize: SIZE_T,
-        State: DWORD,
-        Protect: DWORD,
-        Type: DWORD,
-    };
-};
-
 // ref: km/ntifs.h
 
 pub const HEAP = opaque {
@@ -1988,7 +1989,7 @@ pub const HEAP = opaque {
             CSR_PORT,
             _,
 
-            pub const MASK: CLASS = @enumFromInt(maxInt(@typeInfo(CLASS).@"enum".tag_type));
+            pub const MASK: CLASS = @fromBackingInt(@intCast(maxInt(@typeInfo(CLASS).@"enum".tag_type)));
         };
 
         pub const CREATE = packed struct(ULONG) {
@@ -2003,7 +2004,7 @@ pub const HEAP = opaque {
             /// Callers are therefore responsible for synchronizing access to hardened heaps.
             HARDENED: bool = false,
             Reserved10: u2 = 0,
-            CLASS: CLASS = @enumFromInt(0),
+            CLASS: CLASS = @fromBackingInt(@intCast(0)),
             /// Create heap with 16 byte alignment (obsolete)
             ALIGN_16: bool = false,
             /// Create heap call tracing enabled (obsolete)
@@ -2048,7 +2049,7 @@ pub const HEAP = opaque {
                     FLAG3: bool = false,
                 } = .{},
             } = .{},
-            CLASS: CLASS = @enumFromInt(0),
+            CLASS: CLASS = @fromBackingInt(@intCast(0)),
             Reserved16: u2 = 0,
             TAG: u12 = 0,
             Reserved30: u2 = 0,
@@ -3516,6 +3517,39 @@ pub const SEC = packed struct(ULONG) {
 
 pub const ERESOURCE = opaque {};
 
+pub const VIRTUAL_MEMORY = struct {
+    pub const INFORMATION_CLASS = enum(c_int) {
+        Prefetch = 0,
+        PagePriority = 1,
+        CfgCallTarget = 2,
+        PageDirtyState = 3,
+        ImageHotPatch = 4,
+        PhysicalContiguity = 5,
+        VirtualMachinePrepopulate = 6,
+        RemoveFromWorkingSet = 7,
+        _,
+
+        pub const Max: @typeInfo(@This()).@"enum".tag_type = @typeInfo(@This()).@"enum".field_names.len;
+    };
+
+    pub const MEMORY_PREFETCH_INFORMATION = extern struct {
+        Flags: VM_PREFETCH,
+
+        pub const VM_PREFETCH = packed struct(ULONG) {
+            /// Introduced in Windows 11 24H4.
+            /// Attempt to populate specified single or multiple address ranges
+            /// into the process working set (bring pages into physical memory).
+            TO_WORKING_SET: bool,
+            Reserved1: u31 = 0,
+        };
+    };
+};
+
+pub const MEMORY_RANGE_ENTRY = extern struct {
+    VirtualAddress: PVOID,
+    NumberOfBytes: SIZE_T,
+};
+
 // ref: shared/ntdef.h
 
 pub const EVENT_TYPE = enum(c_int) {
@@ -3658,14 +3692,12 @@ pub fn teb() *TEB {
 }
 
 pub fn peb() *PEB {
-    if (builtin.zig_backend == .stage2_c) switch (native_arch) {
-        .x86, .x86_64 => return @ptrCast(@alignCast(struct {
-            /// This is a workaround for the C backend until zig has the ability to put
-            /// C code in inline assembly.
-            extern fn zig_windows_peb() callconv(.c) *anyopaque;
-        }.zig_windows_peb())),
-        else => {},
-    } else switch (native_arch) {
+    if (builtin.zig_backend == .stage2_c) return @ptrCast(@alignCast(struct {
+        /// This is a workaround for the C backend until zig has the ability to put
+        /// C code in inline assembly.
+        extern fn zig_windows_peb() callconv(.c) *anyopaque;
+    }.zig_windows_peb()));
+    switch (native_arch) {
         .aarch64 => {
             comptime assert(@offsetOf(TEB, "ProcessEnvironmentBlock") == 0x60);
             return asm (
@@ -3958,7 +3990,7 @@ pub fn unexpectedError(err: Win32Error) UnexpectedError {
 pub fn unexpectedStatus(status: NTSTATUS) UnexpectedError {
     if (std.options.unexpected_error_tracing) {
         std.debug.print("error.Unexpected NTSTATUS=0x{x} ({s})\n", .{
-            @intFromEnum(status),
+            @backingInt(status),
             std.enums.tagName(NTSTATUS, status) orelse "<unnamed>",
         });
         std.debug.dumpCurrentStackTrace(.{ .first_address = @returnAddress() });
@@ -3968,8 +4000,8 @@ pub fn unexpectedStatus(status: NTSTATUS) UnexpectedError {
 
 pub fn statusBug(status: NTSTATUS) UnexpectedError {
     switch (builtin.mode) {
-        .Debug => std.debug.panic("programmer bug caused syscall status: 0x{x} ({s})", .{
-            @intFromEnum(status),
+        .debug => std.debug.panic("programmer bug caused syscall status: 0x{x} ({s})", .{
+            @backingInt(status),
             std.enums.tagName(NTSTATUS, status) orelse "<unnamed>",
         }),
         else => return error.Unexpected,
@@ -3978,8 +4010,8 @@ pub fn statusBug(status: NTSTATUS) UnexpectedError {
 
 pub fn errorBug(err: Win32Error) UnexpectedError {
     switch (builtin.mode) {
-        .Debug => std.debug.panic("programmer bug caused syscall error: 0x{x} ({s})", .{
-            @intFromEnum(err),
+        .debug => std.debug.panic("programmer bug caused syscall error: 0x{x} ({s})", .{
+            @backingInt(err),
             std.enums.tagName(Win32Error, err) orelse "<unnamed>",
         }),
         else => return error.Unexpected,
@@ -4104,7 +4136,7 @@ fn Bool(comptime BackingInteger: type) type {
         _,
 
         /// This is not the only truthy value, comparisons against this value are always a bug.
-        pub const TRUE: @This() = @enumFromInt(1);
+        pub const TRUE: @This() = @fromBackingInt(@intCast(1));
 
         pub const Backing = BackingInteger;
 
@@ -4113,7 +4145,7 @@ fn Bool(comptime BackingInteger: type) type {
         }
 
         pub fn fromBool(b: bool) @This() {
-            return @enumFromInt(@intFromBool(b));
+            return @fromBackingInt(@intCast(@intFromBool(b)));
         }
     };
 }
@@ -4189,19 +4221,11 @@ pub const GUID = extern struct {
     Data3: u16,
     Data4: [8]u8,
 
-    const hex_offsets = switch (builtin.target.cpu.arch.endian()) {
-        .big => [16]u6{
-            0,  2,  4,  6,
-            9,  11, 14, 16,
-            19, 21, 24, 26,
-            28, 30, 32, 34,
-        },
-        .little => [16]u6{
-            6,  4,  2,  0,
-            11, 9,  16, 14,
-            19, 21, 24, 26,
-            28, 30, 32, 34,
-        },
+    const hex_offsets: [16]u6 = .{
+        6,  4,  2,  0,
+        11, 9,  16, 14,
+        19, 21, 24, 26,
+        28, 30, 32, 34,
     };
 
     pub fn parse(s: []const u8) GUID {
@@ -4216,12 +4240,21 @@ pub const GUID = extern struct {
         assert(s[13] == '-');
         assert(s[18] == '-');
         assert(s[23] == '-');
-        var bytes: [16]u8 = undefined;
-        for (hex_offsets, 0..) |hex_offset, i| {
-            bytes[i] = (try std.fmt.charToDigit(s[hex_offset], 16)) << 4 |
-                try std.fmt.charToDigit(s[hex_offset + 1], 16);
-        }
-        return @as(GUID, @bitCast(bytes));
+        var raw1: [4]u8 = undefined;
+        var raw2: [2]u8 = undefined;
+        var raw3: [2]u8 = undefined;
+        var raw4: [8]u8 = undefined;
+        assert((try std.fmt.hexToBytes(&raw1, s[0..8])).len == raw1.len);
+        assert((try std.fmt.hexToBytes(&raw2, s[9..13])).len == raw2.len);
+        assert((try std.fmt.hexToBytes(&raw3, s[14..18])).len == raw3.len);
+        assert((try std.fmt.hexToBytes(raw4[0..2], s[19..23])).len == 2);
+        assert((try std.fmt.hexToBytes(raw4[2..8], s[24..36])).len == 6);
+        return .{
+            .Data1 = @byteSwap(@as(u32, @bitCast(raw1))),
+            .Data2 = @byteSwap(@as(u16, @bitCast(raw2))),
+            .Data3 = @byteSwap(@as(u16, @bitCast(raw3))),
+            .Data4 = raw4,
+        };
     }
 
     pub fn format(self: GUID, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -4233,28 +4266,28 @@ pub const GUID = extern struct {
             self.Data4[2..8],
         });
     }
-};
 
-test GUID {
-    try std.testing.expectEqual(
-        GUID{
+    test parse {
+        const expected: GUID = .{
             .Data1 = 0x01234567,
             .Data2 = 0x89ab,
             .Data3 = 0xef10,
             .Data4 = "\x32\x54\x76\x98\xba\xdc\xfe\x91".*,
-        },
-        GUID.parse("{01234567-89AB-EF10-3254-7698badcfe91}"),
-    );
-    try std.testing.expectFmt(
-        "{01234567-89ab-ef10-3254-7698badcfe91}",
-        "{f}",
-        .{GUID.parse("{01234567-89AB-EF10-3254-7698badcfe91}")},
-    );
-    try std.testing.expectFmt(
-        "{00000001-0001-0001-0001-000000000001}",
-        "{f}",
-        .{GUID{ .Data1 = 1, .Data2 = 1, .Data3 = 1, .Data4 = [_]u8{ 0, 1, 0, 0, 0, 0, 0, 1 } }},
-    );
+        };
+        try std.testing.expectEqual(expected, GUID.parse("{01234567-89AB-EF10-3254-7698badcfe91}"));
+    }
+
+    test format {
+        const guid0: GUID = .{ .Data1 = 1, .Data2 = 1, .Data3 = 1, .Data4 = .{ 0, 1, 0, 0, 0, 0, 0, 1 } };
+        try std.testing.expectFmt("{00000001-0001-0001-0001-000000000001}", "{f}", .{guid0});
+
+        const guid1: GUID = .parse("{01234567-89AB-EF10-3254-7698badcfe91}");
+        try std.testing.expectFmt("{01234567-89ab-ef10-3254-7698badcfe91}", "{f}", .{guid1});
+    }
+};
+
+test {
+    _ = GUID;
 }
 
 pub const COORD = extern struct {
@@ -4995,8 +5028,8 @@ pub const KAFFINITY = usize;
 pub const KPRIORITY = i32;
 
 pub const CLIENT_ID = extern struct {
-    UniqueProcess: HANDLE,
-    UniqueThread: HANDLE,
+    UniqueProcess: ?HANDLE,
+    UniqueThread: ?HANDLE,
 };
 
 pub const TEB = extern struct {
@@ -5018,7 +5051,7 @@ pub const TEB = extern struct {
 };
 
 comptime {
-    // XXX: Without this check we cannot use `std.Io.Writer` on 16-bit platforms. `std.fmt.bufPrint` will hit the unreachable in `PEB.GdiHandleBuffer` without this guard.
+    // XXX: Without this check we cannot use `std.Io.Writer` on 16-bit platforms. `std.mem.print` will hit the unreachable in `PEB.GdiHandleBuffer` without this guard.
     if (builtin.os.tag == .windows) {
         // Offsets taken from WinDbg info and Geoff Chappell[1] (RIP)
         // [1]: https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/pebteb/teb/index.htm
@@ -5959,8 +5992,8 @@ pub const KUSER_SHARED_DATA = extern struct {
 pub const SharedUserData: *const KUSER_SHARED_DATA = @ptrFromInt(0x7FFE0000);
 
 pub fn IsProcessorFeaturePresent(feature: PF) bool {
-    if (@intFromEnum(feature) >= PROCESSOR_FEATURE_MAX) return false;
-    return SharedUserData.ProcessorFeatures[@intFromEnum(feature)].toBool();
+    if (@backingInt(feature) >= PROCESSOR_FEATURE_MAX) return false;
+    return SharedUserData.ProcessorFeatures[@backingInt(feature)].toBool();
 }
 
 // https://github.com/reactos/reactos/blob/master/sdk/include/ndk/pstypes.h#L977-L983

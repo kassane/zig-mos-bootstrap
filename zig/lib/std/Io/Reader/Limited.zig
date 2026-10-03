@@ -28,8 +28,7 @@ pub fn init(reader: *Reader, limit: Limit, buffer: []u8) Limited {
 fn stream(r: *Reader, w: *Writer, limit: Limit) Reader.StreamError!usize {
     const l: *Limited = @fieldParentPtr("interface", r);
     if (l.remaining == .nothing) return error.EndOfStream;
-    const combined_limit = limit.min(l.remaining);
-    const n = try l.unlimited.stream(w, combined_limit);
+    const n = try l.unlimited.stream(w, limit.min(l.remaining));
     l.remaining = l.remaining.subtract(n).?;
     return n;
 }
@@ -40,11 +39,11 @@ test stream {
     var fixed: std.Io.Reader = .fixed(&orig_buf);
 
     var limit_buf: [1]u8 = undefined;
-    var limited: std.Io.Reader.Limited = .init(&fixed, @enumFromInt(4), &limit_buf);
+    var limited: std.Io.Reader.Limited = .init(&fixed, @fromBackingInt(@intCast(4)), &limit_buf);
 
     var result_buf: [10]u8 = undefined;
     var fixed_writer: std.Io.Writer = .fixed(&result_buf);
-    const streamed = try limited.interface.stream(&fixed_writer, @enumFromInt(7));
+    const streamed = try limited.interface.stream(&fixed_writer, @fromBackingInt(@intCast(7)));
 
     try std.testing.expect(streamed == 4);
     try std.testing.expectEqualStrings("test", result_buf[0..streamed]);
@@ -53,8 +52,7 @@ test stream {
 fn discard(r: *Reader, limit: Limit) Reader.Error!usize {
     const l: *Limited = @fieldParentPtr("interface", r);
     if (l.remaining == .nothing) return error.EndOfStream;
-    const combined_limit = limit.min(l.remaining);
-    const n = try l.unlimited.discard(combined_limit);
+    const n = try l.unlimited.discard(limit.min(l.remaining));
     l.remaining = l.remaining.subtract(n).?;
     return n;
 }

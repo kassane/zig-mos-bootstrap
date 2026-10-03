@@ -45,13 +45,13 @@ import_symbols: bool = false,
 /// (WebAssembly) import function table from the host environment
 import_table: bool = false,
 export_table: bool = false,
+growable_table: bool = false,
 initial_memory: ?u64 = null,
 max_memory: ?u64 = null,
 shared_memory: bool = false,
 global_base: ?u64 = null,
 /// Set via options; intended to be read-only after that.
 zig_lib_dir: ?LazyPath,
-exec_cmd_args: ?[]const ?[]const u8,
 filters: []const []const u8,
 test_runner: ?TestRunner,
 wasi_exec_model: ?std.builtin.WasiExecModel = null,
@@ -64,6 +64,9 @@ installed_headers: std.ArrayList(HeaderInstallation),
 /// created otherwise.
 installed_headers_include_tree: ?*Step.WriteFile = null,
 
+/// Deprecated. This functionality will be moved to an external package:
+/// https://codeberg.org/ziglang/rc
+///
 /// Behavior of automatic detection of include directories when compiling .rc files.
 ///  any: Use MSVC if available, fall back to MinGW.
 ///  msvc: Use MSVC include paths (must be present on the system).
@@ -71,6 +74,9 @@ installed_headers_include_tree: ?*Step.WriteFile = null,
 ///  none: Do not use any autodetected include paths.
 rc_includes: std.zig.RcIncludes = .any,
 
+/// Deprecated. This functionality will be moved to an external package:
+/// https://codeberg.org/ziglang/rc
+///
 /// (Windows) .manifest file to embed in the compilation
 /// Set via options; intended to be read-only after that.
 win32_manifest: ?LazyPath = null,
@@ -96,7 +102,7 @@ each_lib_rpath: ?bool = null,
 /// This option overrides the CLI argument passed to `zig build`.
 build_id: ?std.zig.BuildId = null,
 
-/// Create a .eh_frame_hdr section and a PT_GNU_EH_FRAME segment in the ELF
+/// Create a .eh_frame_hdr section and a PT.GNU_EH_FRAME segment in the ELF
 /// file.
 link_eh_frame_hdr: bool = false,
 link_emit_relocs: bool = false,
@@ -187,7 +193,7 @@ entry: Entry = .default,
 /// List of symbols forced as undefined in the symbol table
 /// thus forcing their resolution by the linker.
 /// Corresponds to `-u <symbol>` for ELF/MachO and `/include:<symbol>` for COFF/PE.
-force_undefined_symbols: std.StringArrayHashMapUnmanaged(void),
+force_undefined_symbols: std.array_hash_map.String(void),
 
 /// Overrides the default stack size
 stack_size: ?u64 = null,
@@ -215,11 +221,6 @@ expect_errors: ?ExpectedCompileErrors = null,
 /// `std.math.maxInt(u16)`. Overrides the argument passed to `zig build`.
 error_limit: ?u32 = null,
 
-/// Computed during make().
-is_linking_libc: bool = false,
-/// Computed during make().
-is_linking_libcpp: bool = false,
-
 /// Enables coverage instrumentation that is only useful if you are using third
 /// party fuzzers that depend on it. Otherwise, slows down the instrumented
 /// binary with unnecessary function calls.
@@ -233,6 +234,12 @@ is_linking_libcpp: bool = false,
 /// To instead enable fuzz testing instrumentation on a compilation using Zig's
 /// builtin fuzzer, see the `fuzz` flag in `Module`.
 sanitize_coverage_trace_pc_guard: ?bool = null,
+
+/// Enable or disable incremental compilation.
+///
+/// Incremental compilation reduces compile time by mutating an existing build artifact. Non-
+/// incremental compilation is slower but preserves previous build artifacts.
+incremental: ?bool = null,
 
 emit_directory: Configuration.OptionalGeneratedFileIndex = .none,
 generated_docs: Configuration.OptionalGeneratedFileIndex = .none,
@@ -275,6 +282,9 @@ pub const Options = struct {
     use_llvm: ?bool = null,
     use_lld: ?bool = null,
     zig_lib_dir: ?LazyPath = null,
+    /// Deprecated. This functionality will be moved to an external package:
+    /// https://codeberg.org/ziglang/rc
+    ///
     /// Embed a `.manifest` file in the compilation if the object format supports it.
     /// https://learn.microsoft.com/en-us/windows/win32/sbscs/manifest-files-reference
     /// Manifest files must have the extension `.manifest`.
@@ -361,7 +371,7 @@ pub fn create(owner: *std.Build, options: Options) *Compile {
     const graph = owner.graph;
     const arena = graph.arena;
 
-    const name = owner.dupe(options.name);
+    const name = owner.graph.dupeString(options.name);
     if (mem.find(u8, name, "/") != null or mem.find(u8, name, "\\") != null) {
         panic("invalid name: '{s}'. It looks like a file path, but it is supposed to be the library or application name.", .{name});
     }
@@ -376,7 +386,7 @@ pub fn create(owner: *std.Build, options: Options) *Compile {
             @tagName(options.kind)
         else
             owner.fmt("{t} {s}", .{ options.kind, name }),
-        @tagName(options.root_module.optimize orelse .Debug),
+        @tagName(options.root_module.optimize orelse .debug),
         resolved_target.query.zigTriple(arena) catch @panic("OOM"),
     });
 
@@ -413,7 +423,6 @@ pub fn create(owner: *std.Build, options: Options) *Compile {
         .out_filename = out_filename,
         .installed_headers = .empty,
         .zig_lib_dir = null,
-        .exec_cmd_args = null,
         .filters = options.filters,
         .test_runner = null, // set below
         .rdynamic = false,
@@ -632,7 +641,7 @@ pub fn producesPdbFile(compile: *Compile) bool {
     if (target.ofmt == .c) return false;
     if (compile.use_llvm == false) return false;
     if (compile.root_module.strip == true or
-        (compile.root_module.strip == null and compile.root_module.optimize == .ReleaseSmall))
+        (compile.root_module.strip == null and compile.root_module.optimize == .small))
     {
         return false;
     }
@@ -730,17 +739,6 @@ pub fn getEmittedLlvmBc(compile: *Compile) LazyPath {
     return compile.getEmittedFileGeneric(&compile.generated_llvm_bc);
 }
 
-pub fn setExecCmd(compile: *Compile, args: []const ?[]const u8) void {
-    const graph = compile.step.owner.graph;
-    const arena = graph.arena;
-    assert(compile.kind == .@"test");
-    const duped_args = arena.alloc(?[]const u8, args.len) catch @panic("OOM");
-    for (args, 0..) |arg, i| {
-        duped_args[i] = if (arg) |a| graph.dupeString(a) else null;
-    }
-    compile.exec_cmd_args = duped_args;
-}
-
 pub fn rootModuleTarget(c: *Compile) std.Target {
     // The root module is always given a target, so we know this to be non-null.
     return c.root_module.resolved_target.?.result;
@@ -753,7 +751,7 @@ pub fn rootModuleTarget(c: *Compile) std.Target {
 pub fn getCompileDependencies(start: *Compile, chase_dynamic: bool) []const *Compile {
     const arena = start.step.owner.graph.arena;
 
-    var compiles: std.AutoArrayHashMapUnmanaged(*Compile, void) = .empty;
+    var compiles: std.array_hash_map.Auto(*Compile, void) = .empty;
     var next_idx: usize = 0;
 
     compiles.putNoClobber(arena, start, {}) catch @panic("OOM");

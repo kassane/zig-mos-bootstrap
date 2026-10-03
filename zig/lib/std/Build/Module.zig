@@ -12,17 +12,17 @@ root_source_file: ?LazyPath,
 /// The modules that are mapped into this module's import table.
 /// Use `addImport` rather than modifying this field directly in order to
 /// maintain step dependency edges.
-import_table: std.StringArrayHashMapUnmanaged(*Module),
+import_table: std.array_hash_map.String(*Module),
 
 resolved_target: ?std.Build.ResolvedTarget = null,
-optimize: ?std.builtin.OptimizeMode = null,
+optimize: ?std.builtin.Optimize = null,
 dwarf_format: ?std.dwarf.Format,
 
 c_macros: ArrayList([]const u8),
 include_dirs: ArrayList(IncludeDir),
 lib_paths: ArrayList(LazyPath),
 rpaths: ArrayList(RPath),
-frameworks: std.StringArrayHashMapUnmanaged(LinkFrameworkOptions),
+frameworks: std.array_hash_map.String(LinkFrameworkOptions),
 link_objects: ArrayList(LinkObject),
 
 strip: ?bool,
@@ -42,6 +42,7 @@ error_tracing: ?bool,
 link_libc: ?bool,
 link_libcpp: ?bool,
 no_builtin: ?bool,
+patchable_function_entry: u16,
 
 /// Symbols to be exported when compiling to WebAssembly.
 export_symbol_names: []const []const u8 = &.{},
@@ -62,6 +63,8 @@ pub const LinkObject = union(enum) {
     assembly_file: LazyPath,
     c_source_file: *CSourceFile,
     c_source_files: *CSourceFiles,
+    /// Deprecated. This functionality will be moved to an external package:
+    /// https://codeberg.org/ziglang/rc
     win32_resource_file: *RcSourceFile,
 };
 
@@ -127,6 +130,8 @@ pub const CSourceFile = struct {
     }
 };
 
+/// Deprecated. This functionality will be moved to an external package:
+/// https://codeberg.org/ziglang/rc
 pub const RcSourceFile = struct {
     file: LazyPath,
     /// Any option that rc.exe accepts will work here, with the exception of:
@@ -146,13 +151,10 @@ pub const RcSourceFile = struct {
     include_paths: []const LazyPath = &.{},
 
     pub fn dupe(file: RcSourceFile, graph: *const std.Build.Graph) RcSourceFile {
-        const arena = graph.arena;
-        const include_paths = arena.alloc(LazyPath, file.include_paths.len) catch @panic("OOM");
-        for (include_paths, file.include_paths) |*dest, lazy_path| dest.* = lazy_path.dupe(graph);
         return .{
             .file = file.file.dupe(graph),
             .flags = graph.dupeStrings(file.flags),
-            .include_paths = include_paths,
+            .include_paths = LazyPath.dupeList(file.include_paths, graph),
         };
     }
 };
@@ -199,7 +201,7 @@ pub const CreateOptions = struct {
     imports: []const Import = &.{},
 
     target: ?std.Build.ResolvedTarget = null,
-    optimize: ?std.builtin.OptimizeMode = null,
+    optimize: ?std.builtin.Optimize = null,
 
     /// `true` requires a compilation that includes this Module to link libc.
     /// `false` causes a build failure if a compilation that includes this Module would link libc.
@@ -229,6 +231,7 @@ pub const CreateOptions = struct {
     omit_frame_pointer: ?bool = null,
     error_tracing: ?bool = null,
     no_builtin: ?bool = null,
+    patchable_function_entry: u16 = 0,
 };
 
 pub const Import = struct {
@@ -277,6 +280,7 @@ pub fn init(
                 .error_tracing = options.error_tracing,
                 .export_symbol_names = &.{},
                 .no_builtin = options.no_builtin,
+                .patchable_function_entry = options.patchable_function_entry,
             };
 
             m.import_table.ensureUnusedCapacity(arena, options.imports.len) catch @panic("OOM");
@@ -401,8 +405,8 @@ pub fn addCSourceFiles(m: *Module, options: AddCSourceFilesOptions) void {
     const c_source_files = arena.create(CSourceFiles) catch @panic("OOM");
     c_source_files.* = .{
         .root = options.root orelse b.path(""),
-        .files = b.dupeStrings(options.files),
-        .flags = b.dupeStrings(options.flags),
+        .files = b.graph.dupeStrings(options.files),
+        .flags = b.graph.dupeStrings(options.flags),
         .language = options.language,
     };
     m.link_objects.append(arena, .{ .c_source_files = c_source_files }) catch @panic("OOM");
@@ -416,6 +420,9 @@ pub fn addCSourceFile(m: *Module, source: CSourceFile) void {
     m.link_objects.append(arena, .{ .c_source_file = c_source_file }) catch @panic("OOM");
 }
 
+/// Deprecated. This functionality will be moved to an external package:
+/// https://codeberg.org/ziglang/rc
+///
 /// Resource files must have the extension `.rc`.
 /// Can be called regardless of target. The .rc file will be ignored
 /// if the target object format does not support embedded resources.
@@ -563,7 +570,7 @@ pub fn getGraph(root: *Module) Graph {
 
     const arena = root.owner.graph.arena;
 
-    var modules: std.AutoArrayHashMapUnmanaged(*std.Build.Module, []const u8) = .empty;
+    var modules: std.array_hash_map.Auto(*std.Build.Module, []const u8) = .empty;
     var next_idx: usize = 0;
 
     modules.putNoClobber(arena, root, "root") catch @panic("OOM");

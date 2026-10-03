@@ -147,8 +147,7 @@ fn spawnVerify(verify_path: [:0]const u16, cmd_line: [:0]const u16) !windows.DWO
         break :spawn proc_info.hProcess;
     };
     defer windows.CloseHandle(child_proc);
-    const infinite_timeout: windows.LARGE_INTEGER = std.math.minInt(windows.LARGE_INTEGER);
-    switch (windows.ntdll.NtWaitForSingleObject(child_proc, .FALSE, &infinite_timeout)) {
+    switch (windows.ntdll.NtWaitForSingleObject(child_proc, .FALSE, null)) {
         windows.NTSTATUS.WAIT_0 => {},
         .TIMEOUT => return error.WaitTimeOut,
         else => |status| return windows.unexpectedStatus(status),
@@ -162,7 +161,7 @@ fn spawnVerify(verify_path: [:0]const u16, cmd_line: [:0]const u16) !windows.DWO
         @sizeOf(windows.PROCESS.BASIC_INFORMATION),
         null,
     )) {
-        .SUCCESS => return @intFromEnum(info.ExitStatus),
+        .SUCCESS => return @backingInt(info.ExitStatus),
         else => return error.UnableToGetExitCode,
     }
 }

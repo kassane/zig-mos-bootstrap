@@ -49,7 +49,7 @@ pub const Case = struct {
     /// In order to be able to run e.g. Execution updates, this must be set
     /// to Executable.
     output_mode: std.builtin.OutputMode,
-    optimize_mode: std.builtin.OptimizeMode = .Debug,
+    optimize_mode: std.builtin.Optimize = .debug,
 
     files: std.array_list.Managed(File),
     case: ?union(enum) {
@@ -316,20 +316,19 @@ pub fn addCompile(
 /// Each file should include a test manifest as a contiguous block of comments at
 /// the end of the file. The first line should be the test type, followed by a set of
 /// key-value config values, followed by a blank line, then the expected output.
-pub fn addFromDir(ctx: *Cases, dir: Io.Dir, b: *std.Build) void {
+pub fn addFromDir(ctx: *Cases, dir: Io.Dir, path_from_root: []const u8, b: *std.Build) void {
     var current_file: []const u8 = "none";
-    ctx.addFromDirInner(dir, &current_file, b) catch |err| {
-        std.debug.panicExtra(
-            @returnAddress(),
-            "test harness failed to process file '{s}': {s}\n",
-            .{ current_file, @errorName(err) },
-        );
+    ctx.addFromDirInner(dir, path_from_root, &current_file, b) catch |err| {
+        std.debug.panicExtra(@returnAddress(), "test harness failed to process file {q}: {t}", .{
+            current_file, err,
+        });
     };
 }
 
 fn addFromDirInner(
     ctx: *Cases,
     iterable_dir: Io.Dir,
+    path_from_root: []const u8,
     /// This is kept up to date with the currently being processed file so
     /// that if any errors occur the caller knows it happened during this file.
     current_file: *[]const u8,
@@ -340,11 +339,19 @@ fn addFromDirInner(
     var filenames: ArrayList([]const u8) = .empty;
 
     while (try it.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-
         // Ignore stuff such as .swp files
         if (!knownFileExtension(entry.basename)) continue;
-        try filenames.append(ctx.arena, try ctx.arena.dupe(u8, entry.path));
+
+        switch (entry.kind) {
+            .file => {
+                b.dependOnFileContents(b.path(b.pathJoin(&.{ path_from_root, entry.path })));
+                try filenames.append(ctx.arena, try ctx.arena.dupe(u8, entry.path));
+            },
+            .directory => {
+                b.dependOnDirectoryContents(b.path(b.pathJoin(&.{ path_from_root, entry.path })));
+            },
+            else => continue,
+        }
     }
 
     for (filenames.items) |filename| {
@@ -357,7 +364,15 @@ fn addFromDirInner(
         var manifest = try TestManifest.parse(ctx.arena, src);
 
         const backends = try manifest.getConfigForKeyAlloc(ctx.arena, "backend", Backend);
-        const targets = try manifest.getConfigForKeyAlloc(ctx.arena, "target", std.Target.Query);
+        const target_strs = try manifest.getConfigForKeyAlloc(ctx.arena, "target", []const u8);
+        const cpu_features_str = manifest.config_map.get("cpu_features") orelse "";
+        const targets = try ctx.arena.alloc(std.Target.Query, target_strs.len);
+        for (targets, target_strs) |*query, target_str| {
+            query.* = try std.Target.Query.parse(.{
+                .arch_os_abi = target_str,
+                .cpu_features = if (cpu_features_str.len == 0) null else cpu_features_str,
+            });
+        }
         const is_test = try manifest.getConfigForKeyAssertSingle("is_test", bool);
         const link_libc = try manifest.getConfigForKeyAssertSingle("link_libc", bool);
         const output_mode = try manifest.getConfigForKeyAssertSingle("output_mode", std.builtin.OutputMode);
@@ -374,11 +389,12 @@ fn addFromDirInner(
             const resolved_target = b.resolveTargetQuery(target_query);
             const target = &resolved_target.result;
             for (backends) |backend| {
-                if (backend == .selfhosted and
-                    target.cpu.arch != .aarch64 and target.cpu.arch != .wasm32 and target.cpu.arch != .x86_64 and target.cpu.arch != .spirv64)
-                {
-                    // Other backends don't support new liveness format
-                    continue;
+                if (backend == .selfhosted) {
+                    switch (target.cpu.arch) {
+                        .aarch64, .wasm32, .x86_64, .spirv64, .spirv32 => {},
+                        // Other backends don't support new liveness format
+                        else => continue,
+                    }
                 }
 
                 if (backend == .selfhosted and target.cpu.arch == .aarch64) {
@@ -429,8 +445,6 @@ fn addFromDirInner(
                     const output = try manifest.trailingSplit(ctx.arena);
                     case.addCompareOutput(src, output);
                 },
-                .translate_c => @panic("c_frontend specified for compile case"),
-                .run_translated_c => @panic("c_frontend specified for compile case"),
                 .cli => @panic("TODO cli tests"),
             }
         }
@@ -476,7 +490,7 @@ pub fn lowerToBuildSteps(
 
     for (self.cases.items) |case| {
         for (options.test_filters) |test_filter| {
-            if (std.mem.indexOf(u8, case.name, test_filter)) |_| break;
+            if (std.mem.find(u8, case.name, test_filter)) |_| break;
         } else if (options.test_filters.len > 0) continue;
 
         if (case.case.? == .Error and options.skip_compile_errors) continue;
@@ -509,7 +523,7 @@ pub fn lowerToBuildSteps(
 
         if (options.test_target_filters.len > 0) {
             for (options.test_target_filters) |filter| {
-                if (std.mem.indexOf(u8, triple_txt, filter) != null) break;
+                if (std.mem.find(u8, triple_txt, filter) != null) break;
             } else continue;
         }
 
@@ -612,6 +626,7 @@ pub fn lowerToBuildSteps(
                     if (getExternalExecutor(io, &case.target.result, .{
                         .host_cpu_arch = host.result.cpu.arch,
                         .host_os_tag = host.result.os.tag,
+                        .link_mode = .dynamic, // TODO: this emulates old behavior until this file is deleted
                         .link_libc = true,
                     }) != .native) {
                         // We wouldn't be able to run the compiled C code.
@@ -660,35 +675,15 @@ const TestManifestConfigDefaults = struct {
         if (std.mem.eql(u8, key, "backend")) {
             return "auto";
         } else if (std.mem.eql(u8, key, "target")) {
-            if (@"type" == .@"error" or @"type" == .translate_c or @"type" == .run_translated_c) {
+            if (@"type" == .@"error") {
                 return "native";
             }
-            return comptime blk: {
-                var defaults: []const u8 = "";
-                // TODO should we only return "mainstream" targets by default here?
-                // TODO we should also specify ABIs explicitly as the backends are
-                // getting more and more complete
-                // Linux
-                for (&[_][]const u8{ "x86_64", "arm", "aarch64" }) |arch| {
-                    defaults = defaults ++ arch ++ "-linux" ++ ",";
-                }
-                // macOS
-                for (&[_][]const u8{ "x86_64", "aarch64" }) |arch| {
-                    defaults = defaults ++ arch ++ "-macos" ++ ",";
-                }
-                // Windows
-                defaults = defaults ++ "x86_64-windows" ++ ",";
-                // Wasm
-                defaults = defaults ++ "wasm32-wasi";
-                break :blk defaults;
-            };
+            return "native,wasm32-wasi";
         } else if (std.mem.eql(u8, key, "output_mode")) {
             return switch (@"type") {
                 .@"error" => "Obj",
                 .run => "Exe",
                 .compile => "Obj",
-                .translate_c => "Obj",
-                .run_translated_c => "Obj",
                 .cli => @panic("TODO test harness for CLI tests"),
             };
         } else if (std.mem.eql(u8, key, "emit_asm")) {
@@ -706,6 +701,8 @@ const TestManifestConfigDefaults = struct {
         } else if (std.mem.eql(u8, key, "pie")) {
             return "null";
         } else if (std.mem.eql(u8, key, "imports")) {
+            return "";
+        } else if (std.mem.eql(u8, key, "cpu_features")) {
             return "";
         } else unreachable;
     }
@@ -739,6 +736,7 @@ const TestManifest = struct {
         .{ "is_test", {} },
         .{ "output_mode", {} },
         .{ "target", {} },
+        .{ "cpu_features", {} },
         .{ "c_frontend", {} },
         .{ "link_libc", {} },
         .{ "backend", {} },
@@ -752,8 +750,6 @@ const TestManifest = struct {
         run,
         cli,
         compile,
-        translate_c,
-        run_translated_c,
     };
 
     const TrailingIterator = struct {
@@ -822,10 +818,6 @@ const TestManifest = struct {
                 break :blk .cli;
             } else if (std.mem.eql(u8, raw, "compile")) {
                 break :blk .compile;
-            } else if (std.mem.eql(u8, raw, "translate-c")) {
-                break :blk .translate_c;
-            } else if (std.mem.eql(u8, raw, "run-translated-c")) {
-                break :blk .run_translated_c;
             } else {
                 std.log.warn("unknown test case type requested: {s}", .{raw});
                 return error.UnknownTestCaseType;

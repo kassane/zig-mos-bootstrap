@@ -47,7 +47,7 @@ pub const all_features = blk: {
     const len = @typeInfo(Feature).@"enum".field_names.len;
     std.debug.assert(len <= CpuFeature.Set.needed_bit_count);
     var result: [len]CpuFeature = undefined;
-    result[@intFromEnum(Feature.mos4510)] = .{
+    result[@backingInt(Feature.mos4510)] = .{
         .llvm_name = "mos4510",
         .description = "CSG 4510",
         .dependencies = featureSet(&[_]Feature{
@@ -60,7 +60,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos45gs02)] = .{
+    result[@backingInt(Feature.mos45gs02)] = .{
         .llvm_name = "mos45gs02",
         .description = "45GS02",
         .dependencies = featureSet(&[_]Feature{
@@ -74,7 +74,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos6502)] = .{
+    result[@backingInt(Feature.mos6502)] = .{
         .llvm_name = "mos6502",
         .description = "Generic MOS 6502, with support for BCD instructions",
         .dependencies = featureSet(&[_]Feature{
@@ -83,7 +83,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos6502x)] = .{
+    result[@backingInt(Feature.mos6502x)] = .{
         .llvm_name = "mos6502x",
         .description = "NMOS 6502, with illegal opcode support",
         .dependencies = featureSet(&[_]Feature{
@@ -93,7 +93,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos65c02)] = .{
+    result[@backingInt(Feature.mos65c02)] = .{
         .llvm_name = "mos65c02",
         .description = "Generic MOS 65C02",
         .dependencies = featureSet(&[_]Feature{
@@ -103,7 +103,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos65ce02)] = .{
+    result[@backingInt(Feature.mos65ce02)] = .{
         .llvm_name = "mos65ce02",
         .description = "Commodore 65CE02",
         .dependencies = featureSet(&[_]Feature{
@@ -115,7 +115,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos65dtv02)] = .{
+    result[@backingInt(Feature.mos65dtv02)] = .{
         .llvm_name = "mos65dtv02",
         .description = "The C64DTV's 6502 variant",
         .dependencies = featureSet(&[_]Feature{
@@ -125,7 +125,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos65el02)] = .{
+    result[@backingInt(Feature.mos65el02)] = .{
         .llvm_name = "mos65el02",
         .description = "65EL02 virtual machine",
         .dependencies = featureSet(&[_]Feature{
@@ -137,87 +137,87 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mos_insns_4510)] = .{
+    result[@backingInt(Feature.mos_insns_4510)] = .{
         .llvm_name = "mos-insns-4510",
         .description = "The new instructions present on CSG 4510",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_45gs02)] = .{
+    result[@backingInt(Feature.mos_insns_45gs02)] = .{
         .llvm_name = "mos-insns-45gs02",
         .description = "The new instructions present on 45GS02",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_6502)] = .{
+    result[@backingInt(Feature.mos_insns_6502)] = .{
         .llvm_name = "mos-insns-6502",
         .description = "The original documented 6502 instruction set",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_6502bcd)] = .{
+    result[@backingInt(Feature.mos_insns_6502bcd)] = .{
         .llvm_name = "mos-insns-6502bcd",
         .description = "BCD instruction support, including SED and CLD (most 6502 series CPUs support this)",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_6502x)] = .{
+    result[@backingInt(Feature.mos_insns_6502x)] = .{
         .llvm_name = "mos-insns-6502x",
         .description = "The 'illegal' opcodes present on some early variants of the original 6502 processor",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_65c02)] = .{
+    result[@backingInt(Feature.mos_insns_65c02)] = .{
         .llvm_name = "mos-insns-65c02",
         .description = "The new and modified instructions present on the generic 65c02 and variants",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_65ce02)] = .{
+    result[@backingInt(Feature.mos_insns_65ce02)] = .{
         .llvm_name = "mos-insns-65ce02",
         .description = "The new and modified instructions present on 65ce02 and variants",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_65dtv02)] = .{
+    result[@backingInt(Feature.mos_insns_65dtv02)] = .{
         .llvm_name = "mos-insns-65dtv02",
         .description = "The new and modified instructions present on the C64DTV's 6502 variant",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_65el02)] = .{
+    result[@backingInt(Feature.mos_insns_65el02)] = .{
         .llvm_name = "mos-insns-65el02",
         .description = "The new and modified instructions present on 65EL02",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_huc6280)] = .{
+    result[@backingInt(Feature.mos_insns_huc6280)] = .{
         .llvm_name = "mos-insns-huc6280",
         .description = "The new and modified instructions present on HuC6280",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_r65c02)] = .{
+    result[@backingInt(Feature.mos_insns_r65c02)] = .{
         .llvm_name = "mos-insns-r65c02",
         .description = "The new and modified instructions present on Rockwell and WDC 65c02",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_spc700)] = .{
+    result[@backingInt(Feature.mos_insns_spc700)] = .{
         .llvm_name = "mos-insns-spc700",
         .description = "The SPC700 instruction set",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_sweet16)] = .{
+    result[@backingInt(Feature.mos_insns_sweet16)] = .{
         .llvm_name = "mos-insns-sweet16",
         .description = "The SWEET16 instruction set",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_w65816)] = .{
+    result[@backingInt(Feature.mos_insns_w65816)] = .{
         .llvm_name = "mos-insns-w65816",
         .description = "The new and modified instructions present on WDC 65816",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_insns_w65c02)] = .{
+    result[@backingInt(Feature.mos_insns_w65c02)] = .{
         .llvm_name = "mos-insns-w65c02",
         .description = "The new and modified instructions present on WDC 65c02",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.mos_long_register_names)] = .{
+    result[@backingInt(Feature.mos_long_register_names)] = .{
         .llvm_name = "mos-long-register-names",
         .description = "Requires llvm_mos_* prefixes to all registers. Useful if your code has variable names that conflict with llvm-mos register names",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@intFromEnum(Feature.moshuc6280)] = .{
+    result[@backingInt(Feature.moshuc6280)] = .{
         .llvm_name = "moshuc6280",
         .description = "Hudson Soft HuC6280",
         .dependencies = featureSet(&[_]Feature{
@@ -229,7 +229,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mosr65c02)] = .{
+    result[@backingInt(Feature.mosr65c02)] = .{
         .llvm_name = "mosr65c02",
         .description = "Rockwell 65C02",
         .dependencies = featureSet(&[_]Feature{
@@ -240,21 +240,21 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mosspc700)] = .{
+    result[@backingInt(Feature.mosspc700)] = .{
         .llvm_name = "mosspc700",
         .description = "Sony 6502-like CPUs, including the SPC700",
         .dependencies = featureSet(&[_]Feature{
             .mos_insns_spc700,
         }),
     };
-    result[@intFromEnum(Feature.mossweet16)] = .{
+    result[@backingInt(Feature.mossweet16)] = .{
         .llvm_name = "mossweet16",
         .description = "MOS 6502 compatible with SWEET16 virtual machine support",
         .dependencies = featureSet(&[_]Feature{
             .mos_insns_sweet16,
         }),
     };
-    result[@intFromEnum(Feature.mosw65816)] = .{
+    result[@backingInt(Feature.mosw65816)] = .{
         .llvm_name = "mosw65816",
         .description = "WDC 65816",
         .dependencies = featureSet(&[_]Feature{
@@ -266,7 +266,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.mosw65c02)] = .{
+    result[@backingInt(Feature.mosw65c02)] = .{
         .llvm_name = "mosw65c02",
         .description = "WDC 65C02",
         .dependencies = featureSet(&[_]Feature{
@@ -278,7 +278,7 @@ pub const all_features = blk: {
             .static_stack,
         }),
     };
-    result[@intFromEnum(Feature.static_stack)] = .{
+    result[@backingInt(Feature.static_stack)] = .{
         .llvm_name = "static-stack",
         .description = "Whether to use statically-allocated stack frames if possible.",
         .dependencies = featureSet(&[_]Feature{}),

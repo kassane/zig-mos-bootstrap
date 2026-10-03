@@ -529,7 +529,7 @@ test "Dir.Iterator many entries" {
     var i: usize = 0;
     var buf: [4]u8 = undefined; // Enough to store "1024".
     while (i < num) : (i += 1) {
-        const name = try std.fmt.bufPrint(&buf, "{}", .{i});
+        const name = try std.mem.print(&buf, "{}", .{i});
         const file = try tmp_dir.dir.createFile(io, name, .{});
         file.close(io);
     }
@@ -551,7 +551,7 @@ test "Dir.Iterator many entries" {
 
     i = 0;
     while (i < num) : (i += 1) {
-        const name = try std.fmt.bufPrint(&buf, "{}", .{i});
+        const name = try std.mem.print(&buf, "{}", .{i});
         try expect(contains(&entries, .{ .name = name, .kind = .file, .inode = 0 }));
     }
 }
@@ -758,6 +758,43 @@ test "readFileAlloc" {
     );
 }
 
+test "file operations with follow_symlinks=false" {
+    const io = testing.io;
+
+    var tmp_dir = tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const contents = "this is a test.\nthis is a test.\nthis is a test.\nthis is a test.\n";
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "test_file",
+        .data = contents,
+    });
+
+    // Without lock
+    {
+        var file = try tmp_dir.dir.openFile(io, "test_file", .{ .follow_symlinks = false });
+        defer file.close(io);
+
+        var file_reader = file.reader(io, &.{});
+        const actual_contents = try file_reader.interface.allocRemaining(testing.allocator, .unlimited);
+        defer testing.allocator.free(actual_contents);
+
+        try std.testing.expectEqualSlices(u8, contents, actual_contents);
+    }
+
+    // With lock
+    {
+        var file = try tmp_dir.dir.openFile(io, "test_file", .{ .follow_symlinks = false, .lock = .exclusive });
+        defer file.close(io);
+
+        var file_reader = file.reader(io, &.{});
+        const actual_contents = try file_reader.interface.allocRemaining(testing.allocator, .unlimited);
+        defer testing.allocator.free(actual_contents);
+
+        try std.testing.expectEqualSlices(u8, contents, actual_contents);
+    }
+}
+
 test "Dir.statFile" {
     try testWithAllSupportedPathTypes(struct {
         fn impl(ctx: *TestContext) !void {
@@ -902,6 +939,8 @@ test "createDirPathOpen parent dirs do not exist" {
 }
 
 test "deleteDir" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/35686
+
     try testWithAllSupportedPathTypes(struct {
         fn impl(ctx: *TestContext) !void {
             const io = ctx.io;
@@ -1096,8 +1135,10 @@ test "Dir.renamePreserve onto existing" {
             // file -> dir
             try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_file_path, ctx.dir, target_dir_path, io));
 
-            // TODO: fix dir renaming on non-Linux, non-Windows systems, see https://codeberg.org/ziglang/zig/issues/35340
-            if (native_os != .windows and native_os != .linux) return;
+            // TODO: fix dir renaming on other systems, see https://codeberg.org/ziglang/zig/issues/35340
+            if (native_os != .windows and native_os != .linux and !native_os.isDarwin()) {
+                return;
+            }
 
             // dir -> file
             try expectError(error.PathAlreadyExists, ctx.dir.renamePreserve(test_dir_path, ctx.dir, target_file_path, io));
@@ -2166,7 +2207,7 @@ test "'.' and '..' in absolute functions" {
 }
 
 test "chmod" {
-    if (native_os == .windows or native_os == .wasi) return;
+    if (native_os == .windows or native_os == .wasi) return error.SkipZigTest;
 
     const io = testing.io;
 
@@ -2189,8 +2230,7 @@ test "chmod" {
 }
 
 test "change ownership" {
-    if (native_os == .windows or native_os == .wasi)
-        return error.SkipZigTest;
+    if (native_os == .windows or native_os == .wasi) return error.SkipZigTest;
 
     const io = testing.io;
 
@@ -2369,13 +2409,19 @@ test "seekBy" {
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "blah.txt", .data = "let's test seekBy" });
     const f = try tmp_dir.dir.openFile(io, "blah.txt", .{ .mode = .read_only });
     defer f.close(io);
-    var reader = f.readerStreaming(io, &.{});
+    var buf: [10]u8 = undefined;
+    var reader = f.readerStreaming(io, &buf);
+    // Seek without any buffered data
+    try reader.seekBy(2);
+
+    // Seek when the buffered data is sufficient to satisfy the seek amount
+    try reader.interface.fill(2);
     try reader.seekBy(2);
 
     var buffer: [20]u8 = undefined;
     const n = try reader.interface.readSliceShort(&buffer);
-    try expectEqual(15, n);
-    try expectEqualStrings("t's test seekBy", buffer[0..15]);
+    try expectEqual(13, n);
+    try expectEqualStrings("s test seekBy", buffer[0..n]);
 }
 
 test "seekTo flushes buffered data" {

@@ -26,6 +26,7 @@ const runner_threaded_io: Io = Io.Threaded.global_single_threaded.io();
 /// the test runner will communicate with the build runner via `std.zig.Server`.
 const need_simple = switch (builtin.zig_backend) {
     .stage2_aarch64,
+    .stage2_loongarch,
     .stage2_powerpc,
     .stage2_riscv64,
     => true,
@@ -78,11 +79,11 @@ fn mainServer(init: std.process.Init.Minimal) !void {
     @disableInstrumentation();
     stdin_reader = .initStreaming(.stdin(), runner_threaded_io, &stdin_buffer);
     stdout_writer = .initStreaming(.stdout(), runner_threaded_io, &stdout_buffer);
-    var server = try std.zig.Server.init(.{
+    var server: std.zig.Server = .{
         .in = &stdin_reader.interface,
         .out = &stdout_writer.interface,
-        .zig_version = builtin.zig_version_string,
-    });
+    };
+    try server.serveStringMessage(.zig_version, builtin.zig_version_string);
 
     while (true) {
         const hdr = try server.receiveMessage();
@@ -91,24 +92,23 @@ fn mainServer(init: std.process.Init.Minimal) !void {
                 return std.process.exit(0);
             },
             .query_test_metadata => {
-                testing.allocator_instance = .init(std.heap.page_allocator, .{});
-                defer if (testing.allocator_instance.deinit() != 0) {
-                    @panic("internal test runner memory leak");
-                };
+                var sa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+                defer if (sa.deinit() != 0) @panic("internal test runner memory leak");
+                const gpa = sa.allocator();
 
                 var string_bytes: std.ArrayList(u8) = .empty;
-                defer string_bytes.deinit(testing.allocator);
-                try string_bytes.append(testing.allocator, 0); // Reserve 0 for null.
+                defer string_bytes.deinit(gpa);
+                try string_bytes.append(gpa, 0); // Reserve 0 for null.
 
                 const test_fns = builtin.test_functions;
-                const names = try testing.allocator.alloc(u32, test_fns.len);
-                defer testing.allocator.free(names);
-                const expected_panic_msgs = try testing.allocator.alloc(u32, test_fns.len);
-                defer testing.allocator.free(expected_panic_msgs);
+                const names = try gpa.alloc(u32, test_fns.len);
+                defer gpa.free(names);
+                const expected_panic_msgs = try gpa.alloc(u32, test_fns.len);
+                defer gpa.free(expected_panic_msgs);
 
                 for (test_fns, names, expected_panic_msgs) |test_fn, *name, *expected_panic_msg| {
                     name.* = @intCast(string_bytes.items.len);
-                    try string_bytes.ensureUnusedCapacity(testing.allocator, test_fn.name.len + 1);
+                    try string_bytes.ensureUnusedCapacity(gpa, test_fn.name.len + 1);
                     string_bytes.appendSliceAssumeCapacity(test_fn.name);
                     string_bytes.appendAssumeCapacity(0);
                     expected_panic_msg.* = 0;
@@ -185,9 +185,8 @@ fn mainServer(init: std.process.Init.Minimal) !void {
                     .environ = init.environ,
                 });
                 defer io_instance.deinit();
-                const io = io_instance.io();
 
-                const mode: fuzz_abi.LimitKind = @enumFromInt(try server.receiveBody_u8());
+                const mode: fuzz_abi.LimitKind = @fromBackingInt(@intCast(try server.receiveBody_u8()));
                 const amount_or_instance = try server.receiveBody_u64();
                 const main_instance = mode == .iterations or amount_or_instance == 0;
 
@@ -208,7 +207,7 @@ fn mainServer(init: std.process.Init.Minimal) !void {
                     .indexes = test_indexes,
                     .server = &server,
                     .gpa = gpa,
-                    .io = io,
+                    .threaded_io = &io_instance,
                     .input_poller = undefined,
                 };
 
@@ -249,7 +248,7 @@ fn mainServer(init: std.process.Init.Minimal) !void {
             },
 
             else => {
-                std.debug.print("unsupported message: {x}\n", .{@intFromEnum(hdr.tag)});
+                std.debug.print("unsupported message: {x}\n", .{@backingInt(hdr.tag)});
                 std.process.exit(1);
             },
         }
@@ -351,10 +350,10 @@ pub fn log(
     args: anytype,
 ) void {
     @disableInstrumentation();
-    if (@intFromEnum(message_level) <= @intFromEnum(std.log.Level.err)) {
+    if (@backingInt(message_level) <= @backingInt(std.log.Level.err)) {
         log_err_count +|= 1;
     }
-    if (@intFromEnum(message_level) <= @intFromEnum(testing.log_level)) {
+    if (@backingInt(message_level) <= @backingInt(testing.log_level)) {
         std.debug.print(
             "[" ++ @tagName(scope) ++ "] (" ++ @tagName(message_level) ++ "): " ++ format ++ "\n",
             args,
@@ -377,6 +376,7 @@ pub fn mainSimple() anyerror!void {
         else => false,
     };
 
+    testing.allocator_instance = .init(std.heap.page_allocator, .{});
     testing.io_instance = .init(testing.allocator, .{});
 
     var passed: u64 = 0;
@@ -421,7 +421,7 @@ var fuzz_runner: if (builtin.fuzz) struct {
     indexes: []u32,
     server: *std.zig.Server,
     gpa: std.mem.Allocator,
-    io: Io,
+    threaded_io: *Io.Threaded,
     input_poller: Io.Future(Io.Cancelable!void),
 
     comptime {
@@ -441,6 +441,12 @@ var fuzz_runner: if (builtin.fuzz) struct {
         });
         defer if (testing.allocator_instance.deinit() != 0) std.process.exit(1);
         is_fuzz_test = false;
+
+        testing.io_instance = .init(testing.allocator, .{
+            .argv0 = fuzz_runner.threaded_io.argv0,
+            .environ = fuzz_runner.threaded_io.environ.process_environ,
+        });
+        defer testing.io_instance.deinit();
 
         builtin.test_functions[fuzz_runner.indexes[i]].func() catch |err| switch (err) {
             error.SkipZigTest => return,
@@ -472,7 +478,8 @@ var fuzz_runner: if (builtin.fuzz) struct {
 
     export fn runner_start_input_poller() void {
         @disableInstrumentation();
-        const future = fuzz_runner.io.concurrent(inputPoller, .{}) catch |e| switch (e) {
+        const io = fuzz_runner.threaded_io.io();
+        const future = io.concurrent(inputPoller, .{}) catch |e| switch (e) {
             error.ConcurrencyUnavailable => @panic("failed to spawn concurrent fuzz input poller"),
         };
         fuzz_runner.input_poller = future;
@@ -480,17 +487,20 @@ var fuzz_runner: if (builtin.fuzz) struct {
 
     export fn runner_stop_input_poller() void {
         @disableInstrumentation();
-        assert(fuzz_runner.input_poller.cancel(fuzz_runner.io) == error.Canceled);
+        const io = fuzz_runner.threaded_io.io();
+        assert(fuzz_runner.input_poller.cancel(io) == error.Canceled);
     }
 
     export fn runner_futex_wait(ptr: *const u32, expected: u32) bool {
         @disableInstrumentation();
-        return fuzz_runner.io.futexWait(u32, ptr, expected) == error.Canceled;
+        const io = fuzz_runner.threaded_io.io();
+        return io.futexWait(u32, ptr, expected) == error.Canceled;
     }
 
     export fn runner_futex_wake(ptr: *const u32, waiters: u32) void {
         @disableInstrumentation();
-        fuzz_runner.io.futexWake(u32, ptr, waiters);
+        const io = fuzz_runner.threaded_io.io();
+        io.futexWake(u32, ptr, waiters);
     }
 
     fn inputPoller() Io.Cancelable!void {
@@ -513,7 +523,7 @@ var fuzz_runner: if (builtin.fuzz) struct {
         while (true) {
             const hdr = try server.receiveMessage();
             if (hdr.tag != .new_fuzz_input) {
-                panic("unexpected message: {x}\n", .{@intFromEnum(hdr.tag)});
+                panic("unexpected message: {x}\n", .{@backingInt(hdr.tag)});
             }
             const test_i = try server.receiveBody_u32();
             const input_len = hdr.bytes_len - 4;

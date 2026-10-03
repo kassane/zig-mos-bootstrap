@@ -7,7 +7,6 @@ const builtin = @import("builtin");
 test "uint128" {
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
-    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     var buff: u128 = maxInt(u128);
@@ -32,7 +31,7 @@ test "undefined 128 bit int" {
     @setRuntimeSafety(true);
 
     // TODO implement @setRuntimeSafety
-    if (builtin.mode != .Debug and builtin.mode != .ReleaseSafe) {
+    if (builtin.mode != .debug and builtin.mode != .safe) {
         return error.SkipZigTest;
     }
 
@@ -45,7 +44,6 @@ test "undefined 128 bit int" {
 test "int128" {
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
-    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     var buff: i128 = -1;
@@ -61,6 +59,7 @@ test "int128" {
     const a: i128 = -170141183460469231731687303715884105728;
     const b: i128 = -0x8000_0000_0000_0000_0000_0000_0000_0000;
     try expect(@divFloor(b, 1_000_000) == -170141183460469231731687303715885);
+    try expect(@divCeil(b, 1_000_000) == -170141183460469231731687303715884);
     try expect(a == b);
 }
 
@@ -90,7 +89,6 @@ test "truncate int128" {
 test "shift int128" {
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest; // TODO
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest; // TODO
-    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_riscv64) return error.SkipZigTest;
 
     const types = .{ u128, i128 };

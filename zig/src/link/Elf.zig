@@ -2,7 +2,7 @@ pub const Atom = @import("Elf/Atom.zig");
 
 base: link.File,
 zig_object: ?*ZigObject,
-rpath_table: std.StringArrayHashMapUnmanaged(void),
+rpath_table: std.array_hash_map.String(void),
 image_base: u64,
 z_nodelete: bool,
 z_notext: bool,
@@ -30,7 +30,7 @@ file_handles: std.ArrayList(File.Handle) = .empty,
 zig_object_index: ?File.Index = null,
 linker_defined_index: ?File.Index = null,
 objects: std.ArrayList(File.Index) = .empty,
-shared_objects: std.StringArrayHashMapUnmanaged(File.Index) = .empty,
+shared_objects: std.array_hash_map.String(File.Index) = .empty,
 
 /// List of all output sections and their associated metadata.
 sections: std.MultiArrayList(Section) = .{},
@@ -127,7 +127,7 @@ const SectionIndexes = struct {
     symtab: ?u32 = null,
 };
 
-const ProgramHeaderList = std.ArrayList(elf.Elf64_Phdr);
+const ProgramHeaderList = std.ArrayList(elf.Elf64.Phdr);
 
 const OptionalProgramHeaderIndex = enum(u16) {
     none = std.math.maxInt(u16),
@@ -135,12 +135,12 @@ const OptionalProgramHeaderIndex = enum(u16) {
 
     fn unwrap(i: OptionalProgramHeaderIndex) ?ProgramHeaderIndex {
         if (i == .none) return null;
-        return @enumFromInt(@intFromEnum(i));
+        return @fromBackingInt(@intCast(@backingInt(i)));
     }
 
     fn int(i: OptionalProgramHeaderIndex) ?u16 {
         if (i == .none) return null;
-        return @intFromEnum(i);
+        return @backingInt(i);
     }
 };
 
@@ -148,32 +148,32 @@ const ProgramHeaderIndex = enum(u16) {
     _,
 
     fn toOptional(i: ProgramHeaderIndex) OptionalProgramHeaderIndex {
-        const result: OptionalProgramHeaderIndex = @enumFromInt(@intFromEnum(i));
+        const result: OptionalProgramHeaderIndex = @fromBackingInt(@intCast(@backingInt(i)));
         assert(result != .none);
         return result;
     }
 
     fn int(i: ProgramHeaderIndex) u16 {
-        return @intFromEnum(i);
+        return @backingInt(i);
     }
 };
 
 const ProgramHeaderIndexes = struct {
-    /// PT_PHDR
+    /// PT.PHDR
     table: OptionalProgramHeaderIndex = .none,
-    /// PT_LOAD for PHDR table
+    /// PT.LOAD for PHDR table
     /// We add this special load segment to ensure the EHDR and PHDR table are always
     /// loaded into memory.
     table_load: OptionalProgramHeaderIndex = .none,
-    /// PT_INTERP
+    /// PT.INTERP
     interp: OptionalProgramHeaderIndex = .none,
-    /// PT_DYNAMIC
+    /// PT.DYNAMIC
     dynamic: OptionalProgramHeaderIndex = .none,
-    /// PT_GNU_EH_FRAME
+    /// PT.GNU_EH_FRAME
     gnu_eh_frame: OptionalProgramHeaderIndex = .none,
-    /// PT_GNU_STACK
+    /// PT.GNU_STACK
     gnu_stack: OptionalProgramHeaderIndex = .none,
-    /// PT_TLS
+    /// PT.TLS
     /// TODO I think ELF permits multiple TLS segments but for now, assume one per file.
     tls: OptionalProgramHeaderIndex = .none,
 };
@@ -250,7 +250,7 @@ pub fn createEmpty(
     const is_dyn_lib = output_mode == .Lib and link_mode == .dynamic;
     const default_sym_version: elf.Versym = if (is_dyn_lib or comp.config.rdynamic) .GLOBAL else .LOCAL;
 
-    var rpath_table: std.StringArrayHashMapUnmanaged(void) = .empty;
+    var rpath_table: std.array_hash_map.String(void) = .empty;
     try rpath_table.entries.resize(arena, options.rpath_list.len);
     @memcpy(rpath_table.entries.items(.key), options.rpath_list);
     try rpath_table.reIndex(arena);
@@ -261,11 +261,7 @@ pub fn createEmpty(
             .tag = .elf,
             .comp = comp,
             .emit = emit,
-            .zcu_object_basename = if (use_llvm)
-                try std.fmt.allocPrint(arena, "{s}_zcu.o", .{fs.path.stem(emit.sub_path)})
-            else
-                null,
-            .gc_sections = options.gc_sections orelse (optimize_mode != .Debug and output_mode != .Obj),
+            .gc_sections = options.gc_sections orelse (optimize_mode != .debug and output_mode != .Obj),
             .print_gc_sections = options.print_gc_sections,
             .stack_size = options.stack_size orelse 16777216,
             .allow_shlib_undefined = options.allow_shlib_undefined orelse !is_native_os,
@@ -339,23 +335,23 @@ pub fn createEmpty(
     if (!is_obj_or_ar) {
         try self.dynstrtab.append(gpa, 0);
 
-        // Initialize PT_PHDR program header
+        // Initialize PT.PHDR program header
         const p_align: u16 = switch (self.ptr_width) {
-            .p32 => @alignOf(elf.Elf32_Phdr),
-            .p64 => @alignOf(elf.Elf64_Phdr),
+            .p32 => @alignOf(elf.Elf32.Phdr),
+            .p64 => @alignOf(elf.Elf64.Phdr),
         };
         const ehsize: u64 = switch (self.ptr_width) {
             .p32 => @sizeOf(elf.Elf32_Ehdr),
             .p64 => @sizeOf(elf.Elf64_Ehdr),
         };
         const phsize: u64 = switch (self.ptr_width) {
-            .p32 => @sizeOf(elf.Elf32_Phdr),
-            .p64 => @sizeOf(elf.Elf64_Phdr),
+            .p32 => @sizeOf(elf.Elf32.Phdr),
+            .p64 => @sizeOf(elf.Elf64.Phdr),
         };
         const max_nphdrs = comptime getMaxNumberOfPhdrs();
         const reserved: u64 = mem.alignForward(u64, padToIdeal(max_nphdrs * phsize), self.page_size);
         self.phdr_indexes.table = (try self.addPhdr(.{
-            .type = elf.PT_PHDR,
+            .type = @backingInt(elf.PT.PHDR),
             .flags = elf.PF_R,
             .@"align" = p_align,
             .addr = self.image_base + ehsize,
@@ -364,7 +360,7 @@ pub fn createEmpty(
             .memsz = reserved,
         })).toOptional();
         self.phdr_indexes.table_load = (try self.addPhdr(.{
-            .type = elf.PT_LOAD,
+            .type = @backingInt(elf.PT.LOAD),
             .flags = elf.PF_R,
             .@"align" = self.page_size,
             .addr = self.image_base,
@@ -468,21 +464,21 @@ pub fn deinit(self: *Elf) void {
     self.dump_argv_list.deinit(gpa);
 }
 
-pub fn getNavVAddr(self: *Elf, pt: Zcu.PerThread, nav_index: InternPool.Nav.Index, reloc_info: link.File.RelocInfo) !u64 {
-    return self.zigObjectPtr().?.getNavVAddr(self, pt, nav_index, reloc_info);
+pub fn navSymbol(self: *Elf, nav: InternPool.Nav.Index) link.Error!link.File.SymbolId {
+    return self.zigObjectPtr().?.navSymbol(self, nav);
 }
 
-pub fn lowerUav(
+pub fn relocSymAddr(self: *Elf, reloc_info: link.File.RelocInfo) !void {
+    return self.zigObjectPtr().?.relocSymAddr(self, reloc_info);
+}
+
+pub fn uavSymbol(
     self: *Elf,
     pt: Zcu.PerThread,
     uav: InternPool.Index,
     explicit_alignment: InternPool.Alignment,
 ) !link.File.SymbolId {
-    return self.zigObjectPtr().?.lowerUav(self, pt, uav, explicit_alignment);
-}
-
-pub fn getUavVAddr(self: *Elf, uav: InternPool.Index, reloc_info: link.File.RelocInfo) !u64 {
-    return self.zigObjectPtr().?.getUavVAddr(self, uav, reloc_info);
+    return self.zigObjectPtr().?.uavSymbol(self, pt, uav, explicit_alignment);
 }
 
 /// Returns end pos of collision, if any.
@@ -519,11 +515,11 @@ fn detectAllocCollision(self: *Elf, start: u64, size: u64) !?u64 {
     }
 
     for (self.phdrs.items) |phdr| {
-        if (phdr.p_type != elf.PT_LOAD) continue;
-        const increased_size = padToIdeal(phdr.p_filesz);
-        const test_end = phdr.p_offset +| increased_size;
+        if (phdr.type != .LOAD) continue;
+        const increased_size = padToIdeal(phdr.filesz);
+        const test_end = phdr.offset +| increased_size;
         if (start < test_end) {
-            if (end > phdr.p_offset) return test_end;
+            if (end > phdr.offset) return test_end;
             if (test_end < std.math.maxInt(u64)) at_end = false;
         }
     }
@@ -543,8 +539,8 @@ pub fn allocatedSize(self: *Elf, start: u64) u64 {
         if (section.sh_offset < min_pos) min_pos = section.sh_offset;
     }
     for (self.phdrs.items) |phdr| {
-        if (phdr.p_offset <= start) continue;
-        if (phdr.p_offset < min_pos) min_pos = phdr.p_offset;
+        if (phdr.offset <= start) continue;
+        if (phdr.offset < min_pos) min_pos = phdr.offset;
     }
     return min_pos - start;
 }
@@ -719,7 +715,6 @@ pub fn loadInput(self: *Elf, input: link.Input) !void {
     const target = self.getTarget();
     const debug_fmt_strip = comp.config.debug_format == .strip;
     const default_sym_version = self.default_sym_version;
-    const is_static_lib = self.base.isStaticLib();
 
     if (comp.verbose_link) {
         comp.mutex.lockUncancelable(io); // protect comp.arena
@@ -728,7 +723,7 @@ pub fn loadInput(self: *Elf, input: link.Input) !void {
         const argv = &self.dump_argv_list;
         switch (input) {
             .res => unreachable,
-            .dso_exact => |dso_exact| try argv.appendSlice(gpa, &.{ "-l", dso_exact.name }),
+            .tbd => unreachable,
             .object, .archive => |obj| try argv.append(gpa, try obj.path.toString(comp.arena)),
             .dso => |dso| try argv.append(gpa, try dso.path.toString(comp.arena)),
         }
@@ -736,10 +731,14 @@ pub fn loadInput(self: *Elf, input: link.Input) !void {
 
     switch (input) {
         .res => unreachable,
-        .dso_exact => @panic("TODO"),
+        .tbd => unreachable,
         .object => |obj| try parseObject(self, obj),
-        .archive => |obj| try parseArchive(gpa, io, diags, &self.file_handles, &self.files, target, debug_fmt_strip, default_sym_version, &self.objects, obj, is_static_lib),
-        .dso => |dso| try parseDso(gpa, io, diags, dso, &self.shared_objects, &self.files, target),
+        .archive => |obj| if (self.base.isStaticLib()) {
+            // Ignore static library inputs when generating a static library.
+        } else {
+            try parseArchive(gpa, io, diags, &self.file_handles, &self.files, target, debug_fmt_strip, default_sym_version, &self.objects, obj);
+        },
+        .dso => |dso| try parseDso(gpa, comp.arena, io, diags, dso, &self.shared_objects, &self.files, target),
     }
 }
 
@@ -763,17 +762,13 @@ pub fn flush(self: *Elf, arena: Allocator, tid: Zcu.PerThread.Id, prog_node: std
 }
 
 fn flushInner(self: *Elf, arena: Allocator, tid: Zcu.PerThread.Id) !void {
+    _ = arena;
+
     const comp = self.base.comp;
     const gpa = comp.gpa;
     const diags = &comp.link_diags;
 
-    const zcu_obj_path: ?Path = if (self.base.zcu_object_basename) |raw| p: {
-        break :p try comp.resolveEmitPathFlush(arena, .temp, raw);
-    } else null;
-
     if (self.zigObjectPtr()) |zig_object| try zig_object.flush(self, tid);
-
-    if (zcu_obj_path) |path| openParseObjectReportingFailure(self, path);
 
     switch (comp.config.output_mode) {
         .Obj => return relocatable.flushObject(self, comp),
@@ -1047,27 +1042,6 @@ fn dumpArgvInit(self: *Elf, arena: Allocator) !void {
     }
 }
 
-pub fn openParseObjectReportingFailure(self: *Elf, path: Path) void {
-    const comp = self.base.comp;
-    const io = comp.io;
-    const diags = &comp.link_diags;
-    const obj = link.openObject(io, path, false, false) catch |err| {
-        switch (diags.failParse(path, "failed to open object: {t}", .{err})) {
-            error.AlreadyReported => return,
-        }
-    };
-    self.parseObjectReportingFailure(obj);
-}
-
-fn parseObjectReportingFailure(self: *Elf, obj: link.Input.Object) void {
-    const comp = self.base.comp;
-    const diags = &comp.link_diags;
-    self.parseObject(obj) catch |err| switch (err) {
-        error.AlreadyReported => return, // already reported
-        else => |e| diags.addParseError(obj.path, "failed to parse object: {t}", .{e}),
-    };
-}
-
 fn parseObject(self: *Elf, obj: link.Input.Object) !void {
     const tracy = trace(@src());
     defer tracy.end();
@@ -1113,7 +1087,6 @@ fn parseArchive(
     default_sym_version: elf.Versym,
     objects: *std.ArrayList(File.Index),
     obj: link.Input.Object,
-    is_static_lib: bool,
 ) !void {
     const tracy = trace(@src());
     defer tracy.end();
@@ -1122,27 +1095,25 @@ fn parseArchive(
     var archive = try Archive.parse(gpa, io, diags, file_handles, obj.path, fh);
     defer archive.deinit(gpa);
 
-    const init_alive = if (is_static_lib) true else obj.must_link;
-
     for (archive.objects) |extracted| {
         const index: File.Index = @intCast(try files.addOne(gpa));
         files.set(index, .{ .object = extracted });
         const object = &files.items(.data)[index].object;
         object.index = index;
-        object.alive = init_alive;
+        object.alive = obj.must_link;
         try object.parseCommon(gpa, io, diags, obj.path, obj.file, target);
-        if (!is_static_lib)
-            try object.parse(gpa, io, diags, obj.path, obj.file, target, debug_fmt_strip, default_sym_version);
+        try object.parse(gpa, io, diags, obj.path, obj.file, target, debug_fmt_strip, default_sym_version);
         try objects.append(gpa, index);
     }
 }
 
 fn parseDso(
     gpa: Allocator,
+    arena: Allocator,
     io: Io,
     diags: *Diags,
     dso: link.Input.Dso,
-    shared_objects: *std.StringArrayHashMapUnmanaged(File.Index),
+    shared_objects: *std.array_hash_map.String(File.Index),
     files: *std.MultiArrayList(File.Entry),
     target: *const std.Target,
 ) !void {
@@ -1151,11 +1122,16 @@ fn parseDso(
 
     const handle = dso.file;
 
-    const stat = Stat.fromFs(try handle.stat(io));
+    const stat: Stat = .init(try handle.stat(io));
     var header = try SharedObject.parseHeader(gpa, io, diags, dso.path, handle, stat, target);
     defer header.deinit(gpa);
 
-    const soname = header.soname() orelse dso.path.basename();
+    const fallback_soname: []const u8 = switch (dso.fallback_soname) {
+        .full_path => try dso.path.toString(arena),
+        .basename => fs.path.basename(dso.path.sub_path),
+    };
+
+    const soname = header.soname() orelse fallback_soname;
 
     const gop = try shared_objects.getOrPut(gpa, soname);
     if (gop.found_existing) return;
@@ -1187,6 +1163,7 @@ fn parseDso(
             .symbols_extra = .empty,
             .symbols_resolver = .empty,
             .output_symtab_ctx = .{},
+            .fallback_soname = fallback_soname,
         },
     });
     const so = fileLookup(files.*, index, null).?.shared_object;
@@ -1501,34 +1478,34 @@ fn writePhdrTable(self: *Elf) !void {
     const phdr_table = &self.phdrs.items[self.phdr_indexes.table.int().?];
 
     log.debug("writing program headers from 0x{x} to 0x{x}", .{
-        phdr_table.p_offset,
-        phdr_table.p_offset + phdr_table.p_filesz,
+        phdr_table.offset,
+        phdr_table.offset + phdr_table.filesz,
     });
 
     switch (self.ptr_width) {
         .p32 => {
-            const buf = try gpa.alloc(elf.Elf32_Phdr, self.phdrs.items.len);
+            const buf = try gpa.alloc(elf.Elf32.Phdr, self.phdrs.items.len);
             defer gpa.free(buf);
 
             for (buf, 0..) |*phdr, i| {
                 phdr.* = phdrTo32(self.phdrs.items[i]);
                 if (foreign_endian) {
-                    mem.byteSwapAllFields(elf.Elf32_Phdr, phdr);
+                    mem.byteSwapAllFields(elf.Elf32.Phdr, phdr);
                 }
             }
-            try self.pwriteAll(@ptrCast(buf), phdr_table.p_offset);
+            try self.pwriteAll(@ptrCast(buf), phdr_table.offset);
         },
         .p64 => {
-            const buf = try gpa.alloc(elf.Elf64_Phdr, self.phdrs.items.len);
+            const buf = try gpa.alloc(elf.Elf64.Phdr, self.phdrs.items.len);
             defer gpa.free(buf);
 
             for (buf, 0..) |*phdr, i| {
                 phdr.* = self.phdrs.items[i];
                 if (foreign_endian) {
-                    mem.byteSwapAllFields(elf.Elf64_Phdr, phdr);
+                    mem.byteSwapAllFields(elf.Elf64.Phdr, phdr);
                 }
             }
-            try self.pwriteAll(@ptrCast(buf), phdr_table.p_offset);
+            try self.pwriteAll(@ptrCast(buf), phdr_table.offset);
         },
     }
 }
@@ -1561,7 +1538,7 @@ pub fn writeElfHeader(self: *Elf) !void {
     hdr_buf[index] = 1; // ELF version
     index += 1;
 
-    hdr_buf[index] = @intFromEnum(@as(elf.OSABI, switch (target.cpu.arch) {
+    hdr_buf[index] = @backingInt(@as(elf.OSABI, switch (target.cpu.arch) {
         .amdgcn => switch (target.os.tag) {
             .amdhsa => .AMDGPU_HSA,
             .amdpal => .AMDGPU_PAL,
@@ -1596,11 +1573,11 @@ pub fn writeElfHeader(self: *Elf) !void {
             .dynamic => .DYN,
         },
     };
-    mem.writeInt(u16, hdr_buf[index..][0..2], @intFromEnum(elf_type), endian);
+    mem.writeInt(u16, hdr_buf[index..][0..2], @backingInt(elf_type), endian);
     index += 2;
 
     const machine = target.toElfMachine();
-    mem.writeInt(u16, hdr_buf[index..][0..2], @intFromEnum(machine), endian);
+    mem.writeInt(u16, hdr_buf[index..][0..2], @backingInt(machine), endian);
     index += 2;
 
     // ELF Version, again
@@ -1611,7 +1588,7 @@ pub fn writeElfHeader(self: *Elf) !void {
         const entry_sym = obj.entrySymbol(self) orelse break :blk 0;
         break :blk @intCast(entry_sym.address(.{}, self));
     } else 0;
-    const phdr_table_offset = if (self.phdr_indexes.table.int()) |phndx| self.phdrs.items[phndx].p_offset else 0;
+    const phdr_table_offset = if (self.phdr_indexes.table.int()) |phndx| self.phdrs.items[phndx].offset else 0;
     switch (self.ptr_width) {
         .p32 => {
             mem.writeInt(u32, hdr_buf[index..][0..4], @intCast(e_entry), endian);
@@ -1652,8 +1629,8 @@ pub fn writeElfHeader(self: *Elf) !void {
     index += 2;
 
     const e_phentsize: u16 = switch (self.ptr_width) {
-        .p32 => @sizeOf(elf.Elf32_Phdr),
-        .p64 => @sizeOf(elf.Elf64_Phdr),
+        .p32 => @sizeOf(elf.Elf32.Phdr),
+        .p64 => @sizeOf(elf.Elf64.Phdr),
     };
     mem.writeInt(u16, hdr_buf[index..][0..2], e_phentsize, endian);
     index += 2;
@@ -1708,30 +1685,19 @@ pub fn updateContainerType(
     ty: InternPool.Index,
     success: bool,
 ) link.Error!void {
-    return self.zigObjectPtr().?.updateContainerType(pt, ty, success) catch |err| switch (err) {
-        error.OutOfMemory => |e| return e,
-    };
+    try self.zigObjectPtr().?.updateContainerType(pt, ty, success);
 }
 
 pub fn updateExports(
     self: *Elf,
     pt: Zcu.PerThread,
-    exported: Zcu.Exported,
     export_indices: []const Zcu.Export.Index,
 ) link.Error!void {
-    return self.zigObjectPtr().?.updateExports(self, pt, exported, export_indices);
+    return self.zigObjectPtr().?.updateExports(self, pt, export_indices);
 }
 
-pub fn updateLineNumber(self: *Elf, pt: Zcu.PerThread, ti_id: InternPool.TrackedInst.Index) link.Error!void {
-    return self.zigObjectPtr().?.updateLineNumber(pt, ti_id);
-}
-
-pub fn deleteExport(
-    self: *Elf,
-    exported: Zcu.Exported,
-    name: InternPool.NullTerminatedString,
-) void {
-    return self.zigObjectPtr().?.deleteExport(self, exported, name);
+pub fn updateLineNumber(self: *Elf, pt: Zcu.PerThread, inst: InternPool.TrackedInst.Index, line: u32) link.Error!void {
+    return self.zigObjectPtr().?.updateLineNumber(pt, inst, line);
 }
 
 fn checkDuplicates(self: *Elf) !void {
@@ -2121,26 +2087,26 @@ fn initSpecialPhdrs(self: *Elf) !void {
 
     if (self.section_indexes.interp != null and self.phdr_indexes.interp == .none) {
         self.phdr_indexes.interp = (try self.addPhdr(.{
-            .type = elf.PT_INTERP,
+            .type = @backingInt(elf.PT.INTERP),
             .flags = elf.PF_R,
             .@"align" = 1,
         })).toOptional();
     }
     if (self.section_indexes.dynamic != null and self.phdr_indexes.dynamic == .none) {
         self.phdr_indexes.dynamic = (try self.addPhdr(.{
-            .type = elf.PT_DYNAMIC,
+            .type = @backingInt(elf.PT.DYNAMIC),
             .flags = elf.PF_R | elf.PF_W,
         })).toOptional();
     }
     if (self.section_indexes.eh_frame_hdr != null and self.phdr_indexes.gnu_eh_frame == .none) {
         self.phdr_indexes.gnu_eh_frame = (try self.addPhdr(.{
-            .type = elf.PT_GNU_EH_FRAME,
+            .type = @backingInt(elf.PT.GNU_EH_FRAME),
             .flags = elf.PF_R,
         })).toOptional();
     }
     if (self.phdr_indexes.gnu_stack == .none) {
         self.phdr_indexes.gnu_stack = (try self.addPhdr(.{
-            .type = elf.PT_GNU_STACK,
+            .type = @backingInt(elf.PT.GNU_STACK),
             .flags = elf.PF_W | elf.PF_R,
             .memsz = self.base.stack_size,
             .@"align" = 1,
@@ -2152,7 +2118,7 @@ fn initSpecialPhdrs(self: *Elf) !void {
     } else false;
     if (has_tls and self.phdr_indexes.tls == .none) {
         self.phdr_indexes.tls = (try self.addPhdr(.{
-            .type = elf.PT_TLS,
+            .type = @backingInt(elf.PT.TLS),
             .flags = elf.PF_R,
             .@"align" = 1,
         })).toOptional();
@@ -2203,7 +2169,7 @@ fn sortInitFini(self: *Elf) !void {
             => is_init_fini = true,
             else => {
                 const name = self.getShString(shdr.sh_name);
-                is_ctor_dtor = mem.indexOf(u8, name, ".ctors") != null or mem.indexOf(u8, name, ".dtors") != null;
+                is_ctor_dtor = mem.find(u8, name, ".ctors") != null or mem.find(u8, name, ".dtors") != null;
             },
         }
         if (!is_init_fini and !is_ctor_dtor) continue;
@@ -2290,15 +2256,15 @@ fn setHashSections(self: *Elf) !void {
     }
 }
 
-fn phdrRank(phdr: elf.Elf64_Phdr) u8 {
-    return switch (phdr.p_type) {
-        elf.PT_NULL => 0,
-        elf.PT_PHDR => 1,
-        elf.PT_INTERP => 2,
-        elf.PT_LOAD => 3,
-        elf.PT_DYNAMIC, elf.PT_TLS => 4,
-        elf.PT_GNU_EH_FRAME => 5,
-        elf.PT_GNU_STACK => 6,
+fn phdrRank(phdr: elf.Elf64.Phdr) u8 {
+    return switch (phdr.type) {
+        .NULL => 0,
+        .PHDR => 1,
+        .INTERP => 2,
+        .LOAD => 3,
+        .DYNAMIC, .TLS => 4,
+        .GNU_EH_FRAME => 5,
+        .GNU_STACK => 6,
         else => 7,
     };
 }
@@ -2312,12 +2278,12 @@ fn sortPhdrs(
     const Entry = struct {
         phndx: u16,
 
-        pub fn lessThan(program_headers: []const elf.Elf64_Phdr, lhs: @This(), rhs: @This()) bool {
+        pub fn lessThan(program_headers: []const elf.Elf64.Phdr, lhs: @This(), rhs: @This()) bool {
             const lhs_phdr = program_headers[lhs.phndx];
             const rhs_phdr = program_headers[rhs.phndx];
             const lhs_rank = phdrRank(lhs_phdr);
             const rhs_rank = phdrRank(rhs_phdr);
-            if (lhs_rank == rhs_rank) return lhs_phdr.p_vaddr < rhs_phdr.p_vaddr;
+            if (lhs_rank == rhs_rank) return lhs_phdr.vaddr < rhs_phdr.vaddr;
             return lhs_rank < rhs_rank;
         }
     };
@@ -2329,7 +2295,7 @@ fn sortPhdrs(
     }
 
     // The `@as` here works around a bug in the C backend.
-    mem.sort(Entry, entries, @as([]const elf.Elf64_Phdr, phdrs.items), Entry.lessThan);
+    mem.sort(Entry, entries, @as([]const elf.Elf64.Phdr, phdrs.items), Entry.lessThan);
 
     const backlinks = try gpa.alloc(u16, entries.len);
     defer gpa.free(backlinks);
@@ -2344,13 +2310,13 @@ fn sortPhdrs(
 
     inline for (@typeInfo(ProgramHeaderIndexes).@"struct".field_names) |field_name| {
         if (@field(special_indexes, field_name).int()) |special_index| {
-            @field(special_indexes, field_name) = @enumFromInt(backlinks[special_index]);
+            @field(special_indexes, field_name) = @fromBackingInt(@intCast(backlinks[special_index]));
         }
     }
 
     for (section_indexes) |*opt_phndx| {
         if (opt_phndx.int()) |index| {
-            opt_phndx.* = @enumFromInt(backlinks[index]);
+            opt_phndx.* = @fromBackingInt(@intCast(backlinks[index]));
         }
     }
 }
@@ -2685,8 +2651,8 @@ fn addLoadPhdrs(self: *Elf) error{OutOfMemory}!void {
         if (shdr.sh_type == elf.SHT_NULL) continue;
         if (shdr.sh_flags & elf.SHF_ALLOC == 0) continue;
         const flags = shdrToPhdrFlags(shdr.sh_flags);
-        if (self.getPhdr(.{ .flags = flags, .type = elf.PT_LOAD }) == .none) {
-            _ = try self.addPhdr(.{ .flags = flags, .type = elf.PT_LOAD });
+        if (self.getPhdr(.{ .flags = flags, .type = @backingInt(elf.PT.LOAD) }) == .none) {
+            _ = try self.addPhdr(.{ .flags = flags, .type = @backingInt(elf.PT.LOAD) });
         }
     }
 }
@@ -2702,11 +2668,11 @@ fn allocatePhdrTable(self: *Elf) error{OutOfMemory}!void {
         .p64 => @sizeOf(elf.Elf64_Ehdr),
     };
     const phsize: u64 = switch (self.ptr_width) {
-        .p32 => @sizeOf(elf.Elf32_Phdr),
-        .p64 => @sizeOf(elf.Elf64_Phdr),
+        .p32 => @sizeOf(elf.Elf32.Phdr),
+        .p64 => @sizeOf(elf.Elf64.Phdr),
     };
     const needed_size = self.phdrs.items.len * phsize;
-    const available_space = self.allocatedSize(phdr_table.p_offset);
+    const available_space = self.allocatedSize(phdr_table.offset);
 
     if (needed_size > available_space) {
         // In this case, we have two options:
@@ -2719,10 +2685,10 @@ fn allocatePhdrTable(self: *Elf) error{OutOfMemory}!void {
         err.addNote("required 0x{x}, available 0x{x}", .{ needed_size, available_space });
     }
 
-    phdr_table_load.p_filesz = needed_size + ehsize;
-    phdr_table_load.p_memsz = needed_size + ehsize;
-    phdr_table.p_filesz = needed_size;
-    phdr_table.p_memsz = needed_size;
+    phdr_table_load.filesz = needed_size + ehsize;
+    phdr_table_load.memsz = needed_size + ehsize;
+    phdr_table.filesz = needed_size;
+    phdr_table.memsz = needed_size;
 }
 
 /// Allocates alloc sections and creates load segments for sections
@@ -2788,7 +2754,7 @@ pub fn allocateAllocSections(self: *Elf) !void {
     // of any section that is contained in a cover and use it to align
     // the start address of the segement (and first section).
     const phdr_table = &self.phdrs.items[self.phdr_indexes.table_load.int().?];
-    var addr = phdr_table.p_vaddr + phdr_table.p_memsz;
+    var addr = phdr_table.vaddr + phdr_table.memsz;
 
     for (covers) |cover| {
         if (cover.items.len == 0) continue;
@@ -2847,14 +2813,14 @@ pub fn allocateAllocSections(self: *Elf) !void {
         }
 
         const first = slice.items(.shdr)[cover.items[0]];
-        const phndx = self.getPhdr(.{ .type = elf.PT_LOAD, .flags = shdrToPhdrFlags(first.sh_flags) }).unwrap().?;
+        const phndx = self.getPhdr(.{ .type = @backingInt(elf.PT.LOAD), .flags = shdrToPhdrFlags(first.sh_flags) }).unwrap().?;
         const phdr = &self.phdrs.items[phndx.int()];
-        const allocated_size = self.allocatedSize(phdr.p_offset);
+        const allocated_size = self.allocatedSize(phdr.offset);
         if (filesz > allocated_size) {
-            const old_offset = phdr.p_offset;
-            phdr.p_offset = 0;
+            const old_offset = phdr.offset;
+            phdr.offset = 0;
             var new_offset = try self.findFreeSpace(filesz, @"align");
-            phdr.p_offset = new_offset;
+            phdr.offset = new_offset;
 
             log.debug("moving phdr({d}) from 0x{x} to 0x{x}", .{ phndx, old_offset, new_offset });
 
@@ -2884,11 +2850,11 @@ pub fn allocateAllocSections(self: *Elf) !void {
             }
         }
 
-        phdr.p_vaddr = first.sh_addr;
-        phdr.p_paddr = first.sh_addr;
-        phdr.p_memsz = memsz;
-        phdr.p_filesz = filesz;
-        phdr.p_align = @"align";
+        phdr.vaddr = first.sh_addr;
+        phdr.paddr = first.sh_addr;
+        phdr.memsz = memsz;
+        phdr.filesz = filesz;
+        phdr.@"align" = @"align";
 
         addr = mem.alignForward(u64, addr, self.page_size);
     }
@@ -2932,12 +2898,12 @@ fn allocateSpecialPhdrs(self: *Elf) void {
         if (pair[0].int()) |index| {
             const shdr = slice.items(.shdr)[pair[1].?];
             const phdr = &self.phdrs.items[index];
-            phdr.p_align = shdr.sh_addralign;
-            phdr.p_offset = shdr.sh_offset;
-            phdr.p_vaddr = shdr.sh_addr;
-            phdr.p_paddr = shdr.sh_addr;
-            phdr.p_filesz = shdr.sh_size;
-            phdr.p_memsz = shdr.sh_size;
+            phdr.@"align" = shdr.sh_addralign;
+            phdr.offset = shdr.sh_offset;
+            phdr.vaddr = shdr.sh_addr;
+            phdr.paddr = shdr.sh_addr;
+            phdr.filesz = shdr.sh_size;
+            phdr.memsz = shdr.sh_size;
         }
     }
 
@@ -2954,25 +2920,25 @@ fn allocateSpecialPhdrs(self: *Elf) void {
                 shndx += 1;
                 continue;
             }
-            phdr.p_offset = shdr.sh_offset;
-            phdr.p_vaddr = shdr.sh_addr;
-            phdr.p_paddr = shdr.sh_addr;
-            phdr.p_align = shdr.sh_addralign;
+            phdr.offset = shdr.sh_offset;
+            phdr.vaddr = shdr.sh_addr;
+            phdr.paddr = shdr.sh_addr;
+            phdr.@"align" = shdr.sh_addralign;
             shndx += 1;
-            phdr.p_align = @max(phdr.p_align, shdr.sh_addralign);
+            phdr.@"align" = @max(phdr.@"align", shdr.sh_addralign);
             if (shdr.sh_type != elf.SHT_NOBITS) {
-                phdr.p_filesz = shdr.sh_offset + shdr.sh_size - phdr.p_offset;
+                phdr.filesz = shdr.sh_offset + shdr.sh_size - phdr.offset;
             }
-            phdr.p_memsz = shdr.sh_addr + shdr.sh_size - phdr.p_vaddr;
+            phdr.memsz = shdr.sh_addr + shdr.sh_size - phdr.vaddr;
 
             while (shndx < shdrs.len) : (shndx += 1) {
                 const next = shdrs[shndx];
                 if (next.sh_flags & elf.SHF_TLS == 0) break;
-                phdr.p_align = @max(phdr.p_align, next.sh_addralign);
+                phdr.@"align" = @max(phdr.@"align", next.sh_addralign);
                 if (next.sh_type != elf.SHT_NOBITS) {
-                    phdr.p_filesz = next.sh_offset + next.sh_size - phdr.p_offset;
+                    phdr.filesz = next.sh_offset + next.sh_size - phdr.offset;
                 }
-                phdr.p_memsz = next.sh_addr + next.sh_size - phdr.p_vaddr;
+                phdr.memsz = next.sh_addr + next.sh_size - phdr.vaddr;
             }
         }
     }
@@ -3377,16 +3343,16 @@ pub fn archPtrWidthBytes(self: Elf) u8 {
     return @intCast(@divExact(self.getTarget().ptrBitWidth(), 8));
 }
 
-fn phdrTo32(phdr: elf.Elf64_Phdr) elf.Elf32_Phdr {
+fn phdrTo32(phdr: elf.Elf64.Phdr) elf.Elf32.Phdr {
     return .{
-        .p_type = phdr.p_type,
-        .p_flags = phdr.p_flags,
-        .p_offset = @as(u32, @intCast(phdr.p_offset)),
-        .p_vaddr = @as(u32, @intCast(phdr.p_vaddr)),
-        .p_paddr = @as(u32, @intCast(phdr.p_paddr)),
-        .p_filesz = @as(u32, @intCast(phdr.p_filesz)),
-        .p_memsz = @as(u32, @intCast(phdr.p_memsz)),
-        .p_align = @as(u32, @intCast(phdr.p_align)),
+        .type = phdr.type,
+        .flags = phdr.flags,
+        .offset = @intCast(phdr.offset),
+        .vaddr = @intCast(phdr.vaddr),
+        .paddr = @intCast(phdr.paddr),
+        .filesz = @intCast(phdr.filesz),
+        .memsz = @intCast(phdr.memsz),
+        .@"align" = @intCast(phdr.@"align"),
     };
 }
 
@@ -3427,8 +3393,8 @@ fn getPhdr(self: *Elf, opts: struct {
         if (self.phdr_indexes.table_load.int()) |index| {
             if (phndx == index) continue;
         }
-        if (phdr.p_type == opts.type and phdr.p_flags == opts.flags)
-            return @enumFromInt(phndx);
+        if (@backingInt(phdr.type) == opts.type and @backingInt(phdr.flags) == opts.flags)
+            return @fromBackingInt(@intCast(phndx));
     }
     return .none;
 }
@@ -3443,16 +3409,16 @@ fn addPhdr(self: *Elf, opts: struct {
     memsz: u64 = 0,
 }) error{OutOfMemory}!ProgramHeaderIndex {
     const gpa = self.base.comp.gpa;
-    const index: ProgramHeaderIndex = @enumFromInt(self.phdrs.items.len);
+    const index: ProgramHeaderIndex = @fromBackingInt(@intCast(self.phdrs.items.len));
     try self.phdrs.append(gpa, .{
-        .p_type = opts.type,
-        .p_flags = opts.flags,
-        .p_offset = opts.offset,
-        .p_vaddr = opts.addr,
-        .p_paddr = opts.addr,
-        .p_filesz = opts.filesz,
-        .p_memsz = opts.memsz,
-        .p_align = opts.@"align",
+        .type = @fromBackingInt(opts.type),
+        .flags = @fromBackingInt(opts.flags),
+        .offset = opts.offset,
+        .vaddr = opts.addr,
+        .paddr = opts.addr,
+        .filesz = opts.filesz,
+        .memsz = opts.memsz,
+        .@"align" = opts.@"align",
     });
     return index;
 }
@@ -3703,9 +3669,9 @@ pub fn tpAddress(self: *Elf) i64 {
     const index = self.phdr_indexes.tls.int() orelse return 0;
     const phdr = self.phdrs.items[index];
     const addr = switch (self.getTarget().cpu.arch) {
-        .x86_64 => mem.alignForward(u64, phdr.p_vaddr + phdr.p_memsz, phdr.p_align),
-        .aarch64, .aarch64_be => mem.alignBackward(u64, phdr.p_vaddr - 16, phdr.p_align),
-        .riscv64, .riscv64be => phdr.p_vaddr,
+        .x86_64 => mem.alignForward(u64, phdr.vaddr + phdr.memsz, phdr.@"align"),
+        .aarch64, .aarch64_be => mem.alignBackward(u64, phdr.vaddr - 16, phdr.@"align"),
+        .riscv64, .riscv64be => phdr.vaddr,
         else => |arch| std.debug.panic("TODO implement getTpAddress for {s}", .{@tagName(arch)}),
     };
     return @intCast(addr);
@@ -3714,13 +3680,13 @@ pub fn tpAddress(self: *Elf) i64 {
 pub fn dtpAddress(self: *Elf) i64 {
     const index = self.phdr_indexes.tls.int() orelse return 0;
     const phdr = self.phdrs.items[index];
-    return @intCast(phdr.p_vaddr);
+    return @intCast(phdr.vaddr);
 }
 
 pub fn tlsAddress(self: *Elf) i64 {
     const index = self.phdr_indexes.tls.int() orelse return 0;
     const phdr = self.phdrs.items[index];
-    return @intCast(phdr.p_vaddr);
+    return @intCast(phdr.vaddr);
 }
 
 pub fn getShString(self: Elf, off: u32) [:0]const u8 {
@@ -3732,7 +3698,7 @@ fn shString(
     off: u32,
 ) [:0]const u8 {
     const slice = shstrtab[off..];
-    return slice[0..mem.indexOfScalar(u8, slice, 0).? :0];
+    return slice[0..mem.findScalar(u8, slice, 0).? :0];
 }
 
 pub fn insertShString(self: *Elf, name: [:0]const u8) error{OutOfMemory}!u32 {
@@ -3916,10 +3882,10 @@ fn formatShdrFlags(sh_flags: u64, writer: *std.Io.Writer) std.Io.Writer.Error!vo
 
 const FormatPhdr = struct {
     elf_file: *Elf,
-    phdr: elf.Elf64_Phdr,
+    phdr: elf.Elf64.Phdr,
 };
 
-fn fmtPhdr(self: *Elf, phdr: elf.Elf64_Phdr) std.fmt.Alt(FormatPhdr, formatPhdr) {
+fn fmtPhdr(self: *Elf, phdr: elf.Elf64.Phdr) std.fmt.Alt(FormatPhdr, formatPhdr) {
     return .{ .data = .{
         .phdr = phdr,
         .elf_file = self,
@@ -3928,28 +3894,28 @@ fn fmtPhdr(self: *Elf, phdr: elf.Elf64_Phdr) std.fmt.Alt(FormatPhdr, formatPhdr)
 
 fn formatPhdr(ctx: FormatPhdr, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     const phdr = ctx.phdr;
-    const write = phdr.p_flags & elf.PF_W != 0;
-    const read = phdr.p_flags & elf.PF_R != 0;
-    const exec = phdr.p_flags & elf.PF_X != 0;
+    const write = phdr.flags.W;
+    const read = phdr.flags.R;
+    const exec = phdr.flags.X;
     var flags: [3]u8 = @splat('_');
     if (exec) flags[0] = 'X';
     if (write) flags[1] = 'W';
     if (read) flags[2] = 'R';
-    const p_type = switch (phdr.p_type) {
-        elf.PT_LOAD => "LOAD",
-        elf.PT_TLS => "TLS",
-        elf.PT_GNU_EH_FRAME => "GNU_EH_FRAME",
-        elf.PT_GNU_STACK => "GNU_STACK",
-        elf.PT_DYNAMIC => "DYNAMIC",
-        elf.PT_INTERP => "INTERP",
-        elf.PT_NULL => "NULL",
-        elf.PT_PHDR => "PHDR",
-        elf.PT_NOTE => "NOTE",
+    const p_type = switch (phdr.type) {
+        .LOAD => "LOAD",
+        .TLS => "TLS",
+        .GNU_EH_FRAME => "GNU_EH_FRAME",
+        .GNU_STACK => "GNU_STACK",
+        .DYNAMIC => "DYNAMIC",
+        .INTERP => "INTERP",
+        .NULL => "NULL",
+        .PHDR => "PHDR",
+        .NOTE => "NOTE",
         else => "UNKNOWN",
     };
     try writer.print("{s} : {s} : @{x} ({x}) : align({x}) : filesz({x}) : memsz({x})", .{
-        p_type,       flags,         phdr.p_offset, phdr.p_vaddr,
-        phdr.p_align, phdr.p_filesz, phdr.p_memsz,
+        p_type,        flags,       phdr.offset, phdr.vaddr,
+        phdr.@"align", phdr.filesz, phdr.memsz,
     });
 }
 
@@ -4183,7 +4149,7 @@ pub const Ref = struct {
 pub const SymbolResolver = struct {
     keys: std.ArrayList(Key) = .empty,
     values: std.ArrayList(Ref) = .empty,
-    table: std.AutoArrayHashMapUnmanaged(void, void) = .empty,
+    table: std.array_hash_map.Auto(void, void) = .empty,
 
     const Result = struct {
         found_existing: bool,
@@ -4375,7 +4341,7 @@ fn createThunks(elf_file: *Elf, atom_list: *AtomList) !void {
             for (atom_ptr.relocs(elf_file)) |rel| {
                 const is_reachable = switch (cpu_arch) {
                     .aarch64, .aarch64_be => r: {
-                        const r_type: elf.R_AARCH64 = @enumFromInt(rel.r_type());
+                        const r_type: elf.R_AARCH64 = @fromBackingInt(@intCast(rel.r_type()));
                         if (r_type != .CALL26 and r_type != .JUMP26) break :r true;
                         const target_ref = file_ptr.resolveSymbol(rel.r_sym(), elf_file);
                         const target = elf_file.symbol(target_ref).?;
@@ -4406,7 +4372,7 @@ fn createThunks(elf_file: *Elf, atom_list: *AtomList) !void {
 
 pub fn stringTableLookup(strtab: []const u8, off: u32) [:0]const u8 {
     const slice = strtab[off..];
-    return slice[0..mem.indexOfScalar(u8, slice, 0).? :0];
+    return slice[0..mem.findScalar(u8, slice, 0).? :0];
 }
 
 pub fn pwriteAll(elf_file: *Elf, bytes: []const u8, offset: u64) error{AlreadyReported}!void {
@@ -4449,10 +4415,9 @@ const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const Hash = std.hash.Wyhash;
 const Path = std.Build.Cache.Path;
-const Stat = std.Build.Cache.File.Stat;
+const Stat = std.Build.Cache.Manifest.Stat;
 
 const codegen = @import("../codegen.zig");
-const dev = @import("../dev.zig");
 const eh_frame = @import("Elf/eh_frame.zig");
 const gc = @import("Elf/gc.zig");
 const musl = @import("../libs/musl.zig");

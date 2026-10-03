@@ -34,19 +34,19 @@ pub fn fmtDebug(val: Value) std.fmt.Alt(Value, dump) {
     return .{ .data = val };
 }
 
-pub fn fmtValue(val: Value, pt: Zcu.PerThread) std.fmt.Alt(print_value.FormatContext, print_value.format) {
+pub fn fmtValue(val: Value, zcu: *Zcu) std.fmt.Alt(print_value.FormatContext, print_value.format) {
     return .{ .data = .{
         .val = val,
-        .pt = pt,
+        .zcu = zcu,
         .opt_sema = null,
         .depth = 3,
     } };
 }
 
-pub fn fmtValueSema(val: Value, pt: Zcu.PerThread, sema: *Sema) std.fmt.Alt(print_value.FormatContext, print_value.formatSema) {
+pub fn fmtValueSema(val: Value, sema: *Sema) std.fmt.Alt(print_value.FormatContext, print_value.formatSema) {
     return .{ .data = .{
         .val = val,
-        .pt = pt,
+        .zcu = sema.pt.zcu,
         .opt_sema = sema,
         .depth = 3,
     } };
@@ -146,8 +146,13 @@ pub fn toType(self: Value) Type {
     return Type.fromInterned(self.toIntern());
 }
 
-pub fn intFromEnum(val: Value, zcu: *const Zcu) Value {
-    return .fromInterned(zcu.intern_pool.indexToKey(val.toIntern()).enum_tag.int);
+/// Asserts that value is defined and of enum or bitpack type.
+pub fn backingInt(val: Value, zcu: *const Zcu) Value {
+    return switch (zcu.intern_pool.indexToKey(val.toIntern())) {
+        .enum_tag => |enum_tag| .fromInterned(enum_tag.int),
+        .bitpack => |bitpack| .fromInterned(bitpack.backing_int_val),
+        else => unreachable,
+    };
 }
 
 /// Asserts that `val` is an integer.
@@ -248,7 +253,6 @@ pub fn toBool(val: Value) bool {
 pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
     ReinterpretDeclRef,
     IllDefinedMemoryLayout,
-    Unimplemented,
     OutOfMemory,
 }!void {
     const target = zcu.getTarget();
@@ -257,35 +261,50 @@ pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
     const ty = val.typeOf(zcu);
     if (val.isUndef(zcu)) {
         const size: usize = @intCast(ty.abiSize(zcu));
-        @memset(buffer[0..size], 0xaa);
+        @memset(buffer[0..size], 0xAA);
         return;
     }
-    switch (ty.zigTypeTag(zcu)) {
+    tag: switch (ty.zigTypeTag(zcu)) {
+        .type => return error.IllDefinedMemoryLayout,
+        .comptime_float => return error.IllDefinedMemoryLayout,
+        .comptime_int => return error.IllDefinedMemoryLayout,
+        .undefined => return error.IllDefinedMemoryLayout,
+        .null => return error.IllDefinedMemoryLayout,
+        .error_union => return error.IllDefinedMemoryLayout,
+        .enum_literal => return error.IllDefinedMemoryLayout,
+        .@"fn" => return error.IllDefinedMemoryLayout,
+        .spirv => return error.IllDefinedMemoryLayout,
+        .@"opaque" => unreachable,
+        .frame => unreachable,
+        .@"anyframe" => unreachable,
+        .noreturn => unreachable,
         .void => {},
         .bool => {
             buffer[0] = @intFromBool(val.toBool());
         },
-        .int, .@"enum", .error_set, .pointer => |tag| {
-            const int_ty = if (tag == .pointer) int_ty: {
-                if (ty.isSlice(zcu)) return error.IllDefinedMemoryLayout;
-                if (ip.getBackingAddrTag(val.toIntern()).? != .int) return error.ReinterpretDeclRef;
-                break :int_ty Type.usize;
-            } else ty;
-            const int_info = int_ty.intInfo(zcu);
-            const bits = int_info.bits;
-            const byte_count: u16 = @intCast((@as(u17, bits) + 7) / 8);
-
+        .pointer => {
+            if (ty.isSlice(zcu)) return error.IllDefinedMemoryLayout;
+            if (ip.getBackingAddrTag(val.toIntern()).? != .int) return error.ReinterpretDeclRef;
+            continue :tag .int;
+        },
+        .int, .@"enum", .error_set => {
             var bigint_buffer: BigIntSpace = undefined;
             const bigint = val.toBigInt(&bigint_buffer, zcu);
-            bigint.writeTwosComplement(buffer[0..byte_count], endian);
+            bigint.writeTwosComplement(buffer[0..@intCast(ty.abiSize(zcu))], endian);
         },
-        .float => switch (ty.floatBits(target)) {
-            16 => std.mem.writeInt(u16, buffer[0..2], @bitCast(val.toFloat(f16, zcu)), endian),
-            32 => std.mem.writeInt(u32, buffer[0..4], @bitCast(val.toFloat(f32, zcu)), endian),
-            64 => std.mem.writeInt(u64, buffer[0..8], @bitCast(val.toFloat(f64, zcu)), endian),
-            80 => std.mem.writeInt(u80, buffer[0..10], @bitCast(val.toFloat(f80, zcu)), endian),
-            128 => std.mem.writeInt(u128, buffer[0..16], @bitCast(val.toFloat(f128, zcu)), endian),
-            else => unreachable,
+        .float => {
+            const float_bits = ty.floatBits(target);
+            switch (float_bits) {
+                16 => std.mem.writeInt(u16, buffer[0..2], @bitCast(val.toFloat(f16, zcu)), endian),
+                32 => std.mem.writeInt(u32, buffer[0..4], @bitCast(val.toFloat(f32, zcu)), endian),
+                64 => std.mem.writeInt(u64, buffer[0..8], @bitCast(val.toFloat(f64, zcu)), endian),
+                80 => std.mem.writeInt(u80, buffer[0..10], @bitCast(val.toFloat(f80, zcu)), endian),
+                128 => std.mem.writeInt(u128, buffer[0..16], @bitCast(val.toFloat(f128, zcu)), endian),
+                else => unreachable,
+            }
+            const float_bytes = @divExact(float_bits, 8);
+            const total_bytes: usize = @intCast(ty.abiSize(zcu));
+            @memset(buffer[float_bytes..total_bytes], 0); // padding
         },
         .array => {
             const aggregate = ip.indexToKey(val.toIntern()).aggregate;
@@ -302,28 +321,33 @@ pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
                 }
                 buf_off += elem_size;
             }
+            if (ty.sentinel(zcu)) |sentinel_val| {
+                try sentinel_val.writeToMemory(zcu, buffer[buf_off..]);
+            }
         },
-        .vector => {
-            // We use byte_count instead of abi_size here, so that any padding bytes
-            // follow the data bytes, on both big- and little-endian systems.
-            const byte_count = (@as(usize, @intCast(ty.bitSize(zcu))) + 7) / 8;
-            return writeToPackedMemory(val, zcu, buffer[0..byte_count], 0);
-        },
+        .vector => return error.IllDefinedMemoryLayout,
         .@"struct" => {
             const struct_type = zcu.typeToStruct(ty) orelse return error.IllDefinedMemoryLayout;
             switch (struct_type.layout) {
                 .auto => return error.IllDefinedMemoryLayout,
-                .@"extern" => for (0..struct_type.field_types.len) |field_index| {
-                    const off: usize = @intCast(ty.structFieldOffset(field_index, zcu));
-                    const field_val = Value.fromInterned(switch (ip.indexToKey(val.toIntern()).aggregate.storage) {
-                        .bytes => |bytes| {
-                            buffer[off] = bytes.at(field_index, ip);
-                            continue;
-                        },
-                        .elems => |elems| elems[field_index],
-                        .repeated_elem => |elem| elem,
-                    });
-                    try writeToMemory(field_val, zcu, buffer[off..]);
+                .@"extern" => {
+                    var last_off: usize = 0;
+                    for (struct_type.field_types.get(ip), 0..) |field_ty_ip, field_index| {
+                        const off: usize = @intCast(ty.structFieldOffset(field_index, zcu));
+                        @memset(buffer[last_off..off], 0xAA);
+                        const field_val = Value.fromInterned(switch (ip.indexToKey(val.toIntern()).aggregate.storage) {
+                            .bytes => |bytes| {
+                                buffer[off] = bytes.at(field_index, ip);
+                                continue;
+                            },
+                            .elems => |elems| elems[field_index],
+                            .repeated_elem => |elem| elem,
+                        });
+                        try writeToMemory(field_val, zcu, buffer[off..]);
+                        last_off = @intCast(off + Type.fromInterned(field_ty_ip).abiSize(zcu));
+                    }
+                    const struct_size: usize = @intCast(ty.abiSize(zcu));
+                    @memset(buffer[last_off..struct_size], 0xAA);
                 },
                 .@"packed" => {
                     const int_index = ip.indexToKey(val.toIntern()).bitpack.backing_int_val;
@@ -335,6 +359,9 @@ pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
             .auto => return error.IllDefinedMemoryLayout, // Sema is supposed to have emitted a compile error already
             .@"extern" => {
                 const payload_val = val.unionPayload(zcu);
+                const payload_size: usize = @intCast(payload_val.typeOf(zcu).abiSize(zcu));
+                const union_size: usize = @intCast(ty.abiSize(zcu));
+                @memset(buffer[payload_size..union_size], 0xAA);
                 return writeToMemory(payload_val, zcu, buffer);
             },
             .@"packed" => {
@@ -352,7 +379,6 @@ pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
                 @memset(buffer[0..@intCast(byte_count)], 0); // null pointer
             }
         },
-        else => return error.Unimplemented,
     }
 }
 
@@ -360,12 +386,15 @@ pub fn writeToMemory(val: Value, zcu: *const Zcu, buffer: []u8) error{
 ///
 /// Both the start and the end of the provided buffer must be tight, since
 /// big-endian packed memory layouts start at the end of the buffer.
+///
+/// Supports arrays and vectors, for which the value is written in logical bit
+/// order, i.e. with the first element at bit offset 0.
 pub fn writeToPackedMemory(
     val: Value,
     zcu: *const Zcu,
     buffer: []u8,
     bit_offset: usize,
-) error{ ReinterpretDeclRef, OutOfMemory }!void {
+) void {
     const ip = &zcu.intern_pool;
     const target = zcu.getTarget();
     const endian = target.cpu.arch.endian();
@@ -391,14 +420,8 @@ pub fn writeToPackedMemory(
             }
         },
         .@"enum" => {
-            const int_val = val.intFromEnum(zcu);
-            return int_val.writeToPackedMemory(zcu, buffer, bit_offset);
-        },
-        .pointer => {
-            assert(!ty.isSlice(zcu)); // No well defined layout.
-            if (ip.getBackingAddrTag(val.toIntern()).? != .int) return error.ReinterpretDeclRef;
-            const addr = val.toUnsignedInt(zcu);
-            std.mem.writeVarPackedInt(buffer, bit_offset, zcu.getTarget().ptrBitWidth(), addr, endian);
+            const int_val = val.backingInt(zcu);
+            int_val.writeToPackedMemory(zcu, buffer, bit_offset);
         },
         .int => {
             const bits = ty.intInfo(zcu).bits;
@@ -416,47 +439,46 @@ pub fn writeToPackedMemory(
             128 => std.mem.writePackedInt(u128, buffer, bit_offset, @bitCast(val.toFloat(f128, zcu)), endian),
             else => unreachable,
         },
-        .vector => {
-            const elem_ty = ty.childType(zcu);
-            const elem_bit_size: u16 = @intCast(elem_ty.bitSize(zcu));
-            const len: usize = @intCast(ty.arrayLen(zcu));
-
-            var bits: u16 = 0;
-            var elem_i: usize = 0;
-            const aggregate = ip.indexToKey(val.toIntern()).aggregate;
-            while (elem_i < len) : (elem_i += 1) {
-                // On big-endian systems, LLVM reverses the element order of vectors by default
-                const tgt_elem_i = if (endian == .big) len - elem_i - 1 else elem_i;
-                switch (aggregate.storage) {
-                    .bytes => |bytes| std.mem.writePackedInt(u8, buffer, bit_offset + bits, bytes.at(tgt_elem_i, ip), endian),
-                    .elems => |elems| try Value.fromInterned(elems[tgt_elem_i]).writeToPackedMemory(zcu, buffer, bit_offset + bits),
-                    .repeated_elem => |elem| try Value.fromInterned(elem).writeToPackedMemory(zcu, buffer, bit_offset + bits),
-                }
-                bits += elem_bit_size;
-            }
-        },
         .@"struct", .@"union" => {
             assert(ty.containerLayout(zcu) == .@"packed");
             const int_val: Value = .fromInterned(ip.indexToKey(val.toIntern()).bitpack.backing_int_val);
-            return int_val.writeToPackedMemory(zcu, buffer, bit_offset);
+            int_val.writeToPackedMemory(zcu, buffer, bit_offset);
         },
-        .optional => {
-            assert(ty.isPtrLikeOptional(zcu));
-            if (val.optionalValue(zcu)) |ptr_val| {
-                return ptr_val.writeToPackedMemory(zcu, buffer, bit_offset);
-            } else {
-                return Value.zero_usize.writeToPackedMemory(zcu, buffer, bit_offset);
+        .array, .vector => {
+            const elem_bits: usize = @intCast(ty.childType(zcu).bitSize(zcu));
+            const len: usize = @intCast(ty.arrayLen(zcu));
+            var elem_bit_off: usize = bit_offset;
+            switch (ip.indexToKey(val.toIntern()).aggregate.storage) {
+                .repeated_elem => |elem_val_ip| {
+                    const elem_val: Value = .fromInterned(elem_val_ip);
+                    for (0..len) |_| {
+                        elem_val.writeToPackedMemory(zcu, buffer, elem_bit_off);
+                        elem_bit_off += elem_bits;
+                    }
+                },
+                .elems => |elems| for (elems[0..len]) |elem_val_ip| {
+                    const elem_val: Value = .fromInterned(elem_val_ip);
+                    elem_val.writeToPackedMemory(zcu, buffer, elem_bit_off);
+                    elem_bit_off += elem_bits;
+                },
+                .bytes => |bytes| for (bytes.toSlice(len, ip)) |raw_byte| {
+                    std.mem.writeVarPackedInt(buffer, elem_bit_off, elem_bits, raw_byte, endian);
+                    elem_bit_off += elem_bits;
+                },
+            }
+            if (ty.sentinel(zcu)) |sentinel_val| {
+                sentinel_val.writeToPackedMemory(zcu, buffer, elem_bit_off);
             }
         },
-        else => @panic("TODO implement writeToPackedMemory for more types"),
+        else => unreachable,
     }
 }
 
-/// Load a Value from the contents of `buffer`, where `ty` is an unsigned integer type.
+/// Load a Value from the contents of `buffer`, where `ty` is any integer type.
 ///
 /// Asserts that buffer.len >= ty.abiSize(). The buffer is allowed to extend past
 /// the end of the value in memory.
-pub fn readUintFromMemory(
+pub fn readIntFromMemory(
     ty: Type,
     pt: Zcu.PerThread,
     buffer: []const u8,
@@ -465,23 +487,28 @@ pub fn readUintFromMemory(
     const zcu = pt.zcu;
     const endian = zcu.getTarget().cpu.arch.endian();
 
-    assert(ty.isUnsignedInt(zcu));
-    const bits = ty.intInfo(zcu).bits;
-    const byte_count: u16 = @intCast((@as(u17, bits) + 7) / 8);
+    const int = ty.intInfo(zcu);
+    const abi_size: usize = @intCast(ty.abiSize(zcu));
+    const exact_buf = buffer[0..abi_size];
 
-    assert(buffer.len >= byte_count);
-
-    if (bits <= 64) {
-        const val = std.mem.readVarInt(u64, buffer[0..byte_count], endian);
-        const result = (val << @as(u6, @intCast(64 - bits))) >> @as(u6, @intCast(64 - bits));
-        return pt.intValue(ty, result);
+    if (abi_size <= 8) {
+        const shift: u6 = @intCast(64 - int.bits);
+        switch (int.signedness) {
+            .unsigned => {
+                const x = std.mem.readVarInt(u64, exact_buf, endian);
+                return pt.intValue(ty, (x << shift) >> shift);
+            },
+            .signed => {
+                const x = std.mem.readVarInt(i64, exact_buf, endian);
+                return pt.intValue(ty, (x << shift) >> shift);
+            },
+        }
     } else {
-        const Limb = std.math.big.Limb;
-        const limb_count = (byte_count + @sizeOf(Limb) - 1) / @sizeOf(Limb);
-        const limbs_buffer = try arena.alloc(Limb, limb_count);
+        const limb_count = std.math.big.int.calcTwosCompLimbCount(int.bits);
+        const limbs_buffer = try arena.alloc(std.math.big.Limb, limb_count);
 
         var bigint: BigIntMutable = .init(limbs_buffer, 0);
-        bigint.readTwosComplement(buffer[0..byte_count], bits, endian, .unsigned);
+        bigint.readTwosComplement(exact_buf, int.bits, endian, int.signedness);
         return pt.intValue_big(ty, bigint.toConst());
     }
 }
@@ -490,17 +517,17 @@ pub fn readUintFromMemory(
 ///
 /// Both the start and the end of the provided buffer must be tight, since
 /// big-endian packed memory layouts start at the end of the buffer.
+///
+/// Supports arrays and vectors, for which the value is read in logical bit
+/// order, i.e. with the first element at bit offset 0.
 pub fn readFromPackedMemory(
     ty: Type,
     pt: Zcu.PerThread,
     buffer: []const u8,
     bit_offset: usize,
-    gpa: Allocator,
-) error{
-    IllDefinedMemoryLayout,
-    OutOfMemory,
-}!Value {
+) Allocator.Error!Value {
     const zcu = pt.zcu;
+    const gpa = zcu.comp.gpa;
     const target = zcu.getTarget();
     const endian = target.cpu.arch.endian();
     switch (ty.zigTypeTag(zcu)) {
@@ -542,8 +569,8 @@ pub fn readFromPackedMemory(
             return pt.intValue_big(ty, bigint.toConst());
         },
         .@"enum" => {
-            const int_ty = ty.intTagType(zcu);
-            const int_val = try Value.readFromPackedMemory(int_ty, pt, buffer, bit_offset, gpa);
+            const int_ty = ty.backingIntType(zcu);
+            const int_val: Value = try .readFromPackedMemory(int_ty, pt, buffer, bit_offset);
             return pt.getCoerced(int_val, ty);
         },
         .float => return Value.fromInterned(try pt.intern(.{ .float = .{
@@ -557,40 +584,25 @@ pub fn readFromPackedMemory(
                 else => unreachable,
             },
         } })),
-        .vector => {
-            const elem_ty = ty.childType(zcu);
-            const elems = try gpa.alloc(InternPool.Index, @intCast(ty.arrayLen(zcu)));
-            defer gpa.free(elems);
-
-            var bits: u16 = 0;
-            const elem_bit_size: u16 = @intCast(elem_ty.bitSize(zcu));
-            for (elems, 0..) |_, i| {
-                // On big-endian systems, LLVM reverses the element order of vectors by default
-                const tgt_elem_i = if (endian == .big) elems.len - i - 1 else i;
-                elems[tgt_elem_i] = (try readFromPackedMemory(elem_ty, pt, buffer, bit_offset + bits, gpa)).toIntern();
-                bits += elem_bit_size;
-            }
-            return pt.aggregateValue(ty, elems);
-        },
         .@"struct", .@"union" => {
             assert(ty.containerLayout(zcu) == .@"packed");
-            const int_val: Value = try .readFromPackedMemory(ty.bitpackBackingInt(zcu), pt, buffer, bit_offset, gpa);
+            const int_val: Value = try .readFromPackedMemory(ty.backingIntType(zcu), pt, buffer, bit_offset);
             return pt.bitpackValue(ty, int_val);
         },
-        .pointer => {
-            assert(!ty.isSlice(zcu)); // No well defined layout.
-            const addr = (try readFromPackedMemory(Type.usize, pt, buffer, bit_offset, gpa)).toUnsignedInt(zcu);
-            return pt.ptrIntValue(ty, addr);
+        .array, .vector => {
+            const elem_ty = ty.childType(zcu);
+            const elem_bits: usize = @intCast(elem_ty.bitSize(zcu));
+            const elems_buf = try gpa.alloc(InternPool.Index, @intCast(ty.arrayLen(zcu)));
+            defer gpa.free(elems_buf);
+            var elem_bit_off: usize = bit_offset;
+            for (elems_buf) |*elem| {
+                const elem_val = try readFromPackedMemory(elem_ty, pt, buffer, elem_bit_off);
+                elem.* = elem_val.toIntern();
+                elem_bit_off += elem_bits;
+            }
+            return pt.aggregateValue(ty, elems_buf);
         },
-        .optional => {
-            assert(ty.isPtrLikeOptional(zcu));
-            const addr = (try readFromPackedMemory(Type.usize, pt, buffer, bit_offset, gpa)).toUnsignedInt(zcu);
-            return .fromInterned(try pt.intern(.{ .opt = .{
-                .ty = ty.toIntern(),
-                .val = if (addr == 0) .none else (try pt.ptrIntValue(ty.childType(zcu), addr)).toIntern(),
-            } }));
-        },
-        else => @panic("TODO implement readFromPackedMemory for more types"),
+        else => unreachable,
     }
 }
 
@@ -599,12 +611,7 @@ pub fn toFloat(val: Value, comptime T: type, zcu: *const Zcu) T {
     return switch (zcu.intern_pool.indexToKey(val.toIntern())) {
         .int => |int| switch (int.storage) {
             .big_int => |big_int| big_int.toFloat(T, .nearest_even)[0],
-            inline .u64, .i64 => |x| {
-                if (T == f80) {
-                    @panic("TODO we can't lower this properly on non-x86 llvm backend yet");
-                }
-                return @floatFromInt(x);
-            },
+            inline .u64, .i64 => |x| @floatFromInt(x),
         },
         .float => |float| switch (float.storage) {
             inline else => |x| @floatCast(x),
@@ -887,14 +894,9 @@ pub fn fieldValue(val: Value, pt: Zcu.PerThread, index: usize) !Value {
             const bfa = bfa_state.allocator();
             const buf = try bfa.alloc(u8, @intCast((ty.bitSize(zcu) + 7) / 8));
             defer bfa.free(buf);
-            int_val.writeToPackedMemory(zcu, buf, 0) catch |err| switch (err) {
-                error.ReinterpretDeclRef => unreachable, // it's an integer
-                error.OutOfMemory => |e| return e,
-            };
-            return Value.readFromPackedMemory(field_ty, pt, buf, field_bit_offset, bfa) catch |err| switch (err) {
-                error.IllDefinedMemoryLayout => unreachable, // it's a bitpack
-                error.OutOfMemory => |e| return e,
-            };
+            @memset(buf, 0);
+            int_val.writeToPackedMemory(zcu, buf, 0);
+            return .readFromPackedMemory(field_ty, pt, buf, field_bit_offset);
         },
         else => unreachable,
     };
@@ -952,7 +954,7 @@ pub fn anyScalarIsZero(val: Value, zcu: *Zcu) bool {
                 .bytes => |str| {
                     const len = Type.fromInterned(agg.ty).vectorLen(zcu);
                     const slice = str.toSlice(len, &zcu.intern_pool);
-                    return std.mem.indexOfScalar(u8, slice, 0) != null;
+                    return std.mem.findScalar(u8, slice, 0) != null;
                 },
                 .elems => |elems| {
                     for (elems) |elem| {
@@ -1046,6 +1048,11 @@ fn calcLimbLenFloat(scalar: anytype) usize {
 
 pub const OverflowArithmeticResult = struct {
     overflow_bit: Value,
+    wrapped_result: Value,
+};
+
+pub const OverflowArithmeticResultInt = struct {
+    overflow: bool,
     wrapped_result: Value,
 };
 
@@ -1619,7 +1626,6 @@ pub fn hasRepeatedByteRepr(val: Value, zcu: *const Zcu) !?u8 {
         // code late in compilation. So, this error handling is too aggressive and
         // causes some false negatives, causing less-than-ideal code generation.
         error.IllDefinedMemoryLayout => return null,
-        error.Unimplemented => return null,
     };
     const first_byte = byte_buffer[0];
     for (byte_buffer[1..]) |byte| {
@@ -1884,192 +1890,284 @@ pub fn getOffsetPtr(ptr_val: Value, byte_off: u64, new_ty: Type, pt: Zcu.PerThre
     return Value.fromInterned(try pt.intern(.{ .ptr = ptr }));
 }
 
-pub const PointerDeriveStep = union(enum) {
-    int: struct {
-        addr: u64,
-        ptr_ty: Type,
-    },
-    nav_ptr: InternPool.Nav.Index,
-    uav_ptr: InternPool.Key.Ptr.BaseAddr.Uav,
-    comptime_alloc_ptr: struct {
-        idx: InternPool.ComptimeAllocIndex,
-        val: Value,
-        ptr_ty: Type,
-    },
-    comptime_field_ptr: Value,
-    eu_payload_ptr: struct {
-        parent: *PointerDeriveStep,
-        /// This type will never be cast: it is provided for convenience.
-        result_ptr_ty: Type,
-    },
-    opt_payload_ptr: struct {
-        parent: *PointerDeriveStep,
-        /// This type will never be cast: it is provided for convenience.
-        result_ptr_ty: Type,
-    },
-    field_ptr: struct {
-        parent: *PointerDeriveStep,
-        field_idx: u32,
-        /// This type will never be cast: it is provided for convenience.
-        result_ptr_ty: Type,
-    },
-    elem_ptr: struct {
-        parent: *PointerDeriveStep,
-        elem_idx: u64,
-        /// This type will never be cast: it is provided for convenience.
-        result_ptr_ty: Type,
-    },
-    offset_and_cast: struct {
-        parent: *PointerDeriveStep,
-        byte_offset: u64,
-        new_ptr_ty: Type,
+pub const PointerDerivation = struct {
+    elem_ty: Type,
+    /// TODO: investigate eliminating this field. We should *always* know the lengths of arrays
+    /// which are pointed to, so `.one` should be the only possible case!
+    size: Size,
+    @"align": InternPool.Alignment,
+    @"const": bool,
+    @"volatile": bool,
+    @"allowzero": bool,
+
+    addr: union(enum) {
+        int: u64,
+        nav: InternPool.Nav.Index,
+        uav: Value,
+        comptime_field: Value,
+        comptime_alloc: struct {
+            idx: InternPool.ComptimeAllocIndex,
+            val: Value,
+        },
+        eu_payload: struct { parent: *PointerDerivation },
+        opt_payload: struct { parent: *PointerDerivation },
+        field: struct {
+            parent: *PointerDerivation,
+            field_index: u32,
+        },
+        elem: struct {
+            parent: *PointerDerivation,
+            elem_index: u64,
+        },
+        offset_and_cast: struct {
+            parent: *PointerDerivation,
+            byte_offset: u64,
+        },
     },
 
-    pub fn ptrType(step: PointerDeriveStep, pt: Zcu.PerThread) !Type {
-        return switch (step) {
-            .int => |int| int.ptr_ty,
-            .nav_ptr => |nav| try pt.navPtrType(nav),
-            .uav_ptr => |uav| Type.fromInterned(uav.orig_ty),
-            .comptime_alloc_ptr => |info| info.ptr_ty,
-            .comptime_field_ptr => |val| try pt.singleConstPtrType(val.typeOf(pt.zcu)),
-            .offset_and_cast => |oac| oac.new_ptr_ty,
-            inline .eu_payload_ptr, .opt_payload_ptr, .field_ptr, .elem_ptr => |x| x.result_ptr_ty,
-        };
+    pub const Size = enum { one, many };
+
+    pub fn fmtType(pd: PointerDerivation, zcu: *Zcu) FormatType {
+        return .{ .pd = pd, .zcu = zcu };
     }
+    pub const FormatType = struct {
+        pd: PointerDerivation,
+        zcu: *Zcu,
+        pub fn format(ctx: FormatType, w: *Io.Writer) Io.Writer.Error!void {
+            const pd = ctx.pd;
+            switch (pd.size) {
+                .one => try w.writeByte('*'),
+                .many => try w.writeAll("[*]"),
+            }
+            if (pd.@"align".toByteUnits()) |align_bytes| {
+                try w.print("align({d}) ", .{align_bytes});
+            }
+            if (pd.@"const") try w.writeAll("const ");
+            if (pd.@"volatile") try w.writeAll("volatile ");
+            if (pd.@"allowzero") try w.writeAll("allowzero ");
+            try pd.elem_ty.print(w, ctx.zcu, null);
+        }
+    };
 };
 
 /// Given a pointer value, get the sequence of steps to derive it, ideally by taking
 /// only field and element pointers with no casts. This can be used by codegen backends
 /// which prefer field/elem accesses when lowering constant pointer values.
 /// It is also used by the Value printing logic for pointers.
-pub fn pointerDerivation(ptr_val: Value, arena: Allocator, pt: Zcu.PerThread, opt_sema: ?*Sema) Allocator.Error!PointerDeriveStep {
-    const zcu = pt.zcu;
+pub fn pointerDerivation(ptr_val: Value, arena: Allocator, zcu: *Zcu, opt_sema: ?*Sema) Allocator.Error!PointerDerivation {
     const ptr = zcu.intern_pool.indexToKey(ptr_val.toIntern()).ptr;
-    const base_derive: PointerDeriveStep = switch (ptr.base_addr) {
-        .int => return .{ .int = .{
-            .addr = ptr.byte_offset,
-            .ptr_ty = Type.fromInterned(ptr.ty),
-        } },
-        .nav => |nav| .{ .nav_ptr = nav },
+    const ptr_ty_info: InternPool.Key.PtrType = info: {
+        var info = Type.fromInterned(ptr.ty).ptrInfo(zcu);
+        if (info.packed_offset.host_size != 0) {
+            // TODO: this function *should* handle packed pointers by returning the derivation of
+            // the backing int pointer. However, until https://github.com/ziglang/zig/issues/24061
+            // is implemented, we don't have access to the backing type. For now, fudge things a
+            // little by pretending that this is a pointer to anyopaque. What could go wrong?
+            info.child = .anyopaque_type;
+        }
+        break :info info;
+    };
+    const ptr_size: PointerDerivation.Size = switch (ptr_ty_info.flags.size) {
+        .one => .one,
+        .many, .c => .many,
+        .slice => unreachable,
+    };
+    const base_derive: PointerDerivation = switch (ptr.base_addr) {
+        .int => return .{
+            .elem_ty = .fromInterned(ptr_ty_info.child),
+            .size = ptr_size,
+            .@"align" = ptr_ty_info.flags.alignment,
+            .@"const" = ptr_ty_info.flags.is_const,
+            .@"volatile" = ptr_ty_info.flags.is_volatile,
+            .@"allowzero" = ptr_ty_info.flags.is_allowzero,
+            .addr = .{ .int = ptr.byte_offset },
+        },
+        .nav => |nav| base: {
+            const resolved = zcu.intern_pool.getNav(nav).resolved.?;
+            break :base .{
+                .elem_ty = .fromInterned(resolved.type),
+                .size = .one,
+                .@"align" = resolved.@"align",
+                .@"const" = resolved.@"const",
+                .@"volatile" = false,
+                .@"allowzero" = false,
+                .addr = .{ .nav = nav },
+            };
+        },
         .uav => |uav| base: {
-            // A slight tweak: `orig_ty` here is sometimes not `const`, but it ought to be.
-            // TODO: fix this in the sites interning anon decls!
-            const const_ty = try pt.ptrType(info: {
-                var info = Type.fromInterned(uav.orig_ty).ptrInfo(zcu);
-                info.flags.is_const = true;
-                break :info info;
-            });
-            break :base .{ .uav_ptr = .{
-                .val = uav.val,
-                .orig_ty = const_ty.toIntern(),
-            } };
+            const orig_ty_info = Type.fromInterned(uav.orig_ty).ptrInfo(zcu);
+            break :base .{
+                .elem_ty = .fromInterned(orig_ty_info.child),
+                .size = .one,
+                .@"align" = orig_ty_info.flags.alignment,
+                // A slight tweak: `orig_ty` here is sometimes not `const`, but it ought to be.
+                // TODO: fix this in the sites interning anon decls!
+                .@"const" = true,
+                .@"volatile" = orig_ty_info.flags.is_volatile,
+                .@"allowzero" = orig_ty_info.flags.is_allowzero,
+
+                .addr = .{ .uav = .fromInterned(uav.val) },
+            };
         },
         .comptime_alloc => |idx| base: {
             const sema = opt_sema.?;
             const alloc = sema.getComptimeAlloc(idx);
-            const val = try alloc.val.intern(pt, arena);
-            const ty = val.typeOf(zcu);
-            break :base .{ .comptime_alloc_ptr = .{
-                .idx = idx,
-                .val = val,
-                .ptr_ty = try pt.ptrType(.{
-                    .child = ty.toIntern(),
-                    .flags = .{
-                        .alignment = alloc.alignment,
-                    },
-                }),
-            } };
+            const val = try alloc.val.intern(sema.pt, arena);
+            break :base .{
+                .elem_ty = val.typeOf(zcu),
+                .size = .one,
+                .@"align" = alloc.alignment,
+                .@"const" = alloc.is_const,
+                .@"volatile" = false,
+                .@"allowzero" = false,
+                .addr = .{ .comptime_alloc = .{
+                    .idx = idx,
+                    .val = val,
+                } },
+            };
         },
-        .comptime_field => |val| .{ .comptime_field_ptr = Value.fromInterned(val) },
+        .comptime_field => |val| .{
+            .elem_ty = Value.fromInterned(val).typeOf(zcu),
+            .size = .one,
+            .@"align" = .none,
+            .@"const" = true,
+            .@"volatile" = false,
+            .@"allowzero" = false,
+            .addr = .{ .comptime_field = .fromInterned(val) },
+        },
         .eu_payload => |eu_ptr| base: {
-            const base_ptr = Value.fromInterned(eu_ptr);
-            const base_ptr_ty = base_ptr.typeOf(zcu);
-            const parent_step = try arena.create(PointerDeriveStep);
-            parent_step.* = try pointerDerivation(.fromInterned(eu_ptr), arena, pt, opt_sema);
-            break :base .{ .eu_payload_ptr = .{
-                .parent = parent_step,
-                .result_ptr_ty = try pt.adjustPtrTypeChild(base_ptr_ty, base_ptr_ty.childType(zcu).errorUnionPayload(zcu)),
-            } };
+            const parent_step = try arena.create(PointerDerivation);
+            parent_step.* = try pointerDerivation(.fromInterned(eu_ptr), arena, zcu, opt_sema);
+            break :base .{
+                .elem_ty = parent_step.elem_ty.errorUnionPayload(zcu),
+                .size = .one,
+                .@"align" = parent_step.@"align",
+                .@"const" = parent_step.@"const",
+                .@"volatile" = parent_step.@"volatile",
+                .@"allowzero" = parent_step.@"allowzero",
+                .addr = .{ .eu_payload = .{
+                    .parent = parent_step,
+                } },
+            };
         },
         .opt_payload => |opt_ptr| base: {
-            const base_ptr = Value.fromInterned(opt_ptr);
-            const base_ptr_ty = base_ptr.typeOf(zcu);
-            const parent_step = try arena.create(PointerDeriveStep);
-            parent_step.* = try pointerDerivation(.fromInterned(opt_ptr), arena, pt, opt_sema);
-            break :base .{ .opt_payload_ptr = .{
-                .parent = parent_step,
-                .result_ptr_ty = try pt.adjustPtrTypeChild(base_ptr_ty, base_ptr_ty.childType(zcu).optionalChild(zcu)),
-            } };
+            const parent_step = try arena.create(PointerDerivation);
+            parent_step.* = try pointerDerivation(.fromInterned(opt_ptr), arena, zcu, opt_sema);
+            break :base .{
+                .elem_ty = parent_step.elem_ty.optionalChild(zcu),
+                .size = .one,
+                .@"align" = parent_step.@"align",
+                .@"const" = parent_step.@"const",
+                .@"volatile" = parent_step.@"volatile",
+                .@"allowzero" = parent_step.@"allowzero",
+                .addr = .{ .opt_payload = .{
+                    .parent = parent_step,
+                } },
+            };
         },
         .field => |field| base: {
-            const base_ptr = Value.fromInterned(field.base);
-            const base_ptr_ty = try pt.ptrType(info: {
-                var info = base_ptr.typeOf(zcu).ptrInfo(zcu);
-                info.flags.size = .one;
-                break :info info;
-            });
-            const parent_step = try arena.create(PointerDeriveStep);
-            parent_step.* = try pointerDerivation(base_ptr, arena, pt, opt_sema);
-            break :base .{ .field_ptr = .{
-                .parent = parent_step,
-                .field_idx = @intCast(field.index),
-                .result_ptr_ty = try base_ptr_ty.fieldPtrType(@intCast(field.index), pt),
-            } };
+            const parent_step = try arena.create(PointerDerivation);
+            parent_step.* = try pointerDerivation(.fromInterned(field.base), arena, zcu, opt_sema);
+            break :base .{
+                .elem_ty = if (parent_step.elem_ty.isSlice(zcu)) switch (field.index) {
+                    Value.slice_ptr_index => parent_step.elem_ty.slicePtrFieldType(zcu),
+                    Value.slice_len_index => .usize,
+                    else => unreachable,
+                } else parent_step.elem_ty.fieldType(@intCast(field.index), zcu),
+                .size = .one,
+                .@"align" = parent_step.elem_ty.fieldPtrAlign(parent_step.@"align", @intCast(field.index), zcu),
+                .@"const" = parent_step.@"const",
+                .@"volatile" = parent_step.@"volatile",
+                .@"allowzero" = parent_step.@"allowzero",
+                .addr = .{ .field = .{
+                    .parent = parent_step,
+                    .field_index = @intCast(field.index),
+                } },
+            };
         },
         .arr_elem => |arr_elem| base: {
-            const parent_step = try arena.create(PointerDeriveStep);
-            parent_step.* = try pointerDerivation(.fromInterned(arr_elem.base), arena, pt, opt_sema);
-            const parent_ptr_info = (try parent_step.ptrType(pt)).ptrInfo(zcu);
-            const result_ptr_ty = try pt.ptrType(.{
-                .child = parent_ptr_info.child,
-                .flags = flags: {
-                    var flags = parent_ptr_info.flags;
-                    flags.size = .one;
-                    if (flags.alignment != .none) flags.alignment = .minStrict(
-                        flags.alignment,
-                        Type.fromInterned(parent_ptr_info.child).abiAlignment(zcu),
-                    );
-                    break :flags flags;
+            const parent_step = try arena.create(PointerDerivation);
+            parent_step.* = try pointerDerivation(.fromInterned(arr_elem.base), arena, zcu, opt_sema);
+            break :base .{
+                .elem_ty = parent_step.elem_ty,
+                .size = .many,
+                .@"align" = switch (parent_step.@"align") {
+                    .none => .none,
+                    else => |a| a.minStrict(parent_step.elem_ty.abiAlignment(zcu)),
                 },
-            });
-            break :base .{ .elem_ptr = .{
-                .parent = parent_step,
-                .elem_idx = arr_elem.index,
-                .result_ptr_ty = result_ptr_ty,
-            } };
+                .@"const" = parent_step.@"const",
+                .@"volatile" = parent_step.@"volatile",
+                .@"allowzero" = parent_step.@"allowzero",
+                .addr = .{ .elem = .{
+                    .parent = parent_step,
+                    .elem_index = arr_elem.index,
+                } },
+            };
         },
     };
 
-    if (ptr.byte_offset == 0 and ptr.ty == (try base_derive.ptrType(pt)).toIntern()) {
+    if (ptr.byte_offset == 0 and
+        ptr_ty_info.child == base_derive.elem_ty.toIntern() and
+        ptr_size == base_derive.size and
+        ptr_ty_info.flags.alignment == base_derive.@"align" and
+        ptr_ty_info.flags.is_const == base_derive.@"const" and
+        ptr_ty_info.flags.is_volatile == base_derive.@"volatile" and
+        ptr_ty_info.flags.is_allowzero == base_derive.@"allowzero")
+    {
         return base_derive;
     }
 
-    const ptr_ty_info = Type.fromInterned(ptr.ty).ptrInfo(zcu);
     const need_child: Type = .fromInterned(ptr_ty_info.child);
-    if (need_child.comptimeOnly(zcu) or need_child.zigTypeTag(zcu) == .@"opaque") {
+    if (need_child.comptimeOnly(zcu) or
+        need_child.zigTypeTag(zcu) == .@"opaque" or
+        need_child.isSpirvRuntimeArray(zcu))
+    {
         // No refinement can happen - this pointer is presumably invalid.
         // Just offset it.
-        const parent = try arena.create(PointerDeriveStep);
+        const parent = try arena.create(PointerDerivation);
         parent.* = base_derive;
-        return .{ .offset_and_cast = .{
-            .parent = parent,
-            .byte_offset = ptr.byte_offset,
-            .new_ptr_ty = Type.fromInterned(ptr.ty),
-        } };
+        return .{
+            .elem_ty = .fromInterned(ptr_ty_info.child),
+            .size = ptr_size,
+            .@"align" = ptr_ty_info.flags.alignment,
+            .@"const" = ptr_ty_info.flags.is_const,
+            .@"volatile" = ptr_ty_info.flags.is_volatile,
+            .@"allowzero" = ptr_ty_info.flags.is_allowzero,
+            .addr = .{ .offset_and_cast = .{
+                .parent = parent,
+                .byte_offset = ptr.byte_offset,
+            } },
+        };
     }
     const need_bytes = need_child.abiSize(zcu);
 
     var cur_derive = base_derive;
     var cur_offset = ptr.byte_offset;
 
+    if (cur_derive.size == .many) {
+        const parent = try arena.create(PointerDerivation);
+        parent.* = cur_derive;
+        cur_derive = .{
+            .elem_ty = parent.elem_ty,
+            .size = .one,
+            .@"align" = parent.@"align",
+            .@"const" = parent.@"const",
+            .@"volatile" = parent.@"volatile",
+            .@"allowzero" = parent.@"allowzero",
+            .addr = .{ .elem = .{
+                .parent = parent,
+                .elem_index = 0,
+            } },
+        };
+    }
+
     // Refine through fields and array elements as much as possible.
 
     if (need_bytes > 0) while (true) {
-        const cur_ty = (try cur_derive.ptrType(pt)).childType(zcu);
-        if (cur_ty.toIntern() == need_child.toIntern() and cur_offset == 0) {
+        if (cur_derive.elem_ty.toIntern() == need_child.toIntern() and cur_offset == 0) {
             break;
         }
-        switch (cur_ty.zigTypeTag(zcu)) {
+        switch (cur_derive.elem_ty.zigTypeTag(zcu)) {
             .noreturn,
             .type,
             .comptime_int,
@@ -2078,6 +2176,7 @@ pub fn pointerDerivation(ptr_val: Value, arena: Allocator, pt: Zcu.PerThread, op
             .undefined,
             .enum_literal,
             .@"opaque",
+            .spirv,
             .@"fn",
             .error_union,
             .int,
@@ -2095,71 +2194,105 @@ pub fn pointerDerivation(ptr_val: Value, arena: Allocator, pt: Zcu.PerThread, op
 
             .optional => {
                 ptr_opt: {
-                    if (!cur_ty.isPtrLikeOptional(zcu)) break :ptr_opt;
+                    if (!cur_derive.elem_ty.isPtrLikeOptional(zcu)) break :ptr_opt;
                     if (need_child.zigTypeTag(zcu) != .pointer) break :ptr_opt;
                     switch (need_child.ptrSize(zcu)) {
                         .one, .many => {},
                         .slice, .c => break :ptr_opt,
                     }
-                    const parent = try arena.create(PointerDeriveStep);
+                    const parent = try arena.create(PointerDerivation);
                     parent.* = cur_derive;
-                    cur_derive = .{ .opt_payload_ptr = .{
-                        .parent = parent,
-                        .result_ptr_ty = try pt.adjustPtrTypeChild(try parent.ptrType(pt), cur_ty.optionalChild(zcu)),
-                    } };
+                    cur_derive = .{
+                        .elem_ty = parent.elem_ty.optionalChild(zcu),
+                        .size = .one,
+                        .@"align" = parent.@"align",
+                        .@"const" = parent.@"const",
+                        .@"volatile" = parent.@"volatile",
+                        .@"allowzero" = parent.@"allowzero",
+                        .addr = .{ .opt_payload = .{
+                            .parent = parent,
+                        } },
+                    };
                     continue;
                 }
                 break;
             },
 
             .array => {
-                const elem_ty = cur_ty.childType(zcu);
+                const elem_ty = cur_derive.elem_ty.childType(zcu);
                 const elem_size = elem_ty.abiSize(zcu);
                 const start_idx = cur_offset / elem_size;
                 const end_idx = (cur_offset + need_bytes + elem_size - 1) / elem_size;
+                const start_off = start_idx * elem_size;
                 if (end_idx == start_idx + 1 and ptr_ty_info.flags.size == .one) {
-                    const parent = try arena.create(PointerDeriveStep);
+                    const parent = try arena.create(PointerDerivation);
                     parent.* = cur_derive;
-                    cur_derive = .{ .elem_ptr = .{
-                        .parent = parent,
-                        .elem_idx = start_idx,
-                        .result_ptr_ty = try pt.adjustPtrTypeChild(try parent.ptrType(pt), elem_ty),
-                    } };
-                    cur_offset -= start_idx * elem_size;
-                } else {
-                    // Go into the first element if needed, but don't go any deeper.
-                    if (start_idx > 0) {
-                        const parent = try arena.create(PointerDeriveStep);
-                        parent.* = cur_derive;
-                        cur_derive = .{ .elem_ptr = .{
+                    cur_derive = .{
+                        .elem_ty = elem_ty,
+                        .size = .one,
+                        .@"align" = switch (parent.@"align") {
+                            .none => .none,
+                            else => |a| a.offset(start_off),
+                        },
+                        .@"const" = parent.@"const",
+                        .@"volatile" = parent.@"volatile",
+                        .@"allowzero" = parent.@"allowzero",
+                        .addr = .{ .elem = .{
                             .parent = parent,
-                            .elem_idx = start_idx,
-                            .result_ptr_ty = try pt.adjustPtrTypeChild(try parent.ptrType(pt), elem_ty),
-                        } };
-                        cur_offset -= start_idx * elem_size;
+                            .elem_index = start_idx,
+                        } },
+                    };
+                    cur_offset -= start_off;
+                } else {
+                    // Go into the first element if the byte offsets line up neatly, but don't try
+                    // to go any deeper.
+                    if (start_idx > 0 and start_idx * elem_size == cur_offset) {
+                        const parent = try arena.create(PointerDerivation);
+                        parent.* = cur_derive;
+                        cur_derive = .{
+                            .elem_ty = elem_ty,
+                            .size = .one,
+                            .@"align" = switch (parent.@"align") {
+                                .none => .none,
+                                else => |a| a.offset(start_off),
+                            },
+                            .@"const" = parent.@"const",
+                            .@"volatile" = parent.@"volatile",
+                            .@"allowzero" = parent.@"allowzero",
+                            .addr = .{ .elem = .{
+                                .parent = parent,
+                                .elem_index = start_idx,
+                            } },
+                        };
+                        cur_offset -= start_off;
                     }
                     break;
                 }
             },
-            .@"struct" => switch (cur_ty.containerLayout(zcu)) {
+            .@"struct" => switch (cur_derive.elem_ty.containerLayout(zcu)) {
                 .auto, .@"packed" => break,
-                .@"extern" => for (0..cur_ty.structFieldCount(zcu)) |field_idx| {
-                    const field_ty = cur_ty.fieldType(field_idx, zcu);
-                    const start_off = cur_ty.structFieldOffset(field_idx, zcu);
+                .@"extern" => for (0..cur_derive.elem_ty.structFieldCount(zcu)) |field_idx| {
+                    const field_ty = cur_derive.elem_ty.fieldType(field_idx, zcu);
+                    const start_off = cur_derive.elem_ty.structFieldOffset(field_idx, zcu);
                     const end_off = start_off + field_ty.abiSize(zcu);
                     if (cur_offset >= start_off and cur_offset + need_bytes <= end_off) {
-                        const base_ptr_ty = try pt.ptrType(info: {
-                            var info = (try cur_derive.ptrType(pt)).ptrInfo(zcu);
-                            info.flags.size = .one;
-                            break :info info;
-                        });
-                        const parent = try arena.create(PointerDeriveStep);
+                        const parent = try arena.create(PointerDerivation);
                         parent.* = cur_derive;
-                        cur_derive = .{ .field_ptr = .{
-                            .parent = parent,
-                            .field_idx = @intCast(field_idx),
-                            .result_ptr_ty = try base_ptr_ty.fieldPtrType(@intCast(field_idx), pt),
-                        } };
+                        cur_derive = .{
+                            .elem_ty = field_ty,
+                            .size = .one,
+                            .@"align" = switch (parent.@"align") {
+                                .none => .none,
+                                else => |a| a.offset(start_off),
+                            },
+                            .@"const" = parent.@"const",
+                            .@"volatile" = parent.@"volatile",
+                            .@"allowzero" = parent.@"allowzero",
+                            .addr = .{ .field = .{
+                                .parent = parent,
+                                .field_index = @intCast(field_idx),
+                            } },
+                        };
                         cur_offset -= start_off;
                         break;
                     }
@@ -2169,31 +2302,33 @@ pub fn pointerDerivation(ptr_val: Value, arena: Allocator, pt: Zcu.PerThread, op
     };
 
     if (cur_offset == 0) compatible: {
-        const src_ptr_ty_info = (try cur_derive.ptrType(pt)).ptrInfo(zcu);
         // We allow silently doing some "coercible" pointer things.
         // In particular, we only give up if cv qualifiers are *removed*.
-        if (src_ptr_ty_info.flags.is_const and !ptr_ty_info.flags.is_const) break :compatible;
-        if (src_ptr_ty_info.flags.is_volatile and !ptr_ty_info.flags.is_volatile) break :compatible;
-        if (src_ptr_ty_info.flags.is_allowzero and !ptr_ty_info.flags.is_allowzero) break :compatible;
-        // Everything else has to match exactly.
-        if (src_ptr_ty_info.child != ptr_ty_info.child) break :compatible;
-        if (src_ptr_ty_info.sentinel != ptr_ty_info.sentinel) break :compatible;
-        if (src_ptr_ty_info.packed_offset != ptr_ty_info.packed_offset) break :compatible;
-        if (src_ptr_ty_info.flags.size != ptr_ty_info.flags.size) break :compatible;
-        if (src_ptr_ty_info.flags.alignment != ptr_ty_info.flags.alignment) break :compatible;
-        if (src_ptr_ty_info.flags.address_space != ptr_ty_info.flags.address_space) break :compatible;
-        if (src_ptr_ty_info.flags.vector_index != ptr_ty_info.flags.vector_index) break :compatible;
+        if (cur_derive.@"const" and !ptr_ty_info.flags.is_const) break :compatible;
+        if (cur_derive.@"volatile" and !ptr_ty_info.flags.is_volatile) break :compatible;
+        if (cur_derive.@"allowzero" and !ptr_ty_info.flags.is_allowzero) break :compatible;
+        // Element type and alignment, however, have to match exactly.
+        if (cur_derive.elem_ty.toIntern() != ptr_ty_info.child) break :compatible;
+        if (cur_derive.size != ptr_size) break :compatible;
+        if (cur_derive.@"align" != ptr_ty_info.flags.alignment) break :compatible;
 
         return cur_derive;
     }
 
-    const parent = try arena.create(PointerDeriveStep);
+    const parent = try arena.create(PointerDerivation);
     parent.* = cur_derive;
-    return .{ .offset_and_cast = .{
-        .parent = parent,
-        .byte_offset = cur_offset,
-        .new_ptr_ty = Type.fromInterned(ptr.ty),
-    } };
+    return .{
+        .elem_ty = .fromInterned(ptr_ty_info.child),
+        .size = ptr_size,
+        .@"align" = ptr_ty_info.flags.alignment,
+        .@"const" = ptr_ty_info.flags.is_const,
+        .@"volatile" = ptr_ty_info.flags.is_volatile,
+        .@"allowzero" = ptr_ty_info.flags.is_allowzero,
+        .addr = .{ .offset_and_cast = .{
+            .parent = parent,
+            .byte_offset = cur_offset,
+        } },
+    };
 }
 
 const InterpretMode = enum {
@@ -2229,6 +2364,7 @@ pub fn interpret(val: Value, comptime T: type, pt: Zcu.PerThread) error{ OutOfMe
         .null,
         .@"fn",
         .@"opaque",
+        .spirv,
         .enum_literal,
         => comptime unreachable, // comptime-only or otherwise impossible
 
@@ -2332,6 +2468,7 @@ pub fn uninterpret(val: anytype, ty: Type, pt: Zcu.PerThread) error{ OutOfMemory
         .null,
         .@"fn",
         .@"opaque",
+        .spirv,
         .enum_literal,
         => comptime unreachable, // comptime-only or otherwise impossible
 
@@ -2361,7 +2498,7 @@ pub fn uninterpret(val: anytype, ty: Type, pt: Zcu.PerThread) error{ OutOfMemory
             try pt.nullValue(ty),
 
         .@"enum" => switch (interpret_mode) {
-            .direct => try pt.enumValue(ty, (try uninterpret(@intFromEnum(val), ty.intTagType(zcu), pt)).toIntern()),
+            .direct => try pt.enumValue(ty, try uninterpret(@backingInt(val), ty.backingIntType(zcu), pt)),
             .by_name => {
                 const field_name_ip = try ip.getOrPutString(zcu.gpa, io, pt.tid, @tagName(val), .no_embedded_nulls);
                 const field_idx = ty.enumFieldIndex(field_name_ip, zcu) orelse return error.TypeMismatch;

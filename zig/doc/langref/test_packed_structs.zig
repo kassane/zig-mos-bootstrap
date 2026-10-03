@@ -1,5 +1,4 @@
 const std = @import("std");
-const native_endian = @import("builtin").target.cpu.arch.endian();
 const expectEqual = std.testing.expectEqual;
 
 const Full = packed struct {
@@ -26,16 +25,8 @@ fn doTheTest() !void {
     try expectEqual(0x1, divided.quarter4);
 
     const ordered: [2]u8 = @bitCast(full);
-    switch (native_endian) {
-        .big => {
-            try expectEqual(0x12, ordered[0]);
-            try expectEqual(0x34, ordered[1]);
-        },
-        .little => {
-            try expectEqual(0x34, ordered[0]);
-            try expectEqual(0x12, ordered[1]);
-        },
-    }
+    try expectEqual(0x34, ordered[0]);
+    try expectEqual(0x12, ordered[1]);
 }
 
 // test

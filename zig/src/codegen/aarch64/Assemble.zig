@@ -83,7 +83,7 @@ fn zonCast(comptime Result: type, zon_value: anytype, symbols: anytype) Result {
                                 .unsigned => std.math.maxInt(Symbol),
                             }})
                         ]u8 = undefined;
-                        return std.meta.stringToEnum(Result, std.fmt.bufPrint(&buf, "{d}", .{symbol}) catch unreachable).?;
+                        return std.meta.stringToEnum(Result, std.mem.print(&buf, "{d}", .{symbol}) catch unreachable).?;
                     },
                     else => return symbol,
                 },
@@ -163,7 +163,7 @@ const matchers = matchers: {
                         arg.* = zonCast(param_type.?, instruction.encode[encode_index], symbols);
                     return @call(.auto, encode, args);
                 } else if (pattern_token[0] == '<') {
-                    const symbol_name = comptime pattern_token[1 .. std.mem.indexOfScalarPos(u8, pattern_token, 1, '|') orelse
+                    const symbol_name = comptime pattern_token[1 .. std.mem.findScalarPos(u8, pattern_token, 1, '|') orelse
                         pattern_token.len - 1];
                     const symbol = @field(Symbol, symbol_name);
                     const symbol_ptr = &@field(symbols, symbol_name);
@@ -256,7 +256,7 @@ fn nextToken(as: *Assemble, buf: *[token_buf_len]u8, comptime opts: struct {
             switch (modified_operand) {
                 .register => |reg| {
                     as.source = as.source[index + 1 ..];
-                    return std.fmt.bufPrint(buf, "{f}", .{reg.fmt()}) catch unreachable;
+                    return std.mem.print(buf, "{f}", .{reg.fmt()}) catch unreachable;
                 },
             }
         } else continue :c invalid_syntax,

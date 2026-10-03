@@ -156,7 +156,7 @@ fn printOutput(
             try shell_out.print("$ zig build-exe {s}.zig ", .{code_name});
 
             switch (code.mode) {
-                .Debug => {},
+                .debug => {},
                 else => {
                     try build_args.appendSlice(&[_][]const u8{ "-O", @tagName(code.mode) });
                     try shell_out.print("-O {s} ", .{@tagName(code.mode)});
@@ -291,7 +291,7 @@ fn printOutput(
             try shell_out.print("$ zig test {s}.zig ", .{code_name});
 
             switch (code.mode) {
-                .Debug => {},
+                .debug => {},
                 else => {
                     try test_args.appendSlice(&[_][]const u8{
                         "-O", @tagName(code.mode),
@@ -314,6 +314,7 @@ fn printOutput(
                 switch (getExternalExecutor(io, &target, .{
                     .host_cpu_arch = host.cpu.arch,
                     .host_os_tag = host.os.tag,
+                    .link_mode = code.link_mode orelse .dynamic,
                     .link_libc = code.link_libc,
                 })) {
                     .native => {},
@@ -354,7 +355,7 @@ fn printOutput(
             try shell_out.print("$ zig test {s}.zig ", .{code_name});
 
             switch (code.mode) {
-                .Debug => {},
+                .debug => {},
                 else => {
                     try test_args.appendSlice(&[_][]const u8{ "-O", @tagName(code.mode) });
                     try shell_out.print("-O {s} ", .{@tagName(code.mode)});
@@ -383,7 +384,7 @@ fn printOutput(
                     fatal("example compile crashed", .{});
                 },
             }
-            if (mem.indexOf(u8, result.stderr, error_match) == null) {
+            if (mem.find(u8, result.stderr, error_match) == null) {
                 print("{s}\nExpected to find '{s}' in stderr\n", .{ result.stderr, error_match });
                 fatal("example did not have expected compile error", .{});
             }
@@ -404,18 +405,18 @@ fn printOutput(
             }
             var mode_arg: []const u8 = "";
             switch (code.mode) {
-                .Debug => {},
-                .ReleaseSafe => {
-                    try test_args.append("-OReleaseSafe");
-                    mode_arg = "-OReleaseSafe";
+                .debug => {},
+                .safe => {
+                    try test_args.append("-Osafe");
+                    mode_arg = "-Osafe";
                 },
-                .ReleaseFast => {
-                    try test_args.append("-OReleaseFast");
-                    mode_arg = "-OReleaseFast";
+                .fast => {
+                    try test_args.append("-Ofast");
+                    mode_arg = "-Ofast";
                 },
-                .ReleaseSmall => {
-                    try test_args.append("-OReleaseSmall");
-                    mode_arg = "-OReleaseSmall";
+                .small => {
+                    try test_args.append("-Osmall");
+                    mode_arg = "-Osmall";
                 },
             }
 
@@ -438,7 +439,7 @@ fn printOutput(
                     fatal("example compile crashed", .{});
                 },
             }
-            if (mem.indexOf(u8, result.stderr, error_match) == null) {
+            if (mem.find(u8, result.stderr, error_match) == null) {
                 print("{s}\nExpected to find '{s}' in stderr\n", .{ result.stderr, error_match });
                 fatal("example did not have expected runtime safety error message", .{});
             }
@@ -468,7 +469,7 @@ fn printOutput(
             try shell_out.print("$ zig build-obj {s}.zig ", .{code_name});
 
             switch (code.mode) {
-                .Debug => {},
+                .debug => {},
                 else => {
                     try build_args.appendSlice(&[_][]const u8{ "-O", @tagName(code.mode) });
                     try shell_out.print("-O {s} ", .{@tagName(code.mode)});
@@ -513,7 +514,7 @@ fn printOutput(
                         fatal("example compile crashed", .{});
                     },
                 }
-                if (mem.indexOf(u8, result.stderr, error_match) == null) {
+                if (mem.find(u8, result.stderr, error_match) == null) {
                     print("{s}\nExpected to find '{s}' in stderr\n", .{ result.stderr, error_match });
                     fatal("example did not have expected compile error message", .{});
                 }
@@ -548,7 +549,7 @@ fn printOutput(
             try shell_out.print("$ zig build-lib {s}.zig ", .{code_name});
 
             switch (code.mode) {
-                .Debug => {},
+                .debug => {},
                 else => {
                     try test_args.appendSlice(&[_][]const u8{ "-O", @tagName(code.mode) });
                     try shell_out.print("-O {s} ", .{@tagName(code.mode)});
@@ -623,10 +624,10 @@ fn tokenizeAndPrint(arena: Allocator, out: *Writer, raw_src: []const u8) !void {
         next_tok_is_fn = false;
 
         const token = tokenizer.next();
-        if (mem.indexOf(u8, src[index..token.loc.start], "//")) |comment_start_off| {
+        if (mem.find(u8, src[index..token.loc.start], "//")) |comment_start_off| {
             // render one comment
             const comment_start = index + comment_start_off;
-            const comment_end_off = mem.indexOf(u8, src[comment_start..token.loc.start], "\n");
+            const comment_end_off = mem.find(u8, src[comment_start..token.loc.start], "\n");
             const comment_end = if (comment_end_off) |o| comment_start + o else token.loc.start;
 
             try writeEscapedLines(out, src[index..comment_start]);
@@ -843,7 +844,7 @@ fn writeEscapedLines(out: *Writer, text: []const u8) !void {
 
 const Code = struct {
     id: Id,
-    mode: std.builtin.OptimizeMode,
+    mode: std.builtin.Optimize,
     link_objects: []const []const u8,
     target_str: ?[]const u8,
     link_libc: bool,
@@ -870,13 +871,13 @@ const Code = struct {
 };
 
 fn stripManifest(source_bytes: []const u8) []const u8 {
-    const manifest_start = mem.lastIndexOf(u8, source_bytes, "\n\n// ") orelse
+    const manifest_start = mem.findLast(u8, source_bytes, "\n\n// ") orelse
         fatal("missing manifest comment", .{});
     return source_bytes[0 .. manifest_start + 1];
 }
 
 fn parseManifest(arena: Allocator, source_bytes: []const u8) !Code {
-    const manifest_start = mem.lastIndexOf(u8, source_bytes, "\n\n// ") orelse
+    const manifest_start = mem.findLast(u8, source_bytes, "\n\n// ") orelse
         fatal("missing manifest comment", .{});
     var it = mem.tokenizeScalar(u8, source_bytes[manifest_start..], '\n');
     const first_line = skipPrefix(it.next().?);
@@ -903,7 +904,7 @@ fn parseManifest(arena: Allocator, source_bytes: []const u8) !Code {
     else
         fatal("unrecognized manifest id: '{s}'", .{first_line});
 
-    var mode: std.builtin.OptimizeMode = .Debug;
+    var mode: std.builtin.Optimize = .debug;
     var link_mode: ?std.builtin.LinkMode = null;
     var link_objects: std.ArrayList([]const u8) = .empty;
     var additional_options: std.ArrayList([]const u8) = .empty;
@@ -915,11 +916,11 @@ fn parseManifest(arena: Allocator, source_bytes: []const u8) !Code {
     while (it.next()) |prefixed_line| {
         const line = skipPrefix(prefixed_line);
         if (mem.startsWith(u8, line, "optimize=")) {
-            mode = std.meta.stringToEnum(std.builtin.OptimizeMode, line["optimize=".len..]) orelse
-                fatal("bad optimization mode line: '{s}'", .{line});
+            mode = std.builtin.Optimize.fromString(line["optimize=".len..]) orelse
+                fatal("bad optimization mode line: {q}", .{line});
         } else if (mem.startsWith(u8, line, "link_mode=")) {
             link_mode = std.meta.stringToEnum(std.builtin.LinkMode, line["link_mode=".len..]) orelse
-                fatal("bad link mode line: '{s}'", .{line});
+                fatal("bad link mode line: {q}", .{line});
         } else if (mem.startsWith(u8, line, "link_object=")) {
             try link_objects.append(arena, line["link_object=".len..]);
         } else if (mem.startsWith(u8, line, "additional_option=")) {
@@ -1104,7 +1105,7 @@ fn termColor(allocator: Allocator, input: []const u8) ![]u8 {
 
 // Returns true if number is in slice.
 fn in(slice: []const u8, number: u8) bool {
-    return mem.indexOfScalar(u8, slice, number) != null;
+    return mem.findScalar(u8, slice, number) != null;
 }
 
 fn run(

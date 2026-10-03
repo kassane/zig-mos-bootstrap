@@ -106,10 +106,10 @@ test "statx" {
 
 test "user and group ids" {
     if (builtin.link_libc) return error.SkipZigTest;
-    try expectEqual(linux.getauxval(elf.AT_UID), linux.getuid());
-    try expectEqual(linux.getauxval(elf.AT_GID), linux.getgid());
-    try expectEqual(linux.getauxval(elf.AT_EUID), linux.geteuid());
-    try expectEqual(linux.getauxval(elf.AT_EGID), linux.getegid());
+    try expectEqual(linux.getauxval(elf.AT.UID), linux.getuid());
+    try expectEqual(linux.getauxval(elf.AT.GID), linux.getgid());
+    try expectEqual(linux.getauxval(elf.AT.EUID), linux.geteuid());
+    try expectEqual(linux.getauxval(elf.AT.EGID), linux.getegid());
 }
 
 test "fadvise" {
@@ -186,8 +186,8 @@ test "sysinfo" {
 }
 
 comptime {
-    assert(128 == @as(u32, @bitCast(linux.FUTEX_OP{ .cmd = @enumFromInt(0), .private = true, .realtime = false })));
-    assert(256 == @as(u32, @bitCast(linux.FUTEX_OP{ .cmd = @enumFromInt(0), .private = false, .realtime = true })));
+    assert(128 == @as(u32, @bitCast(linux.FUTEX_OP{ .cmd = @fromBackingInt(@intCast(0)), .private = true, .realtime = false })));
+    assert(256 == @as(u32, @bitCast(linux.FUTEX_OP{ .cmd = @fromBackingInt(@intCast(0)), .private = false, .realtime = true })));
 
     // Check futex_param4 union is packed correctly
     const param_union = linux.futex_param4{
@@ -277,7 +277,7 @@ test "futex v1" {
 
 comptime {
     assert(2 == @as(u32, @bitCast(linux.FUTEX2_FLAGS{ .size = .U32, .private = false })));
-    assert(128 == @as(u32, @bitCast(linux.FUTEX2_FLAGS{ .size = @enumFromInt(0), .private = true })));
+    assert(128 == @as(u32, @bitCast(linux.FUTEX2_FLAGS{ .size = @fromBackingInt(@intCast(0)), .private = true })));
 }
 
 test "futex2_waitv" {
@@ -423,7 +423,7 @@ test "timerfd" {
         else => @panic("test failed"),
     }
 
-    var fds: [1]std.posix.pollfd = .{.{ .fd = tfd, .events = linux.POLL.IN, .revents = 0 }};
+    var fds: [1]std.posix.pollfd = .{.{ .fd = tfd, .events = linux.POLL.IN }};
     try expectEqual(@as(usize, 1), try std.posix.poll(&fds, -1)); // -1 => infinite waiting
 
     const git = rc: {

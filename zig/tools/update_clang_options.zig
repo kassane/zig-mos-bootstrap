@@ -594,12 +594,16 @@ const known_options = [_]KnownOpt{
         .name = "version",
         .ident = "version",
     },
+    .{
+        .name = "fpatchable-function-entry",
+        .ident = "patchable_function_entry",
+    },
 };
 
 const blacklisted_options = [_][]const u8{};
 
 fn knownOption(name: []const u8) ?[]const u8 {
-    const chopped_name = if (std.mem.indexOfScalar(u8, name, '=')) |idx| name[0..idx] else name;
+    const chopped_name = if (std.mem.findScalar(u8, name, '=')) |idx| name[0..idx] else name;
     for (known_options) |item| {
         if (std.mem.eql(u8, chopped_name, item.name)) {
             return item.ident;
@@ -667,7 +671,7 @@ pub fn main(init: std.process.Init) !void {
 
         for (all_features, 0..) |feat, i| {
             const llvm_name = feat.llvm_name orelse continue;
-            const zig_feat = @as(Feature, @enumFromInt(i));
+            const zig_feat = @as(Feature, @fromBackingInt(@intCast(i)));
             const zig_name = @tagName(zig_feat);
             try llvm_to_zig_cpu_features.put(llvm_name, zig_name);
         }

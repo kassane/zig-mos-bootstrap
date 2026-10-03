@@ -71,6 +71,18 @@ export fn bax() void {
     @memmove(&rt, &x);
 }
 
+export fn qoo(i: u8) void {
+    comptime var x: u32 = 123;
+    const y = .{ .p = &x, .i = i };
+    _ = y;
+}
+
+var runtimeP: *bool = undefined;
+export fn qaz() void {
+    comptime var b = true;
+    runtimeP = &b;
+}
+
 // error
 //
 // :5:19: error: runtime value contains reference to comptime var
@@ -103,3 +115,9 @@ export fn bax() void {
 // :71:19: error: runtime value contains reference to comptime var
 // :71:19: note: comptime var pointers are not available at runtime
 // :67:14: note: 'runtime_value' points to comptime var declared here
+// :76:19: error: runtime value contains reference to comptime var
+// :76:19: note: comptime var pointers are not available at runtime
+// :75:14: note: 'runtime_value' points to comptime var declared here
+// :83:16: error: runtime value contains reference to comptime var
+// :83:16: note: comptime var pointers are not available at runtime
+// :82:22: note: 'runtime_value' points to comptime var declared here

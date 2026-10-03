@@ -198,7 +198,7 @@ pub fn State(comptime endian: std.builtin.Endian) type {
         ///
         /// Note: Clears complete words that contain the specified byte range
         pub fn clear(self: *Self, from: usize, to: usize) void {
-            @memset(self.st[from / 8 .. (to + 7) / 8], 0);
+            @memset(self.st[from / 8 .. @divCeil(to, 8)], 0);
         }
 
         /// Clear the entire state, disabling compiler optimizations.
@@ -672,6 +672,12 @@ pub const AsconHash256 = struct {
         for (0..4) |i| {
             mem.writeInt(u64, out[i * 8 ..][0..8], h[i], .little);
         }
+    }
+
+    pub fn finalResult(d: *AsconHash256) [digest_length]u8 {
+        var result: [digest_length]u8 = undefined;
+        d.final(&result);
+        return result;
     }
 };
 

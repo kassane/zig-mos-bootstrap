@@ -1,4 +1,4 @@
-const assert = @import("std").debug.assert;
+const assert = std.debug.assert;
 const std = @import("std");
 const InternPool = @import("../../InternPool.zig");
 const Type = @import("../../Type.zig");
@@ -21,7 +21,7 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
             if (ty.containerLayout(zcu) == .@"packed") return .byval;
             if (countFloats(ty, zcu)) |float| return .{ .float_array = float.count };
 
-            const bit_size = ty.bitSize(zcu);
+            const bit_size = ty.abiSize(zcu) * 8;
             if (bit_size > 128) return .memory;
             if (bit_size > 64) return .double_integer;
             return .integer;
@@ -30,12 +30,17 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
             if (ty.containerLayout(zcu) == .@"packed") return .byval;
             if (countFloats(ty, zcu)) |float| return .{ .float_array = float.count };
 
-            const bit_size = ty.bitSize(zcu);
+            const bit_size = ty.abiSize(zcu) * 8;
             if (bit_size > 128) return .memory;
             if (bit_size > 64) return .double_integer;
             return .integer;
         },
-        .int, .@"enum", .error_set, .float, .bool => return .byval,
+        .int, .@"enum", .error_set, .bool => return .byval,
+        .float => return switch (ty.floatBits(zcu.getTarget())) {
+            else => unreachable,
+            16, 32, 64, 128 => .byval,
+            80 => .double_integer,
+        },
         .vector => {
             const bit_size = ty.bitSize(zcu);
             // TODO is this controlled by a cpu feature?
@@ -62,6 +67,7 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
         .null,
         .@"fn",
         .@"opaque",
+        .spirv,
         .enum_literal,
         .array,
         => unreachable,

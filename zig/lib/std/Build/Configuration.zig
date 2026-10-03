@@ -1,15 +1,16 @@
 const Configuration = @This();
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const max_u32 = std.math.maxInt(u32);
+const native_endian = builtin.target.cpu.arch.endian();
 
 string_bytes: []u8,
 steps: []Step,
-path_deps_base: []Path.Base,
-path_deps_sub: []String,
+path_deps: []PathDep,
 unlazy_deps: []String,
 system_integrations: []SystemIntegration,
 available_options: []AvailableOption,
@@ -55,7 +56,7 @@ pub const Wip = struct {
     system_integrations: std.ArrayList(SystemIntegration) = .empty,
     available_options: std.ArrayList(AvailableOption) = .empty,
     steps: std.ArrayList(Step) = .empty,
-    path_deps: std.MultiArrayList(Path) = .empty,
+    path_deps: std.ArrayList(PathDep) = .empty,
     search_prefixes: std.ArrayList(String) = .empty,
     extra: std.ArrayList(u32) = .empty,
     next_generated_file_index: u32 = 0,
@@ -108,7 +109,7 @@ pub const Wip = struct {
         }
 
         pub fn hash(ctx: @This(), key: String) u64 {
-            return std.hash_map.hashString(std.mem.sliceTo(ctx.bytes[@intFromEnum(key)..], 0));
+            return std.hash_map.hashString(std.mem.sliceTo(ctx.bytes[@backingInt(key)..], 0));
         }
     };
 
@@ -116,11 +117,11 @@ pub const Wip = struct {
         bytes: []const u8,
 
         pub fn eql(ctx: @This(), a: []const u8, b: String) bool {
-            return std.mem.eql(u8, a, std.mem.sliceTo(ctx.bytes[@intFromEnum(b)..], 0));
+            return std.mem.eql(u8, a, std.mem.sliceTo(ctx.bytes[@backingInt(b)..], 0));
         }
 
         pub fn hash(_: @This(), adapted_key: []const u8) u64 {
-            assert(std.mem.indexOfScalar(u8, adapted_key, 0) == null);
+            assert(std.mem.findScalar(u8, adapted_key, 0) == null);
             return std.hash_map.hashString(adapted_key);
         }
     };
@@ -152,7 +153,7 @@ pub const Wip = struct {
         const header: Header = .{
             .string_bytes_len = @intCast(wip.string_bytes.items.len),
             .steps_len = @intCast(wip.steps.items.len),
-            .path_deps_len = @intCast(wip.path_deps.len),
+            .path_deps_len = @intCast(wip.path_deps.items.len),
             .unlazy_deps_len = @intCast(wip.unlazy_deps.items.len),
             .system_integrations_len = @intCast(wip.system_integrations.items.len),
             .available_options_len = @intCast(wip.available_options.items.len),
@@ -169,8 +170,7 @@ pub const Wip = struct {
             @ptrCast(&header),
             wip.string_bytes.items,
             @ptrCast(wip.steps.items),
-            @ptrCast(wip.path_deps.items(.base)),
-            @ptrCast(wip.path_deps.items(.sub)),
+            @ptrCast(wip.path_deps.items),
             @ptrCast(wip.unlazy_deps.items),
             @ptrCast(wip.system_integrations.items),
             @ptrCast(wip.available_options.items),
@@ -182,7 +182,7 @@ pub const Wip = struct {
 
     pub fn addString(wip: *Wip, bytes: []const u8) Allocator.Error!String {
         const gpa = wip.gpa;
-        assert(std.mem.indexOfScalar(u8, bytes, 0) == null);
+        assert(std.mem.findScalar(u8, bytes, 0) == null);
         const gop = try wip.string_table.getOrPutContextAdapted(
             gpa,
             @as([]const u8, bytes),
@@ -192,7 +192,7 @@ pub const Wip = struct {
         if (gop.found_existing) return gop.key_ptr.*;
 
         try wip.string_bytes.ensureUnusedCapacity(gpa, bytes.len + 1);
-        const new_off: String = @enumFromInt(wip.string_bytes.items.len);
+        const new_off: String = @fromBackingInt(@intCast(wip.string_bytes.items.len));
 
         wip.string_bytes.appendSliceAssumeCapacity(bytes);
         wip.string_bytes.appendAssumeCapacity(0);
@@ -213,7 +213,7 @@ pub const Wip = struct {
         const revert_index: u32 = @intCast(wip.extra.items.len);
         const added = try wip.extra.addManyAsSlice(gpa, list.len + 1);
         added[0] = @intCast(list.len);
-        for (added[1..], list) |*d, s| d.* = @intFromEnum(try addString(wip, s));
+        for (added[1..], list) |*d, s| d.* = @backingInt(try addString(wip, s));
         const gop = try wip.dedupe_table.getOrPutContext(gpa, .{
             .index = revert_index,
             .len = @intCast(added.len),
@@ -221,10 +221,10 @@ pub const Wip = struct {
 
         if (gop.found_existing) {
             wip.extra.items.len = revert_index;
-            return @enumFromInt(gop.key_ptr.index);
+            return @fromBackingInt(@intCast(gop.key_ptr.index));
         }
 
-        return @enumFromInt(revert_index);
+        return @fromBackingInt(@intCast(revert_index));
     }
 
     pub fn addBytes(wip: *Wip, bytes: []const u8) Allocator.Error!Bytes {
@@ -296,7 +296,7 @@ pub const Wip = struct {
             .extra = wip.extra.items,
         }));
         if (gop.found_existing) {
-            wip.extra.items.len = @intFromEnum(result_index);
+            wip.extra.items.len = @backingInt(result_index);
             return .init(gop.key_ptr.*);
         } else {
             return .init(result_index);
@@ -371,7 +371,7 @@ pub const Wip = struct {
             .extra = wip.extra.items,
         }));
         if (gop.found_existing) {
-            wip.extra.items.len = @intFromEnum(result_index);
+            wip.extra.items.len = @backingInt(result_index);
             return gop.key_ptr.*;
         } else {
             return result_index;
@@ -410,14 +410,14 @@ pub const Wip = struct {
 
         if (gop.found_existing) {
             wip.extra.items.len = revert_index;
-            return @enumFromInt(gop.key_ptr.index);
+            return @fromBackingInt(@intCast(gop.key_ptr.index));
         }
 
-        return @enumFromInt(new_index);
+        return @fromBackingInt(@intCast(new_index));
     }
 
     pub fn addExtraReserved(wip: *Wip, comptime T: type, v: T) T.Index {
-        return @enumFromInt(addExtraReservedErased(wip, T, v));
+        return @fromBackingInt(@intCast(addExtraReservedErased(wip, T, v)));
     }
 
     pub fn addExtraReservedErased(wip: *Wip, comptime T: type, v: T) u32 {
@@ -428,18 +428,18 @@ pub const Wip = struct {
 
     fn addExtraOptionalStringAssumeCapacity(wip: *Wip, optional_string: ?String) void {
         const string = optional_string orelse return;
-        wip.extra.appendAssumeCapacity(@intFromEnum(string));
+        wip.extra.appendAssumeCapacity(@backingInt(string));
     }
 
     pub fn addGeneratedFile(wip: *Wip) GeneratedFileIndex {
         defer wip.next_generated_file_index += 1;
-        return @enumFromInt(wip.next_generated_file_index);
+        return @fromBackingInt(@intCast(wip.next_generated_file_index));
     }
 
     /// Returned slice expires upon next append to the configuration.
     pub fn stringSlice(wip: *const Wip, s: String) [:0]const u8 {
-        const start_slice = wip.string_bytes.items[@intFromEnum(s)..];
-        return start_slice[0..std.mem.indexOfScalar(u8, start_slice, 0).? :0];
+        const start_slice = wip.string_bytes.items[@backingInt(s)..];
+        return start_slice[0..std.mem.findScalar(u8, start_slice, 0).? :0];
     }
 };
 
@@ -503,7 +503,7 @@ pub const Step = extern struct {
         _,
 
         pub fn ptr(i: Index, c: *const Configuration) *const Step {
-            return &c.steps[@intFromEnum(i)];
+            return &c.steps[@backingInt(i)];
         }
     };
 
@@ -569,6 +569,7 @@ pub const Step = extern struct {
         flags2: Flags2,
         args: Storage.LengthPrefixedList(Arg.Index),
         cwd: Storage.FlagOptional(.flags, .cwd, LazyPath.Index),
+        preopens: Storage.FlagLengthPrefixedList(.flags, .preopens, Preopen),
         captured_stdout: Storage.FlagOptional(.flags, .captured_stdout, CapturedStream),
         captured_stderr: Storage.FlagOptional(.flags, .captured_stderr, CapturedStream),
         file_inputs: Storage.LengthPrefixedList(LazyPath.Index),
@@ -583,6 +584,8 @@ pub const Step = extern struct {
         expect_stderr_match: Storage.FlagLengthPrefixedList(.flags2, .expect_stderr_match, Bytes),
         expect_stdout_match: Storage.FlagLengthPrefixedList(.flags2, .expect_stdout_match, Bytes),
         expect_term_value: Storage.FlagOptional(.flags2, .expect_term, u32),
+        expect_stdout_snapshot: Storage.FlagOptional(.flags2, .expect_stdout_snapshot, LazyPath.Index),
+        expect_stderr_snapshot: Storage.FlagOptional(.flags2, .expect_stderr_snapshot, LazyPath.Index),
 
         pub const CapturedStream = extern struct {
             generated_file: GeneratedFileIndex,
@@ -608,7 +611,8 @@ pub const Step = extern struct {
                 producer: bool,
                 generated: bool,
                 dep_file: bool,
-                _: u21 = 0,
+                make_absolute: bool,
+                _: u20 = 0,
             };
 
             pub const Tag = enum(u4) {
@@ -622,6 +626,13 @@ pub const Step = extern struct {
                 output_file,
                 output_directory,
                 passthru,
+                /// `prefix` contains the enabled string.
+                /// `suffix` contains the disabled string.
+                enable_darling,
+                enable_qemu,
+                enable_rosetta,
+                enable_wasmtime,
+                enable_wine,
             };
 
             pub const Index = IndexType(@This());
@@ -641,6 +652,11 @@ pub const Step = extern struct {
             manual,
         };
 
+        pub const Preopen = extern struct {
+            name: String,
+            path: LazyPath.Index,
+        };
+
         pub const StdIn = union(@This().Tag) {
             none: void,
             bytes: Bytes,
@@ -649,7 +665,7 @@ pub const Step = extern struct {
             pub const Tag = enum(u2) { none, bytes, lazy_path };
         };
         pub const TrimWhitespace = enum(u2) { none, all, leading, trailing };
-        pub const StdIo = enum(u2) { infer_from_args, inherit, check, zig_test };
+        pub const StdIo = enum(u3) { infer_from_args, inherit, check, zig_test, protocol };
 
         pub const ExpectTermStatus = enum(u2) { exited, signal, stopped, unknown };
 
@@ -659,7 +675,6 @@ pub const Step = extern struct {
             skip_foreign_checks: bool,
             failing_to_execute_foreign_is_an_error: bool,
             has_side_effects: bool,
-            test_runner_mode: bool,
             color: Color,
             stdin: StdIn.Tag,
             stdio: StdIo,
@@ -671,7 +686,8 @@ pub const Step = extern struct {
             captured_stdout: bool,
             captured_stderr: bool,
             environ_map: bool,
-            _: u4 = 0,
+            preopens: bool,
+            _: u3 = 0,
         };
 
         pub const Flags2 = packed struct(u32) {
@@ -681,7 +697,9 @@ pub const Step = extern struct {
             expect_stdout_match: bool,
             expect_term: bool,
             expect_term_status: ExpectTermStatus,
-            _: u25 = 0,
+            expect_stdout_snapshot: bool,
+            expect_stderr_snapshot: bool,
+            _: u23 = 0,
         };
     };
 
@@ -695,7 +713,6 @@ pub const Step = extern struct {
         root_name: String,
 
         filters: Storage.FlagLengthPrefixedList(.flags, .filters_len, String),
-        exec_cmd_args: Storage.FlagLengthPrefixedList(.flags, .exec_cmd_args_len, OptionalString),
         installed_headers: Storage.FlagLengthPrefixedList(.flags, .installed_headers_len, Storage.Extended(InstalledHeader.Flags, InstalledHeader)),
         force_undefined_symbols: Storage.FlagLengthPrefixedList(.flags, .force_undefined_symbols_len, String),
         expect_errors: Storage.FlagUnion(.flags4, .expect_errors, ExpectErrors),
@@ -924,7 +941,6 @@ pub const Step = extern struct {
             tag: Tag = .compile,
 
             filters_len: bool,
-            exec_cmd_args_len: bool,
             installed_headers_len: bool,
             force_undefined_symbols_len: bool,
 
@@ -936,6 +952,7 @@ pub const Step = extern struct {
             import_symbols: bool,
             import_table: bool,
             export_table: bool,
+            growable_table: bool,
             shared_memory: bool,
             link_eh_frame_hdr: bool,
             link_emit_relocs: bool,
@@ -973,8 +990,6 @@ pub const Step = extern struct {
         };
 
         pub const Flags3 = packed struct(u32) {
-            is_linking_libc: bool,
-            is_linking_libcpp: bool,
             version: bool,
             initial_memory: bool,
             max_memory: bool,
@@ -992,6 +1007,7 @@ pub const Step = extern struct {
             entry: Entry,
             lto: Lto,
             subsystem: Subsystem,
+            _: u2 = 0,
         };
 
         pub const Flags4 = packed struct(u32) {
@@ -1016,7 +1032,8 @@ pub const Step = extern struct {
             generated_llvm_bc: bool,
             generated_llvm_ir: bool,
             generated_h: bool,
-            _: u9 = 0,
+            incremental: DefaultingBool,
+            _: u7 = 0,
         };
 
         pub fn isDynamicLibrary(compile: *const Compile) bool {
@@ -1069,6 +1086,7 @@ pub const Step = extern struct {
             autoconf_undef,
             autoconf_at,
             cmake,
+            meson,
             blank,
             nasm,
 
@@ -1077,6 +1095,7 @@ pub const Step = extern struct {
                     .autoconf_undef => .autoconf_undef,
                     .autoconf_at => .autoconf_at,
                     .cmake => .cmake,
+                    .meson => .meson,
                     .blank => .blank,
                     .nasm => .nasm,
                 };
@@ -1127,7 +1146,7 @@ pub const Step = extern struct {
                         .undef => .undef,
                         .defined => .defined,
                         _ => {
-                            const value = extraData(c, Value, @intFromEnum(this));
+                            const value = extraData(c, Value, @backingInt(this));
                             return switch (value.flags.tag) {
                                 .ident => .{ .ident = value.ident.value.?.slice(c) },
                                 .string => .{ .string = value.string.value.?.slice(c) },
@@ -1358,17 +1377,21 @@ pub const Step = extern struct {
         flags: @This().Flags,
         generated_file: GeneratedFileIndex,
         contents: Bytes,
-        args: Storage.FlagLengthPrefixedList(.flags, .args, Arg),
+        files: Storage.FlagLengthPrefixedList(.flags, .files, NamedPath),
+        directories: Storage.FlagLengthPrefixedList(.flags, .directories, NamedPath),
+        untracked_paths: Storage.FlagLengthPrefixedList(.flags, .untracked_paths, NamedPath),
 
-        pub const Arg = extern struct {
+        pub const NamedPath = extern struct {
             name: String,
             path: LazyPath.Index,
         };
 
         pub const Flags = packed struct(u32) {
             tag: Tag = .options,
-            args: bool,
-            _: u26 = 0,
+            files: bool,
+            directories: bool,
+            untracked_paths: bool,
+            _: u24 = 0,
         };
     };
 
@@ -1378,14 +1401,14 @@ pub const Step = extern struct {
         output_file: GeneratedFileIndex,
         include_dirs: Storage.UnionList(.flags, .include_dirs, Module.IncludeDir),
         system_libs: Storage.FlagLengthPrefixedList(.flags, .system_libs, SystemLib.Index),
-        c_macros: Storage.FlagLengthPrefixedList(.flags, .c_macros, String),
+        cc_argv: Storage.FlagLengthPrefixedList(.flags, .cc_argv, String),
         target: ResolvedTarget.OptionalIndex,
 
         pub const Flags = packed struct(u32) {
             tag: Tag = .translate_c,
             include_dirs: bool,
             system_libs: bool,
-            c_macros: bool,
+            cc_argv: bool,
             link_libc: bool,
             optimize: Module.Optimize,
             _: u20 = 0,
@@ -1450,7 +1473,7 @@ pub const Step = extern struct {
     };
 
     pub fn flags(s: *const Step, c: *const Configuration) Flags {
-        return @bitCast(c.extra[@intFromEnum(s.extended)]);
+        return @bitCast(c.extra[@backingInt(s.extended)]);
     }
 };
 
@@ -1459,12 +1482,12 @@ pub const MaxRss = enum(u32) {
     _,
 
     pub fn toBytes(mr: MaxRss) u64 {
-        const x: usize = @intFromEnum(mr);
+        const x: usize = @backingInt(mr);
         return x << 8;
     }
 
     pub fn fromBytes(bytes: u64) MaxRss {
-        return @enumFromInt(bytes >> 8);
+        return @fromBackingInt(@intCast(bytes >> 8));
     }
 };
 
@@ -1488,13 +1511,7 @@ pub const LazyPath = union(@This().Tag) {
     };
 
     /// An index into `extra`.
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) LazyPath {
-            return extraData(c, LazyPath, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     /// An index into `extra`, or `null`.
     pub const OptionalIndex = enum(u32) {
@@ -1504,7 +1521,7 @@ pub const LazyPath = union(@This().Tag) {
         pub fn unwrap(this: @This()) ?Index {
             return switch (this) {
                 .none => null,
-                else => @enumFromInt(@intFromEnum(this)),
+                else => @fromBackingInt(@intCast(@backingInt(this))),
             };
         }
     };
@@ -1542,8 +1559,23 @@ pub const LazyPath = union(@This().Tag) {
 
         pub const Flags = packed struct(u32) {
             tag: Tag = .relative,
-            base: Path.Base,
+            base: Base,
             _: u16 = 0,
+        };
+
+        pub const Base = enum(u8) {
+            cwd,
+            local_cache,
+            global_cache,
+            /// Must not be used with Relative since package index is missing.
+            build_root,
+            zig_exe,
+            zig_lib,
+            install_prefix,
+            install_lib,
+            install_bin,
+            install_include,
+            libc_runtimes,
         };
     };
 };
@@ -1557,13 +1589,13 @@ pub const OptionalGeneratedFileIndex = enum(u32) {
     _,
 
     pub fn init(i: ?GeneratedFileIndex) OptionalGeneratedFileIndex {
-        return @enumFromInt(@intFromEnum(i orelse return .none));
+        return @fromBackingInt(@intCast(@backingInt(i orelse return .none)));
     }
 
     pub fn unwrap(this: @This()) ?GeneratedFileIndex {
         return switch (this) {
             .none => null,
-            else => @enumFromInt(@intFromEnum(this)),
+            else => @fromBackingInt(@intCast(@backingInt(this))),
         };
     }
 };
@@ -1580,12 +1612,32 @@ pub const Package = struct {
         /// Returns `null` for root package.
         pub fn get(i: @This(), c: *const Configuration) ?Package {
             if (i == .root) return null;
-            return extraData(c, Package, @intFromEnum(i));
+            return extraData(c, Package, @backingInt(i));
         }
 
         pub fn depPrefixSlice(i: @This(), c: *const Configuration) [:0]const u8 {
             const package = get(i, c) orelse return "";
             return package.dep_prefix.slice(c);
+        }
+    };
+
+    pub const OptionalIndex = enum(u32) {
+        none = max_u32 - 1,
+        root = max_u32,
+        _,
+
+        pub fn init(i: Index) OptionalIndex {
+            const result: OptionalIndex = @fromBackingInt(@intCast(@backingInt(i)));
+            assert(result != .none);
+            return result;
+        }
+
+        pub fn unwrap(this: @This()) ?Index {
+            return switch (this) {
+                .none => null,
+                .root => .root,
+                _ => @fromBackingInt(@intCast(@backingInt(this))),
+            };
         }
     };
 };
@@ -1604,6 +1656,7 @@ pub const Module = struct {
     rpaths: Storage.UnionList(.flags, .rpaths, RPath),
     link_objects: Storage.UnionList(.flags, .link_objects, LinkObject),
     frameworks: Storage.FlagLengthPrefixedList(.flags, .frameworks, Framework),
+    patchable_function_entry: u32,
 
     pub const Optimize = enum(u3) {
         debug,
@@ -1612,12 +1665,12 @@ pub const Module = struct {
         small,
         default,
 
-        pub fn init(o: ?std.builtin.OptimizeMode) Optimize {
+        pub fn init(o: ?std.builtin.Optimize) Optimize {
             return switch (o orelse return .default) {
-                .Debug => .debug,
-                .ReleaseSafe => .safe,
-                .ReleaseFast => .fast,
-                .ReleaseSmall => .small,
+                .debug => .debug,
+                .safe => .safe,
+                .fast => .fast,
+                .small => .small,
             };
         }
     };
@@ -1662,14 +1715,6 @@ pub const Module = struct {
                 .@"32" => .@"32",
                 .@"64" => .@"64",
             };
-        }
-    };
-
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) Module {
-            return extraData(c, Module, @intFromEnum(this));
         }
     };
 
@@ -1743,6 +1788,8 @@ pub const Module = struct {
             _: u30 = 0,
         };
     };
+
+    pub const Index = IndexType(@This());
 };
 
 pub const ImportTable = struct {
@@ -1761,7 +1808,7 @@ pub const ImportTable = struct {
         pub fn get(this: @This(), c: *const Configuration) ImportTable {
             return switch (this) {
                 .invalid => unreachable,
-                _ => extraData(c, ImportTable, @intFromEnum(this)),
+                _ => extraData(c, ImportTable, @backingInt(this)),
             };
         }
     };
@@ -1774,7 +1821,7 @@ pub const Deps = struct {
         _,
 
         pub fn get(this: @This(), c: *const Configuration) Deps {
-            return extraData(c, Deps, @intFromEnum(this));
+            return extraData(c, Deps, @backingInt(this));
         }
 
         pub fn slice(this: @This(), c: *const Configuration) []const Step.Index {
@@ -1798,8 +1845,8 @@ pub const StringList = enum(u32) {
     _,
 
     pub fn slice(this: @This(), c: *const Configuration) []const String {
-        const len = c.extra[@intFromEnum(this)];
-        return @ptrCast(c.extra[@intFromEnum(this) + 1 ..][0..len]);
+        const len = c.extra[@backingInt(this)];
+        return @ptrCast(c.extra[@backingInt(this) + 1 ..][0..len]);
     }
 };
 
@@ -1809,14 +1856,14 @@ pub const OptionalStringList = enum(u32) {
 
     pub fn init(opt_string_list: ?StringList) OptionalStringList {
         const sl = opt_string_list orelse return .none;
-        const result: OptionalStringList = @enumFromInt(@intFromEnum(sl));
+        const result: OptionalStringList = @fromBackingInt(@intCast(@backingInt(sl)));
         assert(result != .none);
         return result;
     }
 
     pub fn unwrap(this: @This()) ?StringList {
         if (this == .none) return null;
-        return @enumFromInt(@intFromEnum(this));
+        return @fromBackingInt(@intCast(@backingInt(this)));
     }
 
     pub fn slice(this: @This(), c: *const Configuration) ?[]const String {
@@ -1824,29 +1871,17 @@ pub const OptionalStringList = enum(u32) {
     }
 };
 
-pub const Path = extern struct {
-    base: Base,
+pub const PathDep = extern struct {
+    flags: Flags,
     sub: String,
+    pkg: Package.OptionalIndex,
 
-    pub const Base = enum(u8) {
-        cwd,
-        local_cache,
-        global_cache,
-        build_root,
-        zig_exe,
-        zig_lib,
-        install_prefix,
-        install_lib,
-        install_bin,
-        install_include,
+    pub const Flags = packed struct(u32) {
+        is_directory: bool,
+        metadata_only: bool,
+        base: LazyPath.Relative.Base,
+        _: u22 = 0,
     };
-
-    pub fn toCachePath(path: Path, c: *const Configuration, arena: Allocator) std.Build.Cache.Path {
-        _ = c;
-        _ = arena;
-        _ = path;
-        @panic("TODO");
-    }
 };
 
 pub const InstallDestDir = enum(u32) {
@@ -1859,8 +1894,8 @@ pub const InstallDestDir = enum(u32) {
     _,
 
     pub fn initCustom(sub_path: String) InstallDestDir {
-        assert(@intFromEnum(sub_path) < @intFromEnum(InstallDestDir.none));
-        return @enumFromInt(@intFromEnum(sub_path));
+        assert(@backingInt(sub_path) < @backingInt(InstallDestDir.none));
+        return @fromBackingInt(@intCast(@backingInt(sub_path)));
     }
 
     pub const Unpacked = union(enum) {
@@ -1878,7 +1913,7 @@ pub const InstallDestDir = enum(u32) {
             .lib => .lib,
             .bin => .bin,
             .header => .header,
-            _ => .{ .sub_path = @enumFromInt(@intFromEnum(this)) },
+            _ => .{ .sub_path = @fromBackingInt(@intCast(@backingInt(this))) },
         };
     }
 };
@@ -1892,14 +1927,14 @@ pub const OptionalString = enum(u32) {
     _,
 
     pub fn init(s: String) OptionalString {
-        const result: OptionalString = @enumFromInt(@intFromEnum(s));
+        const result: OptionalString = @fromBackingInt(@intCast(@backingInt(s)));
         assert(result != .none);
         return result;
     }
 
     pub fn unwrap(this: @This()) ?String {
         if (this == .none) return null;
-        return @enumFromInt(@intFromEnum(this));
+        return @fromBackingInt(@intCast(@backingInt(this)));
     }
 
     pub fn slice(this: @This(), c: *const Configuration) ?[:0]const u8 {
@@ -1915,8 +1950,8 @@ pub const String = enum(u32) {
     _,
 
     pub fn slice(index: String, c: *const Configuration) [:0]const u8 {
-        const start_slice = c.string_bytes[@intFromEnum(index)..];
-        return start_slice[0..std.mem.indexOfScalar(u8, start_slice, 0).? :0];
+        const start_slice = c.string_bytes[@backingInt(index)..];
+        return start_slice[0..std.mem.findScalar(u8, start_slice, 0).? :0];
     }
 };
 
@@ -1945,13 +1980,13 @@ pub const Alignment = enum(u6) {
 
     pub fn init(optional_alignment: ?std.mem.Alignment) @This() {
         const a = optional_alignment orelse return .none;
-        return @enumFromInt(@intFromEnum(a));
+        return @fromBackingInt(@intCast(@backingInt(a)));
     }
 
     pub fn toBytes(a: @This()) ?u64 {
         return switch (a) {
             .none => null,
-            else => @as(u64, 1) << @intFromEnum(a),
+            else => @as(u64, 1) << @backingInt(a),
         };
     }
 };
@@ -1981,13 +2016,7 @@ pub const SystemLib = struct {
     name: String,
     flags: Flags,
 
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) SystemLib {
-            return extraData(c, SystemLib, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     pub const UsePkgConfig = enum(u2) {
         /// Don't use pkg-config, just pass -lfoo where foo is name.
@@ -2020,13 +2049,7 @@ pub const CSourceFiles = struct {
     args: Storage.FlagList(.flags, .args_len, String),
     sub_paths: Storage.LengthPrefixedList(String),
 
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) CSourceFiles {
-            return extraData(c, CSourceFiles, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     pub const Flags = packed struct(u32) {
         /// C compiler CLI flags.
@@ -2040,13 +2063,7 @@ pub const CSourceFile = struct {
     file: LazyPath.Index,
     args: Storage.FlagList(.flags, .args_len, String),
 
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) CSourceFile {
-            return extraData(c, CSourceFile, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     pub const Flags = packed struct(u32) {
         /// C compiler CLI flags.
@@ -2061,13 +2078,7 @@ pub const RcSourceFile = struct {
     args: Storage.FlagList(.flags, .args_len, String),
     include_paths: Storage.FlagLengthPrefixedList(.flags, .include_paths, LazyPath.Index),
 
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) RcSourceFile {
-            return extraData(c, RcSourceFile, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     pub const Flags = packed struct(u32) {
         /// C compiler CLI flags.
@@ -2083,27 +2094,18 @@ pub const OptionalCSourceLanguage = enum(u3) {
     objective_cpp,
     assembly,
     assembly_with_preprocessor,
+
     default,
 
     pub fn init(x: ?std.Build.Module.CSourceLanguage) @This() {
         return switch (x orelse return .default) {
-            .c => .c,
-            .cpp => .cpp,
-            .objective_c => .objective_c,
-            .objective_cpp => .objective_cpp,
-            .assembly => .assembly,
-            .assembly_with_preprocessor => .assembly_with_preprocessor,
+            inline else => |tag| @field(@This(), @tagName(tag)),
         };
     }
 
     pub fn get(this: @This()) ?std.Build.Module.CSourceLanguage {
         return switch (this) {
-            .c => .c,
-            .cpp => .cpp,
-            .objective_c => .objective_c,
-            .objective_cpp => .objective_cpp,
-            .assembly => .assembly,
-            .assembly_with_preprocessor => .assembly_with_preprocessor,
+            inline else => |tag| @field(std.Build.Module.CSourceLanguage, @tagName(tag)),
             .default => null,
         };
     }
@@ -2115,20 +2117,14 @@ pub const ResolvedTarget = struct {
     /// defaults will be resolved.
     result: TargetQuery.Index,
 
-    pub const Index = enum(u32) {
-        _,
-
-        pub fn get(this: @This(), c: *const Configuration) ResolvedTarget {
-            return extraData(c, ResolvedTarget, @intFromEnum(this));
-        }
-    };
+    pub const Index = IndexType(@This());
 
     pub const OptionalIndex = enum(u32) {
         none = max_u32,
         _,
 
         pub fn init(i: Index) OptionalIndex {
-            const result: OptionalIndex = @enumFromInt(@intFromEnum(i));
+            const result: OptionalIndex = @fromBackingInt(@intCast(@backingInt(i)));
             assert(result != .none);
             return result;
         }
@@ -2136,7 +2132,7 @@ pub const ResolvedTarget = struct {
         pub fn unwrap(this: @This()) ?Index {
             return switch (this) {
                 .none => null,
-                _ => @enumFromInt(@intFromEnum(this)),
+                _ => @fromBackingInt(@intCast(@backingInt(this))),
             };
         }
 
@@ -2189,15 +2185,15 @@ pub const TargetQuery = struct {
         _,
 
         pub fn extraSlice(i: Index, extra: []const u32) []const u32 {
-            return extra[@intFromEnum(i)..][0..length(i, extra)];
+            return extra[@backingInt(i)..][0..length(i, extra)];
         }
 
         pub fn length(i: Index, extra: []const u32) usize {
-            return Storage.dataLength(extra, @intFromEnum(i), TargetQuery);
+            return Storage.dataLength(extra, @backingInt(i), TargetQuery);
         }
 
         pub fn get(this: @This(), c: *const Configuration) TargetQuery {
-            return extraData(c, TargetQuery, @intFromEnum(this));
+            return extraData(c, TargetQuery, @backingInt(this));
         }
     };
 
@@ -2206,7 +2202,7 @@ pub const TargetQuery = struct {
         _,
 
         pub fn init(i: Index) OptionalIndex {
-            const result: OptionalIndex = @enumFromInt(@intFromEnum(i));
+            const result: OptionalIndex = @fromBackingInt(@intCast(@backingInt(i)));
             assert(result != .none);
             return result;
         }
@@ -2214,7 +2210,7 @@ pub const TargetQuery = struct {
         pub fn unwrap(this: @This()) ?Index {
             return switch (this) {
                 .none => null,
-                _ => @enumFromInt(@intFromEnum(this)),
+                _ => @fromBackingInt(@intCast(@backingInt(this))),
             };
         }
 
@@ -2231,10 +2227,7 @@ pub const TargetQuery = struct {
 
         pub fn init(x: std.Target.Query.CpuModel) @This() {
             return switch (x) {
-                .native => .native,
-                .baseline => .baseline,
-                .determined_by_arch_os => .determined_by_arch_os,
-                .explicit => .explicit,
+                inline else => |_, tag| @field(@This(), @tagName(tag)),
             };
         }
     };
@@ -2268,6 +2261,8 @@ pub const TargetQuery = struct {
         gnux32,
         eabi,
         eabihf,
+        abin32,
+        x32,
         ilp32,
         android,
         androideabi,
@@ -2290,67 +2285,13 @@ pub const TargetQuery = struct {
 
         pub fn init(x: ?std.Target.Abi) @This() {
             return switch (x orelse return .default) {
-                .none => .none,
-                .gnu => .gnu,
-                .gnuabin32 => .gnuabin32,
-                .gnuabi64 => .gnuabi64,
-                .gnueabi => .gnueabi,
-                .gnueabihf => .gnueabihf,
-                .gnuf32 => .gnuf32,
-                .gnusf => .gnusf,
-                .gnux32 => .gnux32,
-                .eabi => .eabi,
-                .eabihf => .eabihf,
-                .ilp32 => .ilp32,
-                .android => .android,
-                .androideabi => .androideabi,
-                .musl => .musl,
-                .muslabin32 => .muslabin32,
-                .muslabi64 => .muslabi64,
-                .musleabi => .musleabi,
-                .musleabihf => .musleabihf,
-                .muslf32 => .muslf32,
-                .muslsf => .muslsf,
-                .muslx32 => .muslx32,
-                .msvc => .msvc,
-                .itanium => .itanium,
-                .simulator => .simulator,
-                .ohos => .ohos,
-                .ohoseabi => .ohoseabi,
-                .call0 => .call0,
+                inline else => |tag| @field(@This(), @tagName(tag)),
             };
         }
 
         pub fn unwrap(this: @This()) ?std.Target.Abi {
             return switch (this) {
-                .none => .none,
-                .gnu => .gnu,
-                .gnuabin32 => .gnuabin32,
-                .gnuabi64 => .gnuabi64,
-                .gnueabi => .gnueabi,
-                .gnueabihf => .gnueabihf,
-                .gnuf32 => .gnuf32,
-                .gnusf => .gnusf,
-                .gnux32 => .gnux32,
-                .eabi => .eabi,
-                .eabihf => .eabihf,
-                .ilp32 => .ilp32,
-                .android => .android,
-                .androideabi => .androideabi,
-                .musl => .musl,
-                .muslabin32 => .muslabin32,
-                .muslabi64 => .muslabi64,
-                .musleabi => .musleabi,
-                .musleabihf => .musleabihf,
-                .muslf32 => .muslf32,
-                .muslsf => .muslsf,
-                .muslx32 => .muslx32,
-                .msvc => .msvc,
-                .itanium => .itanium,
-                .simulator => .simulator,
-                .ohos => .ohos,
-                .ohoseabi => .ohoseabi,
-                .call0 => .call0,
+                inline else => |tag| @field(std.Target.Abi, @tagName(tag)),
                 .default => null,
             };
         }
@@ -2405,6 +2346,7 @@ pub const TargetQuery = struct {
         sheb,
         sparc,
         sparc64,
+        spork8,
         spirv32,
         spirv64,
         thumb,
@@ -2423,134 +2365,13 @@ pub const TargetQuery = struct {
 
         pub fn init(x: ?std.Target.Cpu.Arch) @This() {
             return switch (x orelse return .default) {
-                .aarch64 => .aarch64,
-                .aarch64_be => .aarch64_be,
-                .alpha => .alpha,
-                .amdgcn => .amdgcn,
-                .arc => .arc,
-                .arceb => .arceb,
-                .arm => .arm,
-                .armeb => .armeb,
-                .avr => .avr,
-                .bpfeb => .bpfeb,
-                .bpfel => .bpfel,
-                .csky => .csky,
-                .ez80 => .ez80,
-                .hexagon => .hexagon,
-                .hppa => .hppa,
-                .hppa64 => .hppa64,
-                .kalimba => .kalimba,
-                .kvx => .kvx,
-                .lanai => .lanai,
-                .loongarch32 => .loongarch32,
-                .loongarch64 => .loongarch64,
-                .m68k => .m68k,
-                .m88k => .m88k,
-                .microblaze => .microblaze,
-                .microblazeel => .microblazeel,
-                .mips => .mips,
-                .mipsel => .mipsel,
-                .mips64 => .mips64,
-                .mips64el => .mips64el,
-                .mos => .mos,
-                .msp430 => .msp430,
-                .nvptx => .nvptx,
-                .nvptx64 => .nvptx64,
-                .or1k => .or1k,
-                .powerpc => .powerpc,
-                .powerpcle => .powerpcle,
-                .powerpc64 => .powerpc64,
-                .powerpc64le => .powerpc64le,
-                .propeller => .propeller,
-                .riscv32 => .riscv32,
-                .riscv32be => .riscv32be,
-                .riscv64 => .riscv64,
-                .riscv64be => .riscv64be,
-                .s390x => .s390x,
-                .sh => .sh,
-                .sheb => .sheb,
-                .sparc => .sparc,
-                .sparc64 => .sparc64,
-                .spirv32 => .spirv32,
-                .spirv64 => .spirv64,
-                .thumb => .thumb,
-                .thumbeb => .thumbeb,
-                .ve => .ve,
-                .wasm32 => .wasm32,
-                .wasm64 => .wasm64,
-                .x86_16 => .x86_16,
-                .x86 => .x86,
-                .x86_64 => .x86_64,
-                .xcore => .xcore,
-                .xtensa => .xtensa,
-                .xtensaeb => .xtensaeb,
+                inline else => |tag| @field(@This(), @tagName(tag)),
             };
         }
 
         pub fn unwrap(this: @This()) ?std.Target.Cpu.Arch {
             return switch (this) {
-                .aarch64 => .aarch64,
-                .aarch64_be => .aarch64_be,
-                .alpha => .alpha,
-                .amdgcn => .amdgcn,
-                .arc => .arc,
-                .arceb => .arceb,
-                .arm => .arm,
-                .armeb => .armeb,
-                .avr => .avr,
-                .bpfeb => .bpfeb,
-                .bpfel => .bpfel,
-                .csky => .csky,
-                .ez80 => .ez80,
-                .hexagon => .hexagon,
-                .hppa => .hppa,
-                .hppa64 => .hppa64,
-                .kalimba => .kalimba,
-                .kvx => .kvx,
-                .lanai => .lanai,
-                .loongarch32 => .loongarch32,
-                .loongarch64 => .loongarch64,
-                .m68k => .m68k,
-                .m88k => .m88k,
-                .microblaze => .microblaze,
-                .microblazeel => .microblazeel,
-                .mips => .mips,
-                .mipsel => .mipsel,
-                .mips64 => .mips64,
-                .mips64el => .mips64el,
-                .mos => .mos,
-                .msp430 => .msp430,
-                .nvptx => .nvptx,
-                .nvptx64 => .nvptx64,
-                .or1k => .or1k,
-                .powerpc => .powerpc,
-                .powerpcle => .powerpcle,
-                .powerpc64 => .powerpc64,
-                .powerpc64le => .powerpc64le,
-                .propeller => .propeller,
-                .riscv32 => .riscv32,
-                .riscv32be => .riscv32be,
-                .riscv64 => .riscv64,
-                .riscv64be => .riscv64be,
-                .s390x => .s390x,
-                .sh => .sh,
-                .sheb => .sheb,
-                .sparc => .sparc,
-                .sparc64 => .sparc64,
-                .spirv32 => .spirv32,
-                .spirv64 => .spirv64,
-                .thumb => .thumb,
-                .thumbeb => .thumbeb,
-                .ve => .ve,
-                .wasm32 => .wasm32,
-                .wasm64 => .wasm64,
-                .x86_16 => .x86_16,
-                .x86 => .x86,
-                .x86_64 => .x86_64,
-                .xcore => .xcore,
-                .xtensa => .xtensa,
-                .xtensaeb => .xtensaeb,
-
+                inline else => |tag| @field(std.Target.Cpu.Arch, @tagName(tag)),
                 .default => null,
             };
         }
@@ -2584,6 +2405,10 @@ pub const TargetQuery = struct {
         windows,
         uefi,
         @"3ds",
+        wiiu,
+        @"switch",
+        gba,
+        psx,
         ps3,
         ps4,
         ps5,
@@ -2600,6 +2425,7 @@ pub const TargetQuery = struct {
         opengl,
         vulkan,
         tios,
+        ashetos,
         appleii,
         atari2600,
         atari5200,
@@ -2630,148 +2456,13 @@ pub const TargetQuery = struct {
 
         pub fn init(x: ?std.Target.Os.Tag) @This() {
             return switch (x orelse return .default) {
-                .freestanding => .freestanding,
-                .other => .other,
-                .contiki => .contiki,
-                .fuchsia => .fuchsia,
-                .hermit => .hermit,
-                .managarm => .managarm,
-                .haiku => .haiku,
-                .hurd => .hurd,
-                .illumos => .illumos,
-                .linux => .linux,
-                .plan9 => .plan9,
-                .rtems => .rtems,
-                .serenity => .serenity,
-                .dragonfly => .dragonfly,
-                .freebsd => .freebsd,
-                .netbsd => .netbsd,
-                .openbsd => .openbsd,
-                .driverkit => .driverkit,
-                .ios => .ios,
-                .maccatalyst => .maccatalyst,
-                .macos => .macos,
-                .tvos => .tvos,
-                .visionos => .visionos,
-                .watchos => .watchos,
-                .windows => .windows,
-                .uefi => .uefi,
-                .@"3ds" => .@"3ds",
-                .ps3 => .ps3,
-                .ps4 => .ps4,
-                .ps5 => .ps5,
-                .psp => .psp,
-                .vita => .vita,
-                .emscripten => .emscripten,
-                .wasi => .wasi,
-                .amdhsa => .amdhsa,
-                .amdpal => .amdpal,
-                .cuda => .cuda,
-                .mesa3d => .mesa3d,
-                .nvcl => .nvcl,
-                .opencl => .opencl,
-                .opengl => .opengl,
-                .vulkan => .vulkan,
-                .tios => .tios,
-                .appleii => .appleii,
-                .atari2600 => .atari2600,
-                .atari5200 => .atari5200,
-                .atari8 => .atari8,
-                .c64 => .c64,
-                .c128 => .c128,
-                .cpm65 => .cpm65,
-                .cx16 => .cx16,
-                .dodo => .dodo,
-                .eater => .eater,
-                .fds => .fds,
-                .geos_cbm => .geos_cbm,
-                .lynx => .lynx,
-                .mega65 => .mega65,
-                .nes => .nes,
-                .osi_c1p => .osi_c1p,
-                .pce => .pce,
-                .pce_cd => .pce_cd,
-                .pet => .pet,
-                .rp6502 => .rp6502,
-                .rpc8e => .rpc8e,
-                .sim => .sim,
-                .snes => .snes,
-                .supervision => .supervision,
-                .vic20 => .vic20,
+                inline else => |tag| @field(@This(), @tagName(tag)),
             };
         }
 
         pub fn unwrap(this: @This()) ?std.Target.Os.Tag {
             return switch (this) {
-                .freestanding => .freestanding,
-                .other => .other,
-                .contiki => .contiki,
-                .fuchsia => .fuchsia,
-                .hermit => .hermit,
-                .managarm => .managarm,
-                .haiku => .haiku,
-                .hurd => .hurd,
-                .illumos => .illumos,
-                .linux => .linux,
-                .plan9 => .plan9,
-                .rtems => .rtems,
-                .serenity => .serenity,
-                .dragonfly => .dragonfly,
-                .freebsd => .freebsd,
-                .netbsd => .netbsd,
-                .openbsd => .openbsd,
-                .driverkit => .driverkit,
-                .ios => .ios,
-                .maccatalyst => .maccatalyst,
-                .macos => .macos,
-                .tvos => .tvos,
-                .visionos => .visionos,
-                .watchos => .watchos,
-                .windows => .windows,
-                .uefi => .uefi,
-                .@"3ds" => .@"3ds",
-                .ps3 => .ps3,
-                .ps4 => .ps4,
-                .ps5 => .ps5,
-                .psp => .psp,
-                .vita => .vita,
-                .emscripten => .emscripten,
-                .wasi => .wasi,
-                .amdhsa => .amdhsa,
-                .amdpal => .amdpal,
-                .cuda => .cuda,
-                .mesa3d => .mesa3d,
-                .nvcl => .nvcl,
-                .opencl => .opencl,
-                .opengl => .opengl,
-                .vulkan => .vulkan,
-                .tios => .tios,
-                .appleii => .appleii,
-                .atari2600 => .atari2600,
-                .atari5200 => .atari5200,
-                .atari8 => .atari8,
-                .c64 => .c64,
-                .c128 => .c128,
-                .cpm65 => .cpm65,
-                .cx16 => .cx16,
-                .dodo => .dodo,
-                .eater => .eater,
-                .fds => .fds,
-                .geos_cbm => .geos_cbm,
-                .lynx => .lynx,
-                .mega65 => .mega65,
-                .nes => .nes,
-                .osi_c1p => .osi_c1p,
-                .pce => .pce,
-                .pce_cd => .pce_cd,
-                .pet => .pet,
-                .rp6502 => .rp6502,
-                .rpc8e => .rpc8e,
-                .sim => .sim,
-                .snes => .snes,
-                .supervision => .supervision,
-                .vic20 => .vic20,
-
+                inline else => |tag| @field(std.Target.Os.Tag, @tagName(tag)),
                 .default => null,
             };
         }
@@ -2792,30 +2483,13 @@ pub const TargetQuery = struct {
 
         pub fn init(x: ?std.Target.ObjectFormat) @This() {
             return switch (x orelse return .default) {
-                .c => .c,
-                .coff => .coff,
-                .elf => .elf,
-                .hex => .hex,
-                .macho => .macho,
-                .plan9 => .plan9,
-                .raw => .raw,
-                .spirv => .spirv,
-                .wasm => .wasm,
+                inline else => |tag| @field(@This(), @tagName(tag)),
             };
         }
 
         pub fn unwrap(this: @This()) ?std.Target.ObjectFormat {
             return switch (this) {
-                .c => .c,
-                .coff => .coff,
-                .elf => .elf,
-                .hex => .hex,
-                .macho => .macho,
-                .plan9 => .plan9,
-                .raw => .raw,
-                .spirv => .spirv,
-                .wasm => .wasm,
-
+                inline else => |tag| @field(std.Target.ObjectFormat, @tagName(tag)),
                 .default => null,
             };
         }
@@ -2958,7 +2632,7 @@ pub const Storage = enum {
             pub const storage: Storage = .extended;
 
             pub fn tag(this: @This(), c: *const Configuration) @FieldType(BaseFlags, "tag") {
-                const base_flags: BaseFlags = @bitCast(c.extra[@intFromEnum(this)]);
+                const base_flags: BaseFlags = @bitCast(c.extra[@backingInt(this)]);
                 return base_flags.tag;
             }
 
@@ -2967,14 +2641,14 @@ pub const Storage = enum {
                     const info = @typeInfo(S.Flags).@"struct";
                     break :blk info.field_attrs[0].defaultValue(info.field_types[0]).?;
                 };
-                const base_flags: BaseFlags = @bitCast(c.extra[@intFromEnum(this)]);
+                const base_flags: BaseFlags = @bitCast(c.extra[@backingInt(this)]);
                 if (base_flags.tag != wanted_tag) return null;
-                var i: usize = @intFromEnum(this);
+                var i: usize = @backingInt(this);
                 return data(c.extra, &i, S);
             }
 
             pub fn get(this: @This(), buffer: []const u32) U {
-                var i: usize = @intFromEnum(this);
+                var i: usize = @backingInt(this);
                 const base_flags: BaseFlags = @bitCast(buffer[i]);
                 return switch (base_flags.tag) {
                     inline else => |t| @unionInit(U, @tagName(t), data(buffer, &i, @FieldType(U, @tagName(t)))),
@@ -3102,7 +2776,7 @@ pub const Storage = enum {
             pub fn get(this: *const @This(), extra: []const u32, i: usize) Union {
                 const elem = slice(this, extra)[i];
                 return switch (this.tag(extra, i)) {
-                    inline else => |comptime_tag| @unionInit(Union, @tagName(comptime_tag), @enumFromInt(elem)),
+                    inline else => |comptime_tag| @unionInit(Union, @tagName(comptime_tag), @fromBackingInt(@intCast(elem))),
                 };
             }
 
@@ -3140,7 +2814,7 @@ pub const Storage = enum {
                     inline else => |comptime_tag| @unionInit(
                         T,
                         @tagName(comptime_tag),
-                        data(buffer, i, info.field_types[@intFromEnum(comptime_tag)]),
+                        data(buffer, i, info.field_types[@backingInt(comptime_tag)]),
                     ),
                 };
             },
@@ -3164,7 +2838,7 @@ pub const Storage = enum {
             },
             .@"enum" => {
                 defer i.* += 1;
-                return @enumFromInt(buffer[i.*]);
+                return @fromBackingInt(@intCast(buffer[i.*]));
             },
             .@"struct" => |info| switch (info.layout) {
                 .@"packed" => switch (info.backing_integer.?) {
@@ -3207,7 +2881,7 @@ pub const Storage = enum {
                                             buffer,
                                             i,
                                             container,
-                                            @typeInfo(Field.Union).@"union".field_types[@intFromEnum(comptime_tag)],
+                                            @typeInfo(Field.Union).@"union".field_types[@backingInt(comptime_tag)],
                                         ),
                                     ),
                                 },
@@ -3278,7 +2952,8 @@ pub const Storage = enum {
                 .@"extern" => {
                     const n = @divExact(@sizeOf(Field), @sizeOf(u32));
                     defer i.* += n;
-                    return @bitCast(buffer[i.*..][0..n].*);
+                    const ptr: *align(@alignOf(u32)) const Field = @ptrCast(buffer[i.*..][0..n]);
+                    return ptr.*;
                 },
             },
             else => comptime unreachable,
@@ -3354,7 +3029,7 @@ pub const Storage = enum {
                 else => comptime unreachable,
             },
             .@"enum" => {
-                buffer[i] = @intFromEnum(value);
+                buffer[i] = @backingInt(value);
                 return 1;
             },
             .@"struct" => |info| switch (info.layout) {
@@ -3409,7 +3084,7 @@ pub const Storage = enum {
                             const field_names = @typeInfo(Field.Elem).@"struct".field_names;
                             inline for (0..field_names.len) |field_i| @memcpy(
                                 buffer[i + 1 + field_i * len ..][0..len],
-                                @as([]const u32, @ptrCast(value.mal.items(@enumFromInt(field_i)))),
+                                @as([]const u32, @ptrCast(value.mal.items(@fromBackingInt(@intCast(field_i))))),
                             );
                             return 1 + field_names.len * len;
                         },
@@ -3444,7 +3119,8 @@ pub const Storage = enum {
                 },
                 .@"extern" => {
                     const n = @divExact(@sizeOf(Field), @sizeOf(u32));
-                    buffer[i..][0..n].* = @bitCast(value);
+                    const ptr: *align(@alignOf(Field)) const [n]u32 = @ptrCast(&value);
+                    buffer[i..][0..n].* = ptr.*;
                     return n;
                 },
             },
@@ -3458,7 +3134,7 @@ fn IndexType(comptime T: type) type {
         _,
 
         pub fn get(this: @This(), c: *const Configuration) T {
-            return extraData(c, T, @intFromEnum(this));
+            return extraData(c, T, @backingInt(this));
         }
     };
 }
@@ -3486,8 +3162,7 @@ pub fn load(arena: Allocator, reader: *Io.Reader) LoadError!Configuration {
     const result: Configuration = .{
         .string_bytes = try arena.alloc(u8, header.string_bytes_len),
         .steps = try arena.alloc(Step, header.steps_len),
-        .path_deps_sub = try arena.alloc(String, header.path_deps_len),
-        .path_deps_base = try arena.alloc(Path.Base, header.path_deps_len),
+        .path_deps = try arena.alloc(PathDep, header.path_deps_len),
         .unlazy_deps = try arena.alloc(String, header.unlazy_deps_len),
         .system_integrations = try arena.alloc(SystemIntegration, header.system_integrations_len),
         .available_options = try arena.alloc(AvailableOption, header.available_options_len),
@@ -3500,8 +3175,7 @@ pub fn load(arena: Allocator, reader: *Io.Reader) LoadError!Configuration {
     var vecs = [_][]u8{
         result.string_bytes,
         @ptrCast(result.steps),
-        @ptrCast(result.path_deps_base),
-        @ptrCast(result.path_deps_sub),
+        @ptrCast(result.path_deps),
         @ptrCast(result.unlazy_deps),
         @ptrCast(result.system_integrations),
         @ptrCast(result.available_options),
@@ -3512,18 +3186,46 @@ pub fn load(arena: Allocator, reader: *Io.Reader) LoadError!Configuration {
     return result;
 }
 
+/// Loads bits using native endianness when `value` spans multiple bytes.
+/// On big endian architectures, `bit_offset` uses MSb 0 bit numbering.
+/// On little endian architectures, `bit_offset` uses LSb 0 bit numbering.
+/// See `storeBits`.
 pub fn loadBits(comptime Int: type, buffer: []const Int, bit_offset: usize, comptime Result: type) Result {
     const index = bit_offset / @bitSizeOf(Int);
     const small_bit_offset = bit_offset % @bitSizeOf(Int);
     const ResultInt = @Int(.unsigned, @bitSizeOf(Result));
-    const result: ResultInt = @truncate(buffer[index] >> @intCast(small_bit_offset));
-    const available_bits = @bitSizeOf(Int) - small_bit_offset;
-    if (available_bits >= @bitSizeOf(ResultInt)) return @bitCast(result);
-    const missing_bits = @bitSizeOf(ResultInt) - available_bits;
-    const upper: ResultInt = @truncate(buffer[index + 1] & ((@as(usize, 1) << @intCast(missing_bits)) - 1));
-    return @bitCast(result | (upper << @intCast(available_bits)));
+    switch (native_endian) {
+        .little => {
+            const result: ResultInt = @truncate(buffer[index] >> @intCast(small_bit_offset));
+            const available_bits = @bitSizeOf(Int) - small_bit_offset;
+            if (available_bits >= @bitSizeOf(ResultInt)) return @bitCast(result);
+            const missing_bits = @bitSizeOf(ResultInt) - available_bits;
+            const upper: ResultInt = @truncate(buffer[index + 1] & ((@as(usize, 1) << @intCast(missing_bits)) - 1));
+            return @bitCast(result | (upper << @intCast(available_bits)));
+        },
+        .big => {
+            const available_bits = @bitSizeOf(Int) - small_bit_offset;
+            if (available_bits >= @bitSizeOf(ResultInt)) {
+                const shift = available_bits - @bitSizeOf(ResultInt);
+                const result: ResultInt = @truncate(buffer[index] >> @intCast(shift));
+                return @bitCast(result);
+            }
+            const mask = (@as(Int, 1) << @intCast(available_bits)) - 1;
+            const result: ResultInt = @intCast(buffer[index] & mask);
+            const missing_bits = @bitSizeOf(ResultInt) - available_bits;
+            const lower: ResultInt = @truncate(buffer[index + 1] >> @intCast(@bitSizeOf(Int) - missing_bits));
+            return @bitCast((result << @intCast(missing_bits)) | lower);
+        },
+    }
 }
 
+/// Store bits using native endianness when `value` spans multiple bytes.
+/// On big endian architectures:
+/// - For a given value, the bits of an earlier byte are more significant than the bits of subsequent bytes.
+/// - `bit_offset` uses MSb 0 bit numbering.
+/// On little endian architectures:
+/// - For a given value, the bits of an earlier byte are less significant than the bits of subsequent bytes.
+/// - `bit_offset` uses LSb 0 bit numbering.
 pub fn storeBits(comptime Int: type, buffer: []Int, bit_offset: usize, value: anytype) void {
     const Value = @TypeOf(value);
     const ValueInt = @Int(.unsigned, @bitSizeOf(Value));
@@ -3532,27 +3234,70 @@ pub fn storeBits(comptime Int: type, buffer: []Int, bit_offset: usize, value: an
     const small_bit_offset = bit_offset % @bitSizeOf(Int);
     const available_bits = @bitSizeOf(Int) - small_bit_offset;
     if (available_bits >= @bitSizeOf(ValueInt)) {
-        buffer[index] &= ~(((@as(Int, 1) << @intCast(@bitSizeOf(Value))) - 1) << @intCast(small_bit_offset));
-        buffer[index] |= @as(Int, value_int) << @intCast(small_bit_offset);
+        const shift = switch (native_endian) {
+            .little => small_bit_offset,
+            .big => available_bits - @bitSizeOf(ValueInt),
+        };
+        buffer[index] &= ~(((@as(Int, 1) << @intCast(@bitSizeOf(Value))) - 1) << @intCast(shift));
+        buffer[index] |= @as(Int, value_int) << @intCast(shift);
     } else {
         const DoubleInt = @Int(.unsigned, @bitSizeOf(Int) * 2);
+        const shift = switch (native_endian) {
+            .little => small_bit_offset,
+            .big => @bitSizeOf(DoubleInt) - small_bit_offset - @bitSizeOf(ValueInt),
+        };
         const ptr: *align(@alignOf(Int)) DoubleInt = @ptrCast(buffer[index..][0..2]);
-        ptr.* &= ~(((@as(DoubleInt, 1) << @intCast(@bitSizeOf(Value))) - 1) << @intCast(small_bit_offset));
-        ptr.* |= @as(DoubleInt, value_int) << @intCast(small_bit_offset);
+        ptr.* &= ~(((@as(DoubleInt, 1) << @intCast(@bitSizeOf(Value))) - 1) << @intCast(shift));
+        ptr.* |= @as(DoubleInt, value_int) << @intCast(shift);
     }
 }
 
 test "loadBits and storeBits" {
-    var buffer: [2]u32 = .{
-        0b01111111000000001111111100000000,
-        0b11111111000000001111111100000100,
+    var buffer: [2]u32 = switch (native_endian) {
+        .little => .{
+            //──┐ 0b100011 (end)     ┌─┐ 0b100
+            0b01111111000000001111111100000000,
+            //            n <── bit offset 0 ┘
+            //                             ┌── 0b100011 (start)
+            0b11111111000000001111111100000100,
+        },
+        .big => .{
+            //      ┌─┐ 0b100              ┌── 0b100011 (start)
+            0b11111110000000001111111100000100,
+            //└ bit offset 0 ──> n
+            //──┐ 0b100011 (end)
+            0b01111111000000001111111100000000,
+        },
     };
+
     try std.testing.expectEqual(0b100, loadBits(u32, &buffer, 6, u3));
     try std.testing.expectEqual(0b100011, loadBits(u32, &buffer, 29, u6));
 
+    storeBits(u32, &buffer, 0, @as(u1, 0b0));
     storeBits(u32, &buffer, 6, @as(u3, 0b010));
-    storeBits(u32, &buffer, 29, @as(u6, 0b010010));
+    storeBits(u32, &buffer, 29, @as(u6, 0b010110));
+    storeBits(u32, &buffer, 40, @as(u17, 0b01110110011111110));
 
+    try std.testing.expectEqual(0b0, loadBits(u32, &buffer, 0, u1));
     try std.testing.expectEqual(0b010, loadBits(u32, &buffer, 6, u3));
-    try std.testing.expectEqual(0b010010, loadBits(u32, &buffer, 29, u6));
+    try std.testing.expectEqual(0b010110, loadBits(u32, &buffer, 29, u6));
+    try std.testing.expectEqual(0b01110110011111110, loadBits(u32, &buffer, 40, u17));
+
+    // Test roundtripping of size/offset combinations
+    inline for (1..32) |value_size| {
+        for (0..64) |bit_offset| {
+            if (value_size + bit_offset > @bitSizeOf(@TypeOf(buffer))) continue;
+
+            buffer = .{ 0, 0 };
+
+            const Value = @Int(.unsigned, value_size);
+            const value: Value = @intCast((@as(u32, 1) << @intCast(@bitSizeOf(Value))) - 1);
+            storeBits(u32, &buffer, bit_offset, value);
+            std.testing.expectEqual(value, loadBits(u32, &buffer, bit_offset, Value)) catch |err| {
+                std.debug.print("value size: {} bit offset: {}\n", .{ value_size, bit_offset });
+                std.debug.print("buffer: {b:0>32} {b:0>32}\n", .{ buffer[0], buffer[1] });
+                return err;
+            };
+        }
+    }
 }

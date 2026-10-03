@@ -10,9 +10,9 @@ const Oom = error{OutOfMemory};
 
 pub const Decl = @import("Decl.zig");
 
-pub var files: std.StringArrayHashMapUnmanaged(File) = .empty;
+pub var files: std.array_hash_map.String(File) = .empty;
 pub var decls: std.ArrayList(Decl) = .empty;
-pub var modules: std.StringArrayHashMapUnmanaged(File.Index) = .empty;
+pub var modules: std.array_hash_map.String(File.Index) = .empty;
 
 file: File.Index,
 
@@ -42,17 +42,17 @@ pub const Category = union(enum(u8)) {
 pub const File = struct {
     ast: Ast,
     /// Maps identifiers to the declarations they point to.
-    ident_decls: std.AutoArrayHashMapUnmanaged(Ast.TokenIndex, Ast.Node.Index) = .empty,
+    ident_decls: std.array_hash_map.Auto(Ast.TokenIndex, Ast.Node.Index) = .empty,
     /// Maps field access identifiers to the containing field access node.
-    token_parents: std.AutoArrayHashMapUnmanaged(Ast.TokenIndex, Ast.Node.Index) = .empty,
+    token_parents: std.array_hash_map.Auto(Ast.TokenIndex, Ast.Node.Index) = .empty,
     /// Maps declarations to their global index.
-    node_decls: std.AutoArrayHashMapUnmanaged(Ast.Node.Index, Decl.Index) = .empty,
+    node_decls: std.array_hash_map.Auto(Ast.Node.Index, Decl.Index) = .empty,
     /// Maps function declarations to doctests.
-    doctests: std.AutoArrayHashMapUnmanaged(Ast.Node.Index, Ast.Node.Index) = .empty,
+    doctests: std.array_hash_map.Auto(Ast.Node.Index, Ast.Node.Index) = .empty,
     /// root node => its namespace scope
     /// struct/union/enum/opaque decl node => its namespace scope
     /// local var decl node => its local variable scope
-    scopes: std.AutoArrayHashMapUnmanaged(Ast.Node.Index, *Scope) = .empty,
+    scopes: std.array_hash_map.Auto(Ast.Node.Index, *Scope) = .empty,
 
     pub fn lookup_token(file: *File, token: Ast.TokenIndex) Decl.Index {
         const decl_node = file.ident_decls.get(token) orelse return .none;
@@ -68,13 +68,13 @@ pub const File = struct {
                 .file = i,
                 .parent = parent_decl,
             });
-            const decl_index: Decl.Index = @enumFromInt(decls.items.len - 1);
+            const decl_index: Decl.Index = @fromBackingInt(@intCast(decls.items.len - 1));
             try i.get().node_decls.put(gpa, node, decl_index);
             return decl_index;
         }
 
         pub fn get(i: File.Index) *File {
-            return &files.values()[@intFromEnum(i)];
+            return &files.values()[@backingInt(i)];
         }
 
         pub fn get_ast(i: File.Index) *Ast {
@@ -82,7 +82,7 @@ pub const File = struct {
         }
 
         pub fn path(i: File.Index) []const u8 {
-            return files.keys()[@intFromEnum(i)];
+            return files.keys()[@backingInt(i)];
         }
 
         pub fn findRootDecl(file_index: File.Index) Decl.Index {
@@ -329,7 +329,7 @@ pub const File = struct {
                     base_path, file_path, resolved_path,
                 });
                 if (files.getIndex(resolved_path)) |imported_file_index| {
-                    return .{ .alias = File.Index.findRootDecl(@enumFromInt(imported_file_index)) };
+                    return .{ .alias = File.Index.findRootDecl(@fromBackingInt(@intCast(imported_file_index))) };
                 } else {
                     log.warn("import target '{s}' did not resolve to any file", .{resolved_path});
                 }
@@ -388,7 +388,7 @@ pub const ModuleIndex = enum(u32) {
 pub fn add_file(file_name: []const u8, bytes: []u8) !File.Index {
     const ast = try parse(file_name, bytes);
     assert(ast.errors.len == 0);
-    const file_index: File.Index = @enumFromInt(files.entries.len);
+    const file_index: File.Index = @fromBackingInt(@intCast(files.entries.len));
     try files.put(gpa, file_name, .{ .ast = ast });
 
     var w: Walk = .{
@@ -428,7 +428,7 @@ fn parse(file_name: []const u8, source: []u8) Oom!Ast {
         break :s source[0 .. source.len - 1 :0];
     };
 
-    var ast = try Ast.parse(gpa, adjusted_source, .zig);
+    var ast = try Ast.parse(gpa, adjusted_source, .{});
     if (ast.errors.len > 0) {
         defer ast.deinit(gpa);
 
@@ -446,7 +446,7 @@ fn parse(file_name: []const u8, source: []u8) Oom!Ast {
                 file_name, err_loc.line + 1, err_loc.column + 1, rendered_err.written(),
             });
         }
-        return Ast.parse(gpa, "", .zig);
+        return Ast.parse(gpa, "", .{});
     }
     return ast;
 }
@@ -465,8 +465,8 @@ pub const Scope = struct {
     const Namespace = struct {
         base: Scope = .{ .tag = .namespace },
         parent: *Scope,
-        names: std.StringArrayHashMapUnmanaged(Ast.Node.Index) = .empty,
-        doctests: std.StringArrayHashMapUnmanaged(Ast.Node.Index) = .empty,
+        names: std.array_hash_map.String(Ast.Node.Index) = .empty,
+        doctests: std.array_hash_map.String(Ast.Node.Index) = .empty,
         decl_index: Decl.Index,
     };
 
@@ -1085,7 +1085,7 @@ pub fn isPrimitiveNonType(name: []const u8) bool {
 //
 //    // example test command:
 //    // zig test --dep input.zig -Mroot=src/Walk.zig -Minput.zig=/home/andy/dev/zig/lib/std/fs/File/zig
-//    var ast = try Ast.parse(gpa, @embedFile("input.zig"), .zig);
+//    var ast = try Ast.parse(gpa, @embedFile("input.zig"), .{});
 //    defer ast.deinit(gpa);
 //
 //    var w: Walk = .{

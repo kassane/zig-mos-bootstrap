@@ -7,7 +7,6 @@ const Object = @import("Object.zig");
 const Zcu = @import("../../Zcu.zig");
 const Alignment = Wasm.Alignment;
 const String = Wasm.String;
-const Relocation = Wasm.Relocation;
 const InternPool = @import("../../InternPool.zig");
 const Mir = @import("../../codegen/wasm/Mir.zig");
 
@@ -24,32 +23,113 @@ const ArrayList = std.ArrayList;
 /// Ordered list of data segments that will appear in the final binary.
 /// When sorted, to-be-merged segments will be made adjacent.
 /// Values are virtual address.
-data_segments: std.AutoArrayHashMapUnmanaged(Wasm.DataSegmentId, u32) = .empty,
+data_segments: std.array_hash_map.Auto(Wasm.DataSegmentId, u32) = .empty,
 /// Each time a `data_segment` offset equals zero it indicates a new group, and
 /// the next element in this array will contain the total merged segment size.
 /// Value is the virtual memory address of the end of the segment.
 data_segment_groups: ArrayList(DataSegmentGroup) = .empty,
 
 binary_bytes: ArrayList(u8) = .empty,
-missing_exports: std.AutoArrayHashMapUnmanaged(String, void) = .empty,
-function_imports: std.AutoArrayHashMapUnmanaged(String, Wasm.FunctionImportId) = .empty,
-global_imports: std.AutoArrayHashMapUnmanaged(String, Wasm.GlobalImportId) = .empty,
-data_imports: std.AutoArrayHashMapUnmanaged(String, Wasm.DataImportId) = .empty,
+missing_exports: std.array_hash_map.Auto(String, void) = .empty,
+function_imports: std.array_hash_map.Auto(String, Wasm.FunctionImportId) = .empty,
+intrinsic_function_imports: std.array_hash_map.Auto(String, Wasm.FunctionType.Index) = .empty,
+/// Function aliases emitted after function symbols.
+function_export_symbols: std.array_hash_map.Auto(String, FunctionExportSymbol) = .empty,
+global_imports: std.array_hash_map.Auto(String, Wasm.GlobalImportId) = .empty,
+data_imports: std.array_hash_map.Auto(String, Wasm.DataImportId) = .empty,
+/// Data aliases emitted after data symbols.
+data_exports: std.array_hash_map.Auto(String, DataExportSymbol) = .empty,
 
-indirect_function_table: std.AutoArrayHashMapUnmanaged(Wasm.OutputFunctionIndex, void) = .empty,
+indirect_function_table: std.array_hash_map.Auto(Wasm.OutputFunctionIndex, void) = .empty,
+sorted_init_funcs: std.ArrayList(Wasm.InitFunc) = .empty,
 
 /// A subset of the full interned function type list created only during flush.
-func_types: std.AutoArrayHashMapUnmanaged(Wasm.FunctionType.Index, void) = .empty,
+func_types: std.array_hash_map.Auto(Wasm.FunctionType.Index, void) = .empty,
+
+enum_tag_name_table: std.array_hash_map.Auto(InternPool.Index, u32) = .empty,
+
+code_relocs: std.ArrayList(Relocation) = .empty,
+data_relocs: std.ArrayList(Relocation) = .empty,
 
 /// For debug purposes only.
 memory_layout_finished: bool = false,
+
+virtual_addrs: VirtualAddrs = undefined,
 
 /// Index into `func_types`.
 pub const FuncTypeIndex = enum(u32) {
     _,
 
     pub fn fromTypeIndex(i: Wasm.FunctionType.Index, f: *const Flush) FuncTypeIndex {
-        return @enumFromInt(f.func_types.getIndex(i).?);
+        return @fromBackingInt(@intCast(f.func_types.getIndex(i).?));
+    }
+};
+
+/// Index into SYMTAB_FUNCTION.
+const FunctionSymbolIndex = enum(u32) {
+    _,
+
+    fn fromOutputFunctionIndex(i: Wasm.OutputFunctionIndex) FunctionSymbolIndex {
+        return @fromBackingInt(@backingInt(i));
+    }
+
+    fn fromObjectFunctionHandlingWeak(wasm: *const Wasm, index: Wasm.ObjectFunctionIndex) FunctionSymbolIndex {
+        return fromOutputFunctionIndex(.fromObjectFunctionHandlingWeak(wasm, index));
+    }
+
+    fn fromIpNav(wasm: *const Wasm, nav_index: InternPool.Nav.Index) FunctionSymbolIndex {
+        return fromOutputFunctionIndex(.fromIpNav(wasm, nav_index));
+    }
+
+    fn fromTagIndexType(wasm: *const Wasm, ip_index: InternPool.Index) FunctionSymbolIndex {
+        return fromOutputFunctionIndex(.fromTagIndexType(wasm, ip_index));
+    }
+
+    fn fromSymbolName(wasm: *const Wasm, name: String) FunctionSymbolIndex {
+        const f = &wasm.flush_buffer;
+        if (f.function_imports.getIndex(name)) |i| return @fromBackingInt(@intCast(i));
+        if (f.intrinsic_function_imports.getIndex(name)) |i| return @fromBackingInt(@intCast(
+            f.function_imports.entries.len + i,
+        ));
+        if (f.function_export_symbols.getIndex(name)) |i| return @fromBackingInt(@intCast(
+            f.function_imports.entries.len + f.intrinsic_function_imports.entries.len +
+                wasm.functions.entries.len + i,
+        ));
+        return fromOutputFunctionIndex(.fromSymbolName(wasm, name));
+    }
+};
+
+/// Index into SYMTAB_DATA.
+const DataSymbolIndex = enum(u32) {
+    _,
+
+    fn fromOutputDataIndex(i: Wasm.OutputDataIndex) DataSymbolIndex {
+        return @fromBackingInt(@backingInt(i));
+    }
+
+    fn fromResolution(wasm: *const Wasm, resolution: Wasm.ObjectDataImport.Resolution) DataSymbolIndex {
+        return fromOutputDataIndex(Wasm.OutputDataIndex.fromResolution(wasm, resolution).?);
+    }
+
+    fn fromObjectData(wasm: *const Wasm, index: Wasm.ObjectData.Index) DataSymbolIndex {
+        return fromOutputDataIndex(.fromObjectData(wasm, index));
+    }
+
+    fn fromUav(wasm: *const Wasm, ip_index: InternPool.Index) DataSymbolIndex {
+        return fromOutputDataIndex(.fromUav(wasm, ip_index));
+    }
+
+    fn fromNav(wasm: *const Wasm, nav_index: InternPool.Nav.Index) DataSymbolIndex {
+        return fromOutputDataIndex(.fromNav(wasm, nav_index));
+    }
+
+    fn fromSymbolName(wasm: *const Wasm, name: String) DataSymbolIndex {
+        const f = &wasm.flush_buffer;
+        if (f.data_imports.getIndex(name)) |i| return @fromBackingInt(@intCast(i));
+        if (f.data_exports.getIndex(name)) |i| return @fromBackingInt(@intCast(
+            f.data_imports.entries.len + wasm.datas.entries.len + i,
+        ));
+        return fromOutputDataIndex(.fromSymbolName(wasm, name));
     }
 };
 
@@ -66,17 +146,49 @@ const IndirectFunctionTableIndex = enum(u32) {
     }
 
     fn fromOutputFunctionIndex(f: *const Flush, i: Wasm.OutputFunctionIndex) IndirectFunctionTableIndex {
-        return @enumFromInt(f.indirect_function_table.getIndex(i).?);
+        return @fromBackingInt(@intCast(f.indirect_function_table.getIndex(i).?));
     }
 
-    fn fromZcuIndirectFunctionSetIndex(i: Wasm.ZcuIndirectFunctionSetIndex) IndirectFunctionTableIndex {
-        // These are the same since those are added to the table first.
-        return @enumFromInt(@intFromEnum(i));
+    fn fromIpNav(wasm: *const Wasm, nav_index: InternPool.Nav.Index) IndirectFunctionTableIndex {
+        return fromOutputFunctionIndex(&wasm.flush_buffer, .fromIpNav(wasm, nav_index));
     }
 
     fn toAbi(i: IndirectFunctionTableIndex) u32 {
-        return @intFromEnum(i) + 1;
+        return @backingInt(i) + 1;
     }
+};
+
+const SymbolTableOffsets = struct {
+    function: u32,
+    data: u32,
+    global: u32,
+    table: u32,
+};
+
+const FunctionExportSymbol = struct {
+    function_index: Wasm.FunctionIndex,
+    flags: Wasm.SymbolFlags,
+};
+
+const DataExportSymbol = struct {
+    resolution: Wasm.ObjectDataImport.Resolution,
+    flags: Wasm.SymbolFlags,
+};
+
+const Relocation = struct {
+    tag: Object.RelocationType,
+    offset: u32,
+    pointee: Pointee,
+    addend: i32,
+
+    const Pointee = union {
+        data: DataSymbolIndex,
+        type_index: FuncTypeIndex,
+        section: Wasm.ObjectSectionIndex,
+        function: FunctionSymbolIndex,
+        global: Wasm.GlobalIndex,
+        table: Wasm.TableIndex,
+    };
 };
 
 const DataSegmentGroup = struct {
@@ -88,9 +200,17 @@ pub fn clear(f: *Flush) void {
     f.data_segments.clearRetainingCapacity();
     f.data_segment_groups.clearRetainingCapacity();
     f.binary_bytes.clearRetainingCapacity();
+    f.intrinsic_function_imports.clearRetainingCapacity();
+    f.function_export_symbols.clearRetainingCapacity();
+    f.data_exports.clearRetainingCapacity();
     f.indirect_function_table.clearRetainingCapacity();
+    f.sorted_init_funcs.clearRetainingCapacity();
     f.func_types.clearRetainingCapacity();
+    f.enum_tag_name_table.clearRetainingCapacity();
+    f.code_relocs.clearRetainingCapacity();
+    f.data_relocs.clearRetainingCapacity();
     f.memory_layout_finished = false;
+    f.virtual_addrs = undefined;
 }
 
 pub fn deinit(f: *Flush, gpa: Allocator) void {
@@ -99,10 +219,17 @@ pub fn deinit(f: *Flush, gpa: Allocator) void {
     f.binary_bytes.deinit(gpa);
     f.missing_exports.deinit(gpa);
     f.function_imports.deinit(gpa);
+    f.intrinsic_function_imports.deinit(gpa);
+    f.function_export_symbols.deinit(gpa);
     f.global_imports.deinit(gpa);
     f.data_imports.deinit(gpa);
+    f.data_exports.deinit(gpa);
     f.indirect_function_table.deinit(gpa);
+    f.sorted_init_funcs.deinit(gpa);
     f.func_types.deinit(gpa);
+    f.enum_tag_name_table.deinit(gpa);
+    f.code_relocs.deinit(gpa);
+    f.data_relocs.deinit(gpa);
     f.* = undefined;
 }
 
@@ -122,56 +249,24 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     };
     const is_obj = comp.config.output_mode == .Obj;
     const allow_undefined = is_obj or wasm.import_symbols;
+    const zcu_references = if (comp.zcu) |zcu| try zcu.resolveReferences() else null;
 
     const entry_name = if (wasm.entry_resolution.isNavOrUnresolved(wasm)) wasm.entry_name else .none;
 
     if (comp.zcu) |zcu| {
         const ip: *const InternPool = &zcu.intern_pool; // No mutations allowed!
+        const function_imports_start = wasm.function_imports.entries.len;
+        const global_imports_start = wasm.global_imports.entries.len;
+        const data_imports_start = wasm.data_imports.entries.len;
 
         log.debug("total MIR instructions: {d}", .{wasm.mir_instructions.len});
-
-        // Detect any intrinsics that were called; they need to have dependencies on the symbols marked.
-        // Likewise detect `@tagName` calls so those functions can be included in the output and synthesized.
-        for (wasm.mir_instructions.items(.tag), wasm.mir_instructions.items(.data)) |tag, *data| switch (tag) {
-            .call_intrinsic => {
-                const symbol_name = try wasm.internString(@tagName(data.intrinsic));
-                const i: Wasm.FunctionImport.Index = @enumFromInt(wasm.object_function_imports.getIndex(symbol_name) orelse {
-                    return diags.fail("missing compiler runtime intrinsic '{t}' (undefined linker symbol)", .{
-                        data.intrinsic,
-                    });
-                });
-                try wasm.markFunctionImport(symbol_name, i.value(wasm), i);
-                log.debug("markFunctionImport intrinsic {d}={t}", .{ i, data.intrinsic });
-            },
-            .call_tag_name => {
-                assert(ip.indexToKey(data.ip_index) == .enum_type);
-                const gop = try wasm.zcu_funcs.getOrPut(gpa, data.ip_index);
-                if (!gop.found_existing) {
-                    wasm.tag_name_table_ref_count += 1;
-                    const int_tag_ty = Zcu.Type.fromInterned(data.ip_index).intTagType(zcu);
-                    gop.value_ptr.* = .{ .tag_name = .{
-                        .symbol_name = try wasm.internStringFmt("__zig_tag_name_{d}", .{data.ip_index}),
-                        .type_index = try wasm.internFunctionType(.auto, &.{int_tag_ty.ip_index}, .slice_const_u8_sentinel_0, target),
-                        .table_index = @intCast(wasm.tag_name_offs.items.len),
-                    } };
-                    const tag_names = ip.loadEnumType(data.ip_index).field_names;
-                    for (tag_names.get(ip)) |tag_name| {
-                        const slice = tag_name.toSlice(ip);
-                        try wasm.tag_name_offs.append(gpa, @intCast(wasm.tag_name_bytes.items.len));
-                        try wasm.tag_name_bytes.appendSlice(gpa, slice[0 .. slice.len + 1]);
-                    }
-                }
-                try wasm.functions.put(gpa, .fromZcuFunc(wasm, @enumFromInt(gop.index)), {});
-            },
-            else => continue,
-        };
 
         {
             var i = wasm.function_imports_len_prelink;
             while (i < f.function_imports.entries.len) {
                 const symbol_name = f.function_imports.keys()[i];
                 if (wasm.object_function_imports.getIndex(symbol_name)) |import_index_usize| {
-                    const import_index: Wasm.FunctionImport.Index = @enumFromInt(import_index_usize);
+                    const import_index: Wasm.FunctionImport.Index = @fromBackingInt(@intCast(import_index_usize));
                     try wasm.markFunctionImport(symbol_name, import_index.value(wasm), import_index);
                     f.function_imports.swapRemoveAt(i);
                     continue;
@@ -185,7 +280,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             while (i < f.data_imports.entries.len) {
                 const symbol_name = f.data_imports.keys()[i];
                 if (wasm.object_data_imports.getIndex(symbol_name)) |import_index_usize| {
-                    const import_index: Wasm.ObjectDataImport.Index = @enumFromInt(import_index_usize);
+                    const import_index: Wasm.ObjectDataImport.Index = @fromBackingInt(@intCast(import_index_usize));
                     try wasm.markDataImport(symbol_name, import_index.value(wasm), import_index);
                     f.data_imports.swapRemoveAt(i);
                     continue;
@@ -215,10 +310,22 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 log.debug("flush export '{s}' nav={d}", .{ nav_export.name.slice(wasm), nav_export.nav_index });
                 const function_index = Wasm.FunctionIndex.fromIpNav(wasm, nav_export.nav_index).?;
                 const explicit = f.missing_exports.swapRemove(nav_export.name);
-                const is_hidden = !explicit and switch (export_index.ptr(zcu).opts.visibility) {
+                const opts = export_index.ptr(zcu).opts;
+                const is_hidden = !explicit and switch (opts.visibility) {
                     .hidden => true,
                     .default, .protected => false,
                 };
+                if (is_obj) try f.function_export_symbols.put(gpa, nav_export.name, .{
+                    .function_index = function_index,
+                    .flags = .{
+                        .binding = switch (opts.linkage) {
+                            .strong => .strong,
+                            .weak => .weak,
+                        },
+                        .visibility_hidden = is_hidden,
+                        .exported = !is_hidden,
+                    },
+                });
                 if (is_hidden) {
                     try wasm.hidden_function_exports.put(gpa, nav_export.name, function_index);
                 } else {
@@ -229,15 +336,164 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 if (nav_export.name.toOptional() == entry_name)
                     wasm.entry_resolution = .fromIpNav(wasm, nav_export.nav_index);
             } else {
-                // This is a data export because Zcu currently has no way to
-                // export wasm globals.
-                _ = f.missing_exports.swapRemove(nav_export.name);
+                // data exports are linker symbols
+                // explicit exports become address globals
+                const explicit = f.missing_exports.swapRemove(nav_export.name);
+                const opts = export_index.ptr(zcu).opts;
+                try f.data_exports.put(gpa, nav_export.name, .{
+                    .resolution = .fromIpNav(wasm, nav_export.nav_index),
+                    .flags = if (is_obj) .{
+                        .binding = switch (opts.linkage) {
+                            .strong => .strong,
+                            .weak => .weak,
+                        },
+                        .visibility_hidden = !explicit and switch (opts.visibility) {
+                            .default => false,
+                            .hidden => true,
+                            .protected => false,
+                        },
+                        .exported = explicit,
+                        .tls = ip.getNav(nav_export.nav_index).resolved.?.@"threadlocal",
+                    } else .{},
+                });
                 _ = f.data_imports.swapRemove(nav_export.name);
-                if (!is_obj) {
-                    diags.addError("unable to export data symbol '{s}'; not emitting a relocatable", .{
-                        nav_export.name.slice(wasm),
+                if (explicit and !is_obj) {
+                    const global_resolution: Wasm.GlobalImport.Resolution = .fromIpNav(
+                        wasm,
+                        nav_export.nav_index,
+                    );
+                    try wasm.globals.put(gpa, global_resolution, {});
+                    try wasm.global_exports.append(gpa, .{
+                        .name = nav_export.name,
+                        .global_index = Wasm.GlobalIndex.fromResolution(wasm, global_resolution).?,
                     });
                 }
+            }
+        }
+        // handle exported values without navs
+        for (wasm.uav_exports.keys(), wasm.uav_exports.values()) |uav_export, export_index| {
+            assert(!ip.isFunctionType(ip.typeOf(uav_export.uav_index)));
+            const explicit = f.missing_exports.swapRemove(uav_export.name);
+            const opts = export_index.ptr(zcu).opts;
+            try f.data_exports.put(gpa, uav_export.name, .{
+                .resolution = .fromIpIndex(wasm, uav_export.uav_index),
+                .flags = if (is_obj) .{
+                    .binding = switch (opts.linkage) {
+                        .strong => .strong,
+                        .weak => .weak,
+                    },
+                    .visibility_hidden = !explicit and switch (opts.visibility) {
+                        .default => false,
+                        .hidden => true,
+                        .protected => false,
+                    },
+                    .exported = explicit,
+                } else .{},
+            });
+            _ = f.data_imports.swapRemove(uav_export.name);
+            if (explicit and !is_obj) {
+                const global_resolution: Wasm.GlobalImport.Resolution = .fromIpIndex(
+                    wasm,
+                    uav_export.uav_index,
+                );
+                try wasm.globals.put(gpa, global_resolution, {});
+                try wasm.global_exports.append(gpa, .{
+                    .name = uav_export.name,
+                    .global_index = Wasm.GlobalIndex.fromResolution(wasm, global_resolution).?,
+                });
+            }
+        }
+
+        // Detect any intrinsics that were called; they need to have dependencies on the symbols marked.
+        // Likewise detect `@tagName` calls so those functions can be included in the output and synthesized.
+        for (wasm.mir_instructions.items(.tag), wasm.mir_instructions.items(.data)) |tag, *data| switch (tag) {
+            .call_intrinsic => {
+                const symbol_name = try wasm.internString(@tagName(data.intrinsic));
+                if (Wasm.FunctionIndex.fromSymbolName(wasm, symbol_name) == null and
+                    !f.function_imports.contains(symbol_name))
+                {
+                    if (wasm.object_function_imports.getIndex(symbol_name)) |object_import_index| {
+                        const i: Wasm.FunctionImport.Index = @fromBackingInt(@intCast(object_import_index));
+                        try wasm.markFunctionImport(symbol_name, i.value(wasm), i);
+                        if (Wasm.FunctionIndex.fromSymbolName(wasm, symbol_name) == null) {
+                            try f.function_imports.put(gpa, symbol_name, .fromObject(i, wasm));
+                        }
+                    } else if (is_obj) {
+                        const gop = try f.intrinsic_function_imports.getOrPut(gpa, symbol_name);
+                        if (!gop.found_existing) gop.value_ptr.* = try wasm.intrinsicFunctionType(data.intrinsic);
+                    } else {
+                        return diags.fail("missing compiler runtime intrinsic '{t}' (undefined linker symbol)", .{
+                            data.intrinsic,
+                        });
+                    }
+                }
+            },
+            .call_indirect => {
+                const fn_info = zcu.typeToFunc(.fromInterned(data.ip_index)).?;
+                const type_index = wasm.getExistingFunctionType(
+                    fn_info.cc,
+                    fn_info.param_types.get(ip),
+                    .fromInterned(fn_info.return_type),
+                    fn_info.is_var_args,
+                    target,
+                ).?;
+                try f.func_types.put(gpa, type_index, {});
+            },
+            .call_tag_index => {
+                assert(ip.indexToKey(data.ip_index) == .enum_type);
+                const gop = try wasm.zcu_funcs.getOrPut(gpa, data.ip_index);
+                if (!gop.found_existing) {
+                    const int_tag_ty = Zcu.Type.fromInterned(data.ip_index).backingIntType(zcu);
+                    gop.value_ptr.* = .{ .tag_name = .{
+                        .symbol_name = try wasm.internStringFmt("__zig_tag_index_{d}", .{data.ip_index}),
+                        .type_index = try wasm.internFunctionType(.auto, &.{int_tag_ty.ip_index}, .u32, false, target),
+                    } };
+                }
+                try wasm.functions.put(gpa, .fromZcuFunc(wasm, @fromBackingInt(@intCast(gop.index))), {});
+            },
+            .enum_tag_name_table_ref => {
+                assert(ip.indexToKey(data.ip_index) == .enum_type);
+                const gop = try f.enum_tag_name_table.getOrPut(gpa, data.ip_index);
+                if (!gop.found_existing) {
+                    wasm.tag_name_table_ref_count += 1;
+                    gop.value_ptr.* = @intCast(wasm.tag_name_offs.items.len);
+                    const tag_names = ip.loadEnumType(data.ip_index).field_names;
+                    for (tag_names.get(ip)) |tag_name| {
+                        const slice = tag_name.toSlice(ip);
+                        try wasm.tag_name_offs.append(gpa, @intCast(wasm.tag_name_bytes.items.len));
+                        try wasm.tag_name_bytes.appendSlice(gpa, slice[0 .. slice.len + 1]);
+                    }
+                }
+            },
+            else => continue,
+        };
+
+        // marking above may discover additional imports
+        try f.function_imports.ensureUnusedCapacity(gpa, wasm.function_imports.entries.len - function_imports_start);
+        for (
+            wasm.function_imports.keys()[function_imports_start..],
+            wasm.function_imports.values()[function_imports_start..],
+        ) |name, id| {
+            if (!f.function_imports.contains(name) and Wasm.FunctionIndex.fromSymbolName(wasm, name) == null) {
+                f.function_imports.putAssumeCapacity(name, id);
+            }
+        }
+
+        try f.global_imports.ensureUnusedCapacity(gpa, wasm.global_imports.entries.len - global_imports_start);
+        for (
+            wasm.global_imports.keys()[global_imports_start..],
+            wasm.global_imports.values()[global_imports_start..],
+        ) |name, id| {
+            if (!f.global_imports.contains(name)) f.global_imports.putAssumeCapacity(name, id);
+        }
+
+        try f.data_imports.ensureUnusedCapacity(gpa, wasm.data_imports.entries.len - data_imports_start);
+        for (
+            wasm.data_imports.keys()[data_imports_start..],
+            wasm.data_imports.values()[data_imports_start..],
+        ) |name, id| {
+            if (!f.data_imports.contains(name) and !f.data_exports.contains(name)) {
+                f.data_imports.putAssumeCapacity(name, id);
             }
         }
 
@@ -287,10 +543,36 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     for (wasm.object_indirect_function_set.keys()) |object_function_index|
         f.indirect_function_table.putAssumeCapacity(.fromObjectFunction(wasm, object_function_index), {});
 
-    if (wasm.object_init_funcs.items.len > 0) {
+    try f.sorted_init_funcs.ensureUnusedCapacity(gpa, wasm.object_init_funcs.items.len);
+    for (wasm.object_init_funcs.items) |init_func| {
+        const func = init_func.function_index.ptr(wasm);
+        if (!func.object_index.ptr(wasm).is_included) continue;
+        f.sorted_init_funcs.appendAssumeCapacity(init_func);
+    }
+    if (f.sorted_init_funcs.items.len > 0) {
         // Zig has no constructors so these are only for object file inputs.
-        mem.sortUnstable(Wasm.InitFunc, wasm.object_init_funcs.items, {}, Wasm.InitFunc.lessThan);
-        try wasm.functions.put(gpa, .__wasm_call_ctors, {});
+        mem.sortUnstable(Wasm.InitFunc, f.sorted_init_funcs.items, {}, Wasm.InitFunc.lessThan);
+        if (!is_obj) try wasm.functions.put(gpa, .__wasm_call_ctors, {});
+    }
+
+    if (is_obj) {
+        try wasm.datas.ensureUnusedCapacity(gpa, wasm.uavs_obj.entries.len + wasm.navs_obj.entries.len + 4);
+        for (0..wasm.uavs_obj.entries.len) |i| wasm.datas.putAssumeCapacity(
+            .pack(wasm, .{ .uav_obj = @fromBackingInt(@intCast(i)) }),
+            {},
+        );
+        for (0..wasm.navs_obj.entries.len) |i| wasm.datas.putAssumeCapacity(
+            .pack(wasm, .{ .nav_obj = @fromBackingInt(@intCast(i)) }),
+            {},
+        );
+        if (wasm.error_name_table_ref_count > 0) {
+            wasm.datas.putAssumeCapacity(.__zig_error_names, {});
+            wasm.datas.putAssumeCapacity(.__zig_error_name_table, {});
+        }
+        if (wasm.tag_name_table_ref_count > 0) {
+            wasm.datas.putAssumeCapacity(.__zig_tag_names, {});
+            wasm.datas.putAssumeCapacity(.__zig_tag_name_table, {});
+        }
     }
 
     // Merge and order the data segments. Depends on garbage collection so that
@@ -303,16 +585,16 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     if (!is_obj) assert(wasm.uavs_obj.entries.len == 0);
     if (!is_obj) assert(wasm.navs_obj.entries.len == 0);
     for (0..wasm.uavs_obj.entries.len) |uavs_index| f.data_segments.putAssumeCapacityNoClobber(.pack(wasm, .{
-        .uav_obj = @enumFromInt(uavs_index),
+        .uav_obj = @fromBackingInt(@intCast(uavs_index)),
     }), @as(u32, undefined));
     for (0..wasm.navs_obj.entries.len) |navs_index| f.data_segments.putAssumeCapacityNoClobber(.pack(wasm, .{
-        .nav_obj = @enumFromInt(navs_index),
+        .nav_obj = @fromBackingInt(@intCast(navs_index)),
     }), @as(u32, undefined));
     for (0..wasm.uavs_exe.entries.len) |uavs_index| f.data_segments.putAssumeCapacityNoClobber(.pack(wasm, .{
-        .uav_exe = @enumFromInt(uavs_index),
+        .uav_exe = @fromBackingInt(@intCast(uavs_index)),
     }), @as(u32, undefined));
     for (0..wasm.navs_exe.entries.len) |navs_index| f.data_segments.putAssumeCapacityNoClobber(.pack(wasm, .{
-        .nav_exe = @enumFromInt(navs_index),
+        .nav_exe = @fromBackingInt(@intCast(navs_index)),
     }), @as(u32, undefined));
     if (wasm.error_name_table_ref_count > 0) {
         f.data_segments.putAssumeCapacity(.__zig_error_names, @as(u32, undefined));
@@ -331,14 +613,33 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     // dropped in __wasm_init_memory, which is registered as the start function
     // We also initialize bss segments (using memory.fill) as part of this
     // function.
-    if (wasm.any_passive_inits) {
+    if (!is_obj and wasm.any_passive_inits) {
         try wasm.addFunction(.__wasm_init_memory, &.{}, &.{});
     }
 
     try wasm.tables.ensureUnusedCapacity(gpa, 1);
 
     if (f.indirect_function_table.entries.len > 0) {
-        wasm.tables.putAssumeCapacity(.__indirect_function_table, {});
+        if (is_obj) {
+            const name = wasm.preloaded_strings.__indirect_function_table;
+            const gop = try wasm.object_table_imports.getOrPut(gpa, name);
+            if (!gop.found_existing) gop.value_ptr.* = .{
+                .flags = .{
+                    .undefined = true,
+                    .no_strip = true,
+                },
+                .module_name = wasm.preloaded_strings.env,
+                .name = name,
+                .source_location = .zig_object_nofile,
+                .resolution = .unresolved,
+                .limits_min = 1,
+                .limits_max = 0,
+            };
+            const import_index: Wasm.TableImport.Index = @fromBackingInt(@intCast(gop.index));
+            try wasm.markTableImport(name, gop.value_ptr, import_index);
+        } else {
+            wasm.tables.putAssumeCapacity(.__indirect_function_table, {});
+        }
     }
 
     // Sort order:
@@ -361,8 +662,8 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         pub fn lessThan(ctx: @This(), lhs: usize, rhs: usize) bool {
             const lhs_segment = ctx.segments[lhs];
             const rhs_segment = ctx.segments[rhs];
-            const lhs_category = @intFromEnum(lhs_segment.category(ctx.wasm));
-            const rhs_category = @intFromEnum(rhs_segment.category(ctx.wasm));
+            const lhs_category = @backingInt(lhs_segment.category(ctx.wasm));
+            const rhs_category = @backingInt(rhs_segment.category(ctx.wasm));
             switch (std.math.order(lhs_category, rhs_category)) {
                 .lt => return true,
                 .gt => return false,
@@ -394,7 +695,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 .gt => return false,
                 .eq => {},
             }
-            return @intFromEnum(lhs_segment) < @intFromEnum(rhs_segment);
+            return @backingInt(lhs_segment) < @backingInt(rhs_segment);
         }
     };
     f.data_segments.sortUnstable(@as(Sort, .{
@@ -409,10 +710,13 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     // Always place the stack at the start by default unless the user specified the global-base flag.
     const place_stack_first, var memory_ptr: u64 = if (wasm.global_base) |base| .{ false, base } else .{ true, 0 };
 
-    var virtual_addrs: VirtualAddrs = .{
+    const virtual_addrs = &f.virtual_addrs;
+    virtual_addrs.* = .{
+        .global_base = undefined,
         .stack_pointer = undefined,
         .heap_base = undefined,
         .heap_end = undefined,
+        .wasm_first_page_end = page_size,
         .tls_base = null,
         .tls_align = .none,
         .tls_size = null,
@@ -425,10 +729,12 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         virtual_addrs.stack_pointer = @intCast(memory_ptr);
     }
 
+    const data_vaddr: u32 = @intCast(memory_ptr);
+    virtual_addrs.global_base = data_vaddr;
+
     const segment_ids = f.data_segments.keys();
     const segment_vaddrs = f.data_segments.values();
     assert(f.data_segment_groups.items.len == 0);
-    const data_vaddr: u32 = @intCast(memory_ptr);
     if (segment_ids.len > 0) {
         var seen_tls: enum { before, during, after } = .before;
         var category: Wasm.DataSegmentId.Category = undefined;
@@ -439,7 +745,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             const start_addr = alignment.forward(memory_ptr);
 
             const want_new_segment = b: {
-                if (is_obj) break :b false;
+                if (is_obj) break :b i != 0;
                 switch (seen_tls) {
                     .before => switch (category) {
                         .tls => {
@@ -476,10 +782,10 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
 
             const size = segment_id.size(wasm);
             segment_vaddr.* = @intCast(start_addr);
-            log.debug("0x{x} {d} {s}", .{ start_addr, @intFromEnum(segment_id), segment_id.name(wasm) });
+            log.debug("0x{x} {d} {s}", .{ start_addr, @backingInt(segment_id), segment_id.name(wasm) });
             memory_ptr = start_addr + size;
         }
-        if (category != .zero) try f.data_segment_groups.append(gpa, .{
+        if (is_obj or category != .zero) try f.data_segment_groups.append(gpa, .{
             .first_segment = first_segment,
             .end_addr = @intCast(memory_ptr),
         });
@@ -545,7 +851,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
 
     // When we have TLS GOT entries and shared memory is enabled, we must
     // perform runtime relocations or else we don't create the function.
-    if (shared_memory and virtual_addrs.tls_base != null) {
+    if (!is_obj and shared_memory and virtual_addrs.tls_base != null) {
         // This logic that checks `any_tls_relocs` is missing the part where it
         // also notices threadlocal globals from Zcu code.
         if (wasm.any_tls_relocs) try wasm.addFunction(.__wasm_apply_global_tls_relocs, &.{}, &.{});
@@ -572,6 +878,9 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     for (f.function_imports.values()) |id| {
         try f.func_types.put(gpa, id.functionType(wasm), {});
     }
+    for (f.intrinsic_function_imports.values()) |type_index| {
+        try f.func_types.put(gpa, type_index, {});
+    }
     for (wasm.functions.keys()) |function| {
         try f.func_types.put(gpa, function.typeIndex(wasm), {});
     }
@@ -583,12 +892,12 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             const params = func_type.params.slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(params.len)));
             for (params) |param_ty| {
-                try appendLeb128(gpa, binary_bytes, @intFromEnum(param_ty));
+                try appendLeb128(gpa, binary_bytes, @backingInt(param_ty));
             }
             const returns = func_type.returns.slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(returns.len)));
             for (returns) |ret_ty| {
-                try appendLeb128(gpa, binary_bytes, @intFromEnum(ret_ty));
+                try appendLeb128(gpa, binary_bytes, @backingInt(ret_ty));
             }
         }
         replaceVecSectionHeader(binary_bytes, header_offset, .type, @intCast(f.func_types.entries.len));
@@ -607,7 +916,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
 
         for (f.function_imports.values()) |id| {
-            const module_name = id.moduleName(wasm).slice(wasm).?;
+            const module_name = (id.moduleName(wasm).unwrap() orelse wasm.preloaded_strings.env).slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(module_name.len)));
             try binary_bytes.appendSlice(gpa, module_name);
 
@@ -615,11 +924,25 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
 
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.function));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.function));
             const type_index: FuncTypeIndex = .fromTypeIndex(id.functionType(wasm), f);
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(type_index));
+            try appendLeb128(gpa, binary_bytes, @backingInt(type_index));
         }
         total_imports += f.function_imports.entries.len;
+
+        for (f.intrinsic_function_imports.keys(), f.intrinsic_function_imports.values()) |name_string, type_index| {
+            const module_name = wasm.preloaded_strings.env.slice(wasm);
+            try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(module_name.len)));
+            try binary_bytes.appendSlice(gpa, module_name);
+
+            const name = name_string.slice(wasm);
+            try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+            try binary_bytes.appendSlice(gpa, name);
+
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.function));
+            try appendLeb128(gpa, binary_bytes, @backingInt(FuncTypeIndex.fromTypeIndex(type_index, f)));
+        }
+        total_imports += f.intrinsic_function_imports.entries.len;
 
         for (wasm.table_imports.values()) |id| {
             const table_import = id.value(wasm);
@@ -631,8 +954,8 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
 
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.table));
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(@as(std.wasm.RefType, table_import.flags.ref_type.to())));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.table));
+            try appendLeb128(gpa, binary_bytes, @backingInt(@as(std.wasm.RefType, table_import.flags.ref_type.to())));
             try emitLimits(gpa, binary_bytes, table_import.limits());
         }
         total_imports += wasm.table_imports.entries.len;
@@ -652,7 +975,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         }
 
         for (f.global_imports.values()) |id| {
-            const module_name = id.moduleName(wasm).slice(wasm).?;
+            const module_name = (id.moduleName(wasm).unwrap() orelse wasm.preloaded_strings.env).slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(module_name.len)));
             try binary_bytes.appendSlice(gpa, module_name);
 
@@ -660,9 +983,9 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
 
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.global));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.global));
             const global_type = id.globalType(wasm);
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(@as(std.wasm.Valtype, global_type.valtype)));
+            try appendLeb128(gpa, binary_bytes, @backingInt(@as(std.wasm.Valtype, global_type.valtype)));
             try binary_bytes.append(gpa, @intFromBool(global_type.mutable));
         }
         total_imports += f.global_imports.entries.len;
@@ -680,7 +1003,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
         for (wasm.functions.keys()) |function| {
             const index: FuncTypeIndex = .fromTypeIndex(function.typeIndex(wasm), f);
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(index));
+            try appendLeb128(gpa, binary_bytes, @backingInt(index));
         }
 
         replaceVecSectionHeader(binary_bytes, header_offset, .function, @intCast(wasm.functions.count()));
@@ -692,7 +1015,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
 
         for (wasm.tables.keys()) |table| {
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(@as(std.wasm.RefType, table.refType(wasm))));
+            try appendLeb128(gpa, binary_bytes, @backingInt(@as(std.wasm.RefType, table.refType(wasm))));
             try emitLimits(gpa, binary_bytes, table.limits(wasm));
         }
 
@@ -716,22 +1039,23 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         for (wasm.globals.keys()) |global_resolution| {
             switch (global_resolution.unpack(wasm)) {
                 .unresolved => unreachable,
-                .__heap_base => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.heap_base),
-                .__heap_end => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.heap_end),
-                .__stack_pointer => try appendGlobal(gpa, binary_bytes, 1, virtual_addrs.stack_pointer),
-                .__tls_align => try appendGlobal(gpa, binary_bytes, 0, @intCast(virtual_addrs.tls_align.toByteUnits().?)),
-                .__tls_base => try appendGlobal(gpa, binary_bytes, 1, virtual_addrs.tls_base.?),
-                .__tls_size => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.tls_size.?),
+                .__heap_base => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.heap_base, is64),
+                .__heap_end => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.heap_end, is64),
+                .__stack_pointer => try appendGlobal(gpa, binary_bytes, 1, virtual_addrs.stack_pointer, is64),
+                .__tls_align => try appendGlobal(gpa, binary_bytes, 0, @intCast(virtual_addrs.tls_align.toByteUnits().?), is64),
+                .__tls_base => try appendGlobal(gpa, binary_bytes, 1, virtual_addrs.tls_base.?, is64),
+                .__tls_size => try appendGlobal(gpa, binary_bytes, 0, virtual_addrs.tls_size.?, is64),
                 .object_global => |i| {
                     const global = i.ptr(wasm);
                     try binary_bytes.appendSlice(gpa, &.{
-                        @intFromEnum(@as(std.wasm.Valtype, global.flags.global_type.valtype.to())),
+                        @backingInt(@as(std.wasm.Valtype, global.flags.global_type.valtype.to())),
                         @intFromBool(global.flags.global_type.mutable),
                     });
                     try emitExpr(wasm, binary_bytes, global.expr);
                 },
-                .nav_exe => unreachable, // Zig source code currently cannot represent this.
-                .nav_obj => unreachable, // Zig source code currently cannot represent this.
+                .uav_exe => |i| try appendGlobal(gpa, binary_bytes, 0, wasm.uavAddr(i.key(wasm).*), is64),
+                .nav_exe => |i| try appendGlobal(gpa, binary_bytes, 0, wasm.navAddr(i.key(wasm).*), is64),
+                .uav_obj, .nav_obj => unreachable,
             }
         }
 
@@ -748,18 +1072,19 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             const name = exp_name.slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.function));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.function));
             const func_index = Wasm.OutputFunctionIndex.fromFunctionIndex(wasm, function_index);
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(func_index));
+            try appendLeb128(gpa, binary_bytes, @backingInt(func_index));
         }
         exports_len += wasm.function_exports.entries.len;
 
         if (wasm.export_table and f.indirect_function_table.entries.len > 0) {
             const name = "__indirect_function_table";
-            const index: u32 = @intCast(wasm.tables.getIndex(.__indirect_function_table).?);
+            const index: u32 = @intCast(wasm.table_imports.entries.len +
+                wasm.tables.getIndex(.__indirect_function_table).?);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.table));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.table));
             try appendLeb128(gpa, binary_bytes, index);
             exports_len += 1;
         }
@@ -768,7 +1093,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             const name = "memory";
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.memory));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.memory));
             try appendLeb128(gpa, binary_bytes, @as(u32, 0));
             exports_len += 1;
         }
@@ -777,8 +1102,8 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             const name = exp.name.slice(wasm);
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
-            try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.global));
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(exp.global_index));
+            try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.global));
+            try appendLeb128(gpa, binary_bytes, @backingInt(exp.global_index));
         }
         exports_len += wasm.global_exports.items.len;
 
@@ -792,17 +1117,19 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
 
     // start section
     if (wasm.functions.getIndex(.__wasm_init_memory)) |func_index| {
-        try emitStartSection(gpa, binary_bytes, .fromFunctionIndex(wasm, @enumFromInt(func_index)));
-    } else if (Wasm.OutputFunctionIndex.fromResolution(wasm, wasm.entry_resolution)) |func_index| {
-        try emitStartSection(gpa, binary_bytes, func_index);
+        try emitStartSection(gpa, binary_bytes, .fromFunctionIndex(wasm, @fromBackingInt(@intCast(func_index))));
+        section_index += 1;
     }
 
     // element section
-    if (f.indirect_function_table.entries.len > 0) {
+    if (!is_obj and f.indirect_function_table.entries.len > 0) {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
 
         // indirect function table elements
-        const table_index: u32 = @intCast(wasm.tables.getIndex(.__indirect_function_table).?);
+        const table_index: u32 = @intCast(
+            wasm.table_imports.getIndex(wasm.preloaded_strings.__indirect_function_table) orelse
+                wasm.table_imports.entries.len + wasm.tables.getIndex(.__indirect_function_table).?,
+        );
         // passive with implicit 0-index table or set table index manually
         const flags: u32 = if (table_index == 0) 0x0 else 0x02;
         try appendLeb128(gpa, binary_bytes, flags);
@@ -820,7 +1147,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
         }
         try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(f.indirect_function_table.entries.len)));
         for (f.indirect_function_table.keys()) |func_index| {
-            try appendLeb128(gpa, binary_bytes, @intFromEnum(func_index));
+            try appendLeb128(gpa, binary_bytes, @backingInt(func_index));
         }
 
         replaceVecSectionHeader(binary_bytes, header_offset, .element, 1);
@@ -831,11 +1158,13 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     if (f.data_segment_groups.items.len > 0) {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
         replaceVecSectionHeader(binary_bytes, header_offset, .data_count, @intCast(f.data_segment_groups.items.len));
+        section_index += 1;
     }
 
     // Code section.
     if (wasm.functions.count() != 0) {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
+        const section_offset = binary_bytes.items.len - uleb128size(@intCast(wasm.functions.count()));
 
         for (wasm.functions.keys()) |resolution| switch (resolution.unpack(wasm)) {
             .unresolved => unreachable,
@@ -848,7 +1177,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             .__wasm_init_memory => {
                 const code_start = try reserveSize(gpa, binary_bytes);
                 defer replaceSize(binary_bytes, code_start);
-                try emitInitMemoryFunction(wasm, binary_bytes, &virtual_addrs);
+                try emitInitMemoryFunction(wasm, binary_bytes);
             },
             .__wasm_init_tls => {
                 const code_start = try reserveSize(gpa, binary_bytes);
@@ -860,10 +1189,22 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 const code = ptr.code.slice(wasm);
                 try appendLeb128(gpa, binary_bytes, code.len);
                 const code_start = binary_bytes.items.len;
+                const output_offset: u32 = @intCast(binary_bytes.items.len - section_offset);
                 try binary_bytes.appendSlice(gpa, code);
-                if (!is_obj) applyRelocs(binary_bytes.items[code_start..], ptr.offset, ptr.relocations(wasm), wasm);
+                if (is_obj) {
+                    try processRelocs(
+                        wasm,
+                        &f.code_relocs,
+                        output_offset,
+                        ptr.offset,
+                        ptr.relocations(wasm),
+                    );
+                } else {
+                    applyRelocs(binary_bytes.items[code_start..], ptr.offset, ptr.relocations(wasm), wasm);
+                }
             },
             .zcu_func => |i| {
+                const function_offset: u32 = @intCast(binary_bytes.items.len - section_offset);
                 const code_start = try reserveSize(gpa, binary_bytes);
                 defer replaceSize(binary_bytes, code_start);
 
@@ -874,9 +1215,17 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 const ip_index = i.key(wasm).*;
                 switch (ip.indexToKey(ip_index)) {
                     .enum_type => {
-                        try emitTagNameFunction(wasm, binary_bytes, f.data_segments.get(.__zig_tag_name_table).?, i.value(wasm).tag_name.table_index, ip_index);
+                        try emitTagIndexFunction(wasm, binary_bytes, ip_index);
                     },
                     else => {
+                        if (!zcu_references.?.contains(.wrap(.{ .func = ip_index }))) {
+                            try binary_bytes.appendSlice(gpa, &.{
+                                0, // no locals
+                                @backingInt(std.wasm.Opcode.@"unreachable"),
+                                @backingInt(std.wasm.Opcode.end),
+                            });
+                            continue;
+                        }
                         const func = i.value(wasm).function;
                         const mir: Mir = .{
                             .instructions = wasm.mir_instructions.slice().subslice(func.instructions_off, func.instructions_len),
@@ -889,7 +1238,22 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                             .func_tys = undefined,
                             .error_name_table_ref_count = undefined,
                         };
+                        const body_start: u32 = @intCast(binary_bytes.items.len);
+                        const relocs_start: u32 = @intCast(wasm.zcu_relocations.len);
+                        defer wasm.zcu_relocations.shrinkRetainingCapacity(relocs_start);
                         try mir.lower(wasm, binary_bytes);
+                        const relocs_len: u32 = @intCast(wasm.zcu_relocations.len - relocs_start);
+                        if (is_obj) {
+                            const body_len: u32 = @intCast(binary_bytes.items.len - @as(usize, body_start));
+                            const output_offset = function_offset + uleb128size(body_len);
+                            try processZcuRelocs(
+                                wasm,
+                                &f.code_relocs,
+                                output_offset,
+                                body_start,
+                                .{ .off = relocs_start, .len = relocs_len },
+                            );
+                        }
                     },
                 }
             },
@@ -911,8 +1275,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             }
         }
         for (wasm.nav_fixups.items) |nav_fixup| {
-            const ds_id: Wasm.DataSegmentId = .pack(wasm, .{ .nav_exe = nav_fixup.navs_exe_index });
-            const vaddr = f.data_segments.get(ds_id).? + nav_fixup.addend;
+            const vaddr = wasm.navAddr(nav_fixup.nav_index) + nav_fixup.addend;
             if (!is64) {
                 mem.writeInt(u32, wasm.string_bytes.items[nav_fixup.offset..][0..4], vaddr, .little);
             } else {
@@ -920,7 +1283,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             }
         }
         for (wasm.func_table_fixups.items) |fixup| {
-            const table_index: IndirectFunctionTableIndex = .fromZcuIndirectFunctionSetIndex(fixup.table_index);
+            const table_index: IndirectFunctionTableIndex = .fromIpNav(wasm, fixup.nav_index);
             if (!is64) {
                 mem.writeInt(u32, wasm.string_bytes.items[fixup.offset..][0..4], table_index.toAbi(), .little);
             } else {
@@ -932,6 +1295,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     // Data section.
     if (f.data_segment_groups.items.len != 0) {
         const header_offset = try reserveVecSectionHeader(gpa, binary_bytes);
+        const section_offset = binary_bytes.items.len - uleb128size(@intCast(f.data_segment_groups.items.len));
 
         var group_index: u32 = 0;
         var segment_offset: u32 = 0;
@@ -956,7 +1320,7 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 const group_size = group_end_addr - group_start_addr;
                 log.debug("emit data section group, {d} bytes", .{group_size});
                 const flags: Object.DataSegmentFlags = if (segment_id.isPassive(wasm)) .passive else .active;
-                try appendLeb128(gpa, binary_bytes, @intFromEnum(flags));
+                try appendLeb128(gpa, binary_bytes, @backingInt(flags));
                 // Passive segments are initialized at runtime.
                 if (flags != .passive) {
                     var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, binary_bytes);
@@ -966,7 +1330,11 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 try appendLeb128(gpa, binary_bytes, group_size);
             }
             if (segment_id.isEmpty(wasm)) {
-                // It counted for virtual memory but it does not go into the binary.
+                if (is_obj) {
+                    const group_size = group_end_addr - group_start_addr;
+                    try binary_bytes.appendNTimes(gpa, 0, group_size - segment_offset);
+                    segment_offset = group_size;
+                }
                 continue;
             }
 
@@ -976,27 +1344,27 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
             segment_offset = needed_offset;
 
             const code_start = binary_bytes.items.len;
+            const output_offset: u32 = @intCast(binary_bytes.items.len - section_offset);
             append: {
                 const code = switch (segment_id.unpack(wasm)) {
-                    .__heap_base => {
-                        mem.writeInt(u32, try binary_bytes.addManyAsArray(gpa, 4), virtual_addrs.heap_base, .little);
-                        break :append;
-                    },
-                    .__heap_end => {
-                        mem.writeInt(u32, try binary_bytes.addManyAsArray(gpa, 4), virtual_addrs.heap_end, .little);
-                        break :append;
-                    },
                     .__zig_error_names => {
                         try binary_bytes.appendSlice(gpa, wasm.error_name_bytes.items);
                         break :append;
                     },
                     .__zig_error_name_table => {
-                        if (is_obj) @panic("TODO error name table reloc");
-                        const base = f.data_segments.get(.__zig_error_names).?;
-                        if (!is64) {
-                            try emitTagNameTable(gpa, binary_bytes, wasm.error_name_offs.items, wasm.error_name_bytes.items, base, u32);
+                        if (is_obj) {
+                            try emitRelocatableNameTable(
+                                wasm,
+                                binary_bytes,
+                                &f.data_relocs,
+                                output_offset,
+                                wasm.error_name_offs.items,
+                                wasm.error_name_bytes.items,
+                                .__zig_error_names,
+                            );
                         } else {
-                            try emitTagNameTable(gpa, binary_bytes, wasm.error_name_offs.items, wasm.error_name_bytes.items, base, u64);
+                            const base = f.data_segments.get(.__zig_error_names).?;
+                            try emitTagNameTable(wasm, binary_bytes, wasm.error_name_offs.items, wasm.error_name_bytes.items, base, is64);
                         }
                         break :append;
                     },
@@ -1005,22 +1373,51 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                         break :append;
                     },
                     .__zig_tag_name_table => {
-                        if (is_obj) @panic("TODO tag name table reloc");
-                        const base = f.data_segments.get(.__zig_tag_names).?;
-                        if (!is64) {
-                            try emitTagNameTable(gpa, binary_bytes, wasm.tag_name_offs.items, wasm.tag_name_bytes.items, base, u32);
+                        if (is_obj) {
+                            try emitRelocatableNameTable(
+                                wasm,
+                                binary_bytes,
+                                &f.data_relocs,
+                                output_offset,
+                                wasm.tag_name_offs.items,
+                                wasm.tag_name_bytes.items,
+                                .__zig_tag_names,
+                            );
                         } else {
-                            try emitTagNameTable(gpa, binary_bytes, wasm.tag_name_offs.items, wasm.tag_name_bytes.items, base, u64);
+                            const base = f.data_segments.get(.__zig_tag_names).?;
+                            try emitTagNameTable(wasm, binary_bytes, wasm.tag_name_offs.items, wasm.tag_name_bytes.items, base, is64);
                         }
                         break :append;
                     },
                     .object => |i| {
                         const ptr = i.ptr(wasm);
                         try binary_bytes.appendSlice(gpa, ptr.payload.slice(wasm));
-                        if (!is_obj) applyRelocs(binary_bytes.items[code_start..], ptr.offset, ptr.relocations(wasm), wasm);
+                        if (is_obj) {
+                            try processRelocs(
+                                wasm,
+                                &f.data_relocs,
+                                output_offset,
+                                ptr.offset,
+                                ptr.relocations(wasm),
+                            );
+                        } else {
+                            applyRelocs(binary_bytes.items[code_start..], ptr.offset, ptr.relocations(wasm), wasm);
+                        }
                         break :append;
                     },
-                    inline .uav_exe, .uav_obj, .nav_exe, .nav_obj => |i| i.value(wasm).code,
+                    inline .uav_obj, .nav_obj => |i| {
+                        const zcu_data = i.value(wasm);
+                        try binary_bytes.appendSlice(gpa, zcu_data.code.slice(wasm));
+                        try processZcuRelocs(
+                            wasm,
+                            &f.data_relocs,
+                            output_offset,
+                            zcu_data.code.off.unwrap().?,
+                            zcu_data.relocs,
+                        );
+                        break :append;
+                    },
+                    inline .uav_exe, .nav_exe => |i| i.value(wasm).code,
                 };
                 try binary_bytes.appendSlice(gpa, code.slice(wasm));
             }
@@ -1033,7 +1430,263 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
     }
 
     if (is_obj) {
-        @panic("TODO emit link section for object file and emit modified relocations");
+        var symbol_table_offsets: SymbolTableOffsets = undefined;
+        {
+            const header_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
+            defer writeCustomSectionHeader(binary_bytes, header_offset);
+
+            const linking_name = "linking";
+            try appendLeb128(gpa, binary_bytes, @as(u32, linking_name.len));
+            try binary_bytes.appendSlice(gpa, linking_name);
+
+            try appendLeb128(gpa, binary_bytes, @as(u32, 2));
+
+            // WASM_SEGMENT_INFO
+            {
+                const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
+                defer replaceHeader(binary_bytes, sub_offset, @backingInt(Object.SubsectionType.segment_info));
+
+                const total_data_segments: u32 = @intCast(f.data_segment_groups.items.len);
+                try appendLeb128(gpa, binary_bytes, total_data_segments);
+
+                for (f.data_segment_groups.items) |group| {
+                    const segment = group.first_segment;
+                    const name, _ = splitSegmentName(segment.name(wasm));
+                    try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                    try binary_bytes.appendSlice(gpa, name);
+
+                    try appendLeb128(gpa, binary_bytes, @as(u32, segment.alignment(wasm).toLog2Units()));
+
+                    var flags: u32 = 0;
+                    if (segment.isStrings(wasm)) flags |= 1;
+                    if (segment.isTls(wasm)) flags |= 2;
+                    if (segment.isRetain(wasm)) flags |= 4;
+                    try appendLeb128(gpa, binary_bytes, flags);
+                }
+            }
+
+            // WASM_SYMBOL_TABLE
+            {
+                const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
+                defer replaceHeader(binary_bytes, sub_offset, @backingInt(Object.SubsectionType.symbol_table));
+
+                const total_symbols: u32 = @intCast(
+                    f.function_imports.entries.len + f.intrinsic_function_imports.entries.len +
+                        wasm.functions.entries.len +
+                        f.function_export_symbols.entries.len +
+                        f.data_imports.entries.len + wasm.datas.entries.len + f.data_exports.entries.len +
+                        f.global_imports.entries.len + wasm.globals.entries.len +
+                        wasm.table_imports.entries.len + wasm.tables.entries.len,
+                );
+                try appendLeb128(gpa, binary_bytes, total_symbols);
+                var symbol_count: u32 = 0;
+
+                // SYMTAB_FUNCTION
+                {
+                    symbol_table_offsets.function = symbol_count;
+                    for (f.function_imports.keys(), f.function_imports.values(), 0..) |symbol_name, i, function_index| {
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.function));
+                        const flags = i.flags(wasm);
+                        assert(flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(function_index)));
+                        if (flags.explicit_name) {
+                            const name = symbol_name.slice(wasm);
+                            try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                            try binary_bytes.appendSlice(gpa, name);
+                        }
+                        symbol_count += 1;
+                    }
+                    const intrinsic_flags: Wasm.SymbolFlags = .{ .undefined = true };
+                    for (f.intrinsic_function_imports.keys(), f.function_imports.entries.len..) |_, function_index| {
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.function));
+                        try appendLeb128(gpa, binary_bytes, intrinsic_flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(function_index)));
+                        symbol_count += 1;
+                    }
+                    for (
+                        wasm.functions.keys(),
+                        f.function_imports.entries.len + f.intrinsic_function_imports.entries.len..,
+                    ) |resolution, function_index| {
+                        const name = resolution.name(wasm).?;
+                        const flags = resolution.flags(wasm);
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.function));
+                        assert(!flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(function_index)));
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+                        symbol_count += 1;
+                    }
+                    for (
+                        f.function_export_symbols.keys(),
+                        f.function_export_symbols.values(),
+                    ) |name_string, symbol| {
+                        const name = name_string.slice(wasm);
+                        const function_index: Wasm.OutputFunctionIndex = .fromFunctionIndex(
+                            wasm,
+                            symbol.function_index,
+                        );
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.function));
+                        try appendLeb128(gpa, binary_bytes, symbol.flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @backingInt(function_index));
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+                        symbol_count += 1;
+                    }
+                }
+
+                // SYMTAB_DATA
+                {
+                    symbol_table_offsets.data = symbol_count;
+                    for (f.data_imports.keys(), f.data_imports.values()) |name_string, data_index| {
+                        const name = name_string.slice(wasm);
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.data));
+                        const flags = data_index.flags(wasm);
+                        assert(flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+                        symbol_count += 1;
+                    }
+                    for (wasm.datas.keys()) |resolution| {
+                        var buf: [32]u8 = undefined;
+                        const name = resolution.name(wasm, &buf);
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.data));
+                        const flags = resolution.flags(wasm);
+                        assert(!flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+
+                        const data_loc = resolution.dataLoc(wasm);
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+
+                        const segment_index = f.data_segments.getIndex(data_loc.segment).?;
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(segment_index)));
+                        try appendLeb128(gpa, binary_bytes, data_loc.offset);
+                        try appendLeb128(gpa, binary_bytes, resolution.size(wasm));
+                        symbol_count += 1;
+                    }
+                    for (f.data_exports.keys(), f.data_exports.values()) |name_string, symbol| {
+                        const name = name_string.slice(wasm);
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.data));
+                        try appendLeb128(gpa, binary_bytes, symbol.flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+
+                        const data_loc = symbol.resolution.dataLoc(wasm);
+                        const segment_index = f.data_segments.getIndex(data_loc.segment).?;
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(segment_index)));
+                        try appendLeb128(gpa, binary_bytes, data_loc.offset);
+                        try appendLeb128(gpa, binary_bytes, symbol.resolution.size(wasm));
+                        symbol_count += 1;
+                    }
+                }
+
+                // SYMTAB_GLOBAL
+                {
+                    symbol_table_offsets.global = symbol_count;
+                    for (f.global_imports.values(), 0..) |i, global_index| {
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.global));
+                        const flags = i.flags(wasm);
+                        assert(flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(global_index)));
+                        if (flags.explicit_name) {
+                            unreachable; // never set
+                        }
+                        symbol_count += 1;
+                    }
+                    for (wasm.globals.keys(), f.global_imports.entries.len..) |resolution, global_index| {
+                        var buf: [32]u8 = undefined;
+                        const name = resolution.name(wasm, &buf).?;
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.global));
+                        const flags = resolution.flags(wasm);
+                        assert(!flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(global_index)));
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+                        symbol_count += 1;
+                    }
+                }
+
+                // SYMTAB_EVENT
+                {
+                    // TODO not parsed yet
+                }
+
+                // SYMTAB_SECTION
+                {
+                    // TODO not parsed correctly yet
+                }
+
+                // SYMTAB_TABLE
+                {
+                    symbol_table_offsets.table = symbol_count;
+                    for (wasm.table_imports.values(), 0..) |i, table_index| {
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.table));
+                        const flags = i.value(wasm).flags;
+                        assert(flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(table_index)));
+                        if (flags.explicit_name) {
+                            unreachable; // never set
+                        }
+                        symbol_count += 1;
+                    }
+                    for (wasm.tables.keys(), wasm.table_imports.entries.len..) |resolution, table_index| {
+                        const name = resolution.name(wasm).?;
+                        try binary_bytes.append(gpa, @backingInt(Object.Symbol.Tag.table));
+                        const flags = resolution.flags(wasm);
+                        assert(!flags.undefined);
+                        try appendLeb128(gpa, binary_bytes, flags.toAbiInteger());
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(table_index)));
+                        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+                        try binary_bytes.appendSlice(gpa, name);
+                        symbol_count += 1;
+                    }
+                }
+                assert(symbol_count == total_symbols);
+            }
+
+            // WASM_INIT_FUNCS
+            {
+                const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
+                defer replaceHeader(binary_bytes, sub_offset, @backingInt(Object.SubsectionType.init_funcs));
+
+                try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(f.sorted_init_funcs.items.len)));
+
+                for (f.sorted_init_funcs.items) |init_func| {
+                    try appendLeb128(gpa, binary_bytes, init_func.priority);
+                    const out_index: Wasm.OutputFunctionIndex = .fromObjectFunction(wasm, init_func.function_index);
+                    const symbol_index: u32 = symbol_table_offsets.function + @backingInt(out_index);
+                    try appendLeb128(gpa, binary_bytes, symbol_index);
+                }
+            }
+
+            // WASM_COMDAT_INFO
+            {
+                // TODO
+            }
+        }
+
+        if (f.code_relocs.items.len != 0) try emitRelocSection(
+            wasm,
+            binary_bytes,
+            code_section_index.?,
+            "reloc.CODE",
+            f.code_relocs.items,
+            symbol_table_offsets,
+        );
+        if (f.data_relocs.items.len != 0) try emitRelocSection(
+            wasm,
+            binary_bytes,
+            data_section_index.?,
+            "reloc.DATA",
+            f.data_relocs.items,
+            symbol_table_offsets,
+        );
     } else if (comp.config.debug_format != .strip) {
         try emitNameSection(wasm, f.data_segment_groups.items, binary_bytes);
     }
@@ -1047,14 +1700,14 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
                 var id: [16]u8 = undefined;
                 std.crypto.hash.sha3.TurboShake128(null).hash(binary_bytes.items, &id, .{});
                 var uuid: [36]u8 = undefined;
-                _ = try std.fmt.bufPrint(&uuid, "{x}-{x}-{x}-{x}-{x}", .{
+                _ = try std.mem.print(&uuid, "{x}-{x}-{x}-{x}-{x}", .{
                     id[0..4], id[4..6], id[6..8], id[8..10], id[10..],
                 });
                 try emitBuildIdSection(gpa, binary_bytes, &uuid);
             },
             .hexstring => |hs| {
                 var buffer: [32 * 2]u8 = undefined;
-                const str = std.fmt.bufPrint(&buffer, "{x}", .{hs.toSlice()}) catch unreachable;
+                const str = std.mem.print(&buffer, "{x}", .{hs.toSlice()}) catch unreachable;
                 try emitBuildIdSection(gpa, binary_bytes, str);
             },
             else => |mode| {
@@ -1082,9 +1735,11 @@ pub fn finish(f: *Flush, wasm: *Wasm) !void {
 }
 
 const VirtualAddrs = struct {
+    global_base: u32,
     stack_pointer: u32,
     heap_base: u32,
     heap_end: u32,
+    wasm_first_page_end: u32,
     tls_base: ?u32,
     tls_align: Alignment,
     tls_size: ?u32,
@@ -1109,9 +1764,12 @@ fn emitNameSection(
 
     {
         const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
-        defer replaceHeader(binary_bytes, sub_offset, @intFromEnum(std.wasm.NameSubsection.function));
+        defer replaceHeader(binary_bytes, sub_offset, @backingInt(std.wasm.NameSubsection.function));
 
-        const total_functions: u32 = @intCast(f.function_imports.entries.len + wasm.functions.entries.len);
+        const total_functions: u32 = @intCast(
+            f.function_imports.entries.len + f.intrinsic_function_imports.entries.len +
+                wasm.functions.entries.len,
+        );
         try appendLeb128(gpa, binary_bytes, total_functions);
 
         for (f.function_imports.keys(), 0..) |name_index, function_index| {
@@ -1120,7 +1778,16 @@ fn emitNameSection(
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
         }
-        for (wasm.functions.keys(), f.function_imports.entries.len..) |resolution, function_index| {
+        for (f.intrinsic_function_imports.keys(), f.function_imports.entries.len..) |name_index, function_index| {
+            const name = name_index.slice(wasm);
+            try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(function_index)));
+            try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
+            try binary_bytes.appendSlice(gpa, name);
+        }
+        for (
+            wasm.functions.keys(),
+            f.function_imports.entries.len + f.intrinsic_function_imports.entries.len..,
+        ) |resolution, function_index| {
             const name = resolution.name(wasm).?;
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(function_index)));
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
@@ -1130,7 +1797,7 @@ fn emitNameSection(
 
     {
         const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
-        defer replaceHeader(binary_bytes, sub_offset, @intFromEnum(std.wasm.NameSubsection.global));
+        defer replaceHeader(binary_bytes, sub_offset, @backingInt(std.wasm.NameSubsection.global));
 
         const total_globals: u32 = @intCast(f.global_imports.entries.len + wasm.globals.entries.len);
         try appendLeb128(gpa, binary_bytes, total_globals);
@@ -1142,7 +1809,8 @@ fn emitNameSection(
             try binary_bytes.appendSlice(gpa, name);
         }
         for (wasm.globals.keys(), f.global_imports.entries.len..) |resolution, global_index| {
-            const name = resolution.name(wasm).?;
+            var buf: [32]u8 = undefined;
+            const name = resolution.name(wasm, &buf).?;
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(global_index)));
             try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
             try binary_bytes.appendSlice(gpa, name);
@@ -1151,7 +1819,7 @@ fn emitNameSection(
 
     {
         const sub_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
-        defer replaceHeader(binary_bytes, sub_offset, @intFromEnum(std.wasm.NameSubsection.data_segment));
+        defer replaceHeader(binary_bytes, sub_offset, @backingInt(std.wasm.NameSubsection.data_segment));
 
         const total_data_segments: u32 = @intCast(data_segment_groups.len);
         try appendLeb128(gpa, binary_bytes, total_data_segments);
@@ -1184,7 +1852,7 @@ fn emitFeaturesSection(
 
     var safety_count = feature_count;
     for (target.cpu.arch.allFeaturesList(), 0..) |*feature, i| {
-        if (!target.cpu.has(.wasm, @as(std.Target.wasm.Feature, @enumFromInt(i)))) continue;
+        if (!target.cpu.has(.wasm, @as(std.Target.wasm.Feature, @fromBackingInt(@intCast(i))))) continue;
         safety_count -= 1;
 
         try appendLeb128(gpa, binary_bytes, @as(u32, '+'));
@@ -1260,7 +1928,7 @@ fn emitProducerSection(gpa: Allocator, binary_bytes: *ArrayList(u8)) !void {
 
 fn splitSegmentName(name: []const u8) struct { []const u8, []const u8 } {
     const start = @intFromBool(name.len >= 1 and name[0] == '.');
-    const pivot = mem.indexOfScalarPos(u8, name, start, '.') orelse name.len;
+    const pivot = mem.findScalarPos(u8, name, start, '.') orelse name.len;
     return .{ name[0..pivot], name[pivot..] };
 }
 
@@ -1308,7 +1976,7 @@ fn replaceVecSectionHeader(
     const size: u32 = @intCast(bytes.items.len - offset - section_header_reserve_size + uleb128size(n_items));
     var buf: [section_header_reserve_size]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    w.writeByte(@intFromEnum(section)) catch unreachable;
+    w.writeByte(@backingInt(section)) catch unreachable;
     w.writeUleb128(size) catch unreachable;
     w.writeUleb128(n_items) catch unreachable;
     bytes.replaceRangeAssumeCapacity(offset, section_header_reserve_size, w.buffered());
@@ -1372,63 +2040,40 @@ fn emitMemoryImport(
     try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(name.len)));
     try binary_bytes.appendSlice(gpa, name);
 
-    try binary_bytes.append(gpa, @intFromEnum(std.wasm.ExternalKind.memory));
+    try binary_bytes.append(gpa, @backingInt(std.wasm.ExternalKind.memory));
     try emitLimits(gpa, binary_bytes, memory_import.limits());
 }
 
 fn emitInit(writer: *std.Io.Writer, init_expr: std.wasm.InitExpression) !void {
     switch (init_expr) {
         .i32_const => |val| {
-            try writer.writeByte(@intFromEnum(std.wasm.Opcode.i32_const));
+            try writer.writeByte(@backingInt(std.wasm.Opcode.i32_const));
             try writer.writeSleb128(val);
         },
         .i64_const => |val| {
-            try writer.writeByte(@intFromEnum(std.wasm.Opcode.i64_const));
+            try writer.writeByte(@backingInt(std.wasm.Opcode.i64_const));
             try writer.writeSleb128(val);
         },
         .f32_const => |val| {
-            try writer.writeByte(@intFromEnum(std.wasm.Opcode.f32_const));
+            try writer.writeByte(@backingInt(std.wasm.Opcode.f32_const));
             try writer.writeInt(u32, @bitCast(val), .little);
         },
         .f64_const => |val| {
-            try writer.writeByte(@intFromEnum(std.wasm.Opcode.f64_const));
+            try writer.writeByte(@backingInt(std.wasm.Opcode.f64_const));
             try writer.writeInt(u64, @bitCast(val), .little);
         },
         .global_get => |val| {
-            try writer.writeByte(@intFromEnum(std.wasm.Opcode.global_get));
+            try writer.writeByte(@backingInt(std.wasm.Opcode.global_get));
             try writer.writeUleb128(val);
         },
     }
-    try writer.writeByte(@intFromEnum(std.wasm.Opcode.end));
+    try writer.writeByte(@backingInt(std.wasm.Opcode.end));
 }
 
 pub fn emitExpr(wasm: *const Wasm, binary_bytes: *ArrayList(u8), expr: Wasm.Expr) Allocator.Error!void {
     const gpa = wasm.base.comp.gpa;
     const slice = expr.slice(wasm);
     try binary_bytes.appendSlice(gpa, slice[0 .. slice.len + 1]); // +1 to include end opcode
-}
-
-fn emitSegmentInfo(wasm: *Wasm, binary_bytes: *std.array_list.Managed(u8)) !void {
-    const gpa = wasm.base.comp.gpa;
-    try appendLeb128(gpa, binary_bytes, @intFromEnum(Wasm.SubsectionType.segment_info));
-    const segment_offset = binary_bytes.items.len;
-
-    try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(wasm.segment_info.count())));
-    for (wasm.segment_info.values()) |segment_info| {
-        log.debug("Emit segment: {s} align({d}) flags({b})", .{
-            segment_info.name,
-            segment_info.alignment,
-            segment_info.flags,
-        });
-        try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(segment_info.name.len)));
-        try binary_bytes.appendSlice(gpa, segment_info.name);
-        try appendLeb128(gpa, binary_bytes, segment_info.alignment.toLog2Units());
-        try appendLeb128(gpa, binary_bytes, segment_info.flags);
-    }
-
-    var buf: [5]u8 = undefined;
-    leb.writeUnsignedFixed(5, &buf, @as(u32, @intCast(binary_bytes.items.len - segment_offset)));
-    try binary_bytes.insertSlice(segment_offset, &buf);
 }
 
 fn uleb128size(x: u32) u32 {
@@ -1439,20 +2084,393 @@ fn uleb128size(x: u32) u32 {
 }
 
 fn emitTagNameTable(
-    gpa: Allocator,
+    wasm: *const Wasm,
     code: *ArrayList(u8),
     tag_name_offs: []const u32,
     tag_name_bytes: []const u8,
     base: u32,
-    comptime Int: type,
+    is64: bool,
 ) error{OutOfMemory}!void {
-    const ptr_size_bytes = @divExact(@bitSizeOf(Int), 8);
+    const gpa = wasm.base.comp.gpa;
+    const ptr_size_bytes: usize = if (is64) 8 else 4;
     try code.ensureUnusedCapacity(gpa, ptr_size_bytes * 2 * tag_name_offs.len);
     for (tag_name_offs) |off| {
-        const name_len: u32 = @intCast(mem.indexOfScalar(u8, tag_name_bytes[off..], 0).?);
-        mem.writeInt(Int, code.addManyAsArrayAssumeCapacity(ptr_size_bytes), base + off, .little);
-        mem.writeInt(Int, code.addManyAsArrayAssumeCapacity(ptr_size_bytes), name_len, .little);
+        const name_len: u32 = @intCast(mem.findScalar(u8, tag_name_bytes[off..], 0).?);
+        if (is64) {
+            mem.writeInt(u64, code.addManyAsArrayAssumeCapacity(8), base + off, .little);
+            mem.writeInt(u64, code.addManyAsArrayAssumeCapacity(8), name_len, .little);
+        } else {
+            mem.writeInt(u32, code.addManyAsArrayAssumeCapacity(4), base + off, .little);
+            mem.writeInt(u32, code.addManyAsArrayAssumeCapacity(4), name_len, .little);
+        }
     }
+}
+
+fn emitRelocatableNameTable(
+    wasm: *const Wasm,
+    code: *ArrayList(u8),
+    relocs: *ArrayList(Relocation),
+    output_offset: u32,
+    name_offs: []const u32,
+    name_bytes: []const u8,
+    names_resolution: Wasm.ObjectDataImport.Resolution,
+) error{OutOfMemory}!void {
+    const gpa = wasm.base.comp.gpa;
+    const ptr_size = @divExact(wasm.base.comp.root_mod.resolved_target.result.ptrBitWidth(), 8);
+    const table_start = code.items.len;
+    const data_index: DataSymbolIndex = .fromResolution(wasm, names_resolution);
+    try code.ensureUnusedCapacity(gpa, @as(usize, ptr_size) * 2 * name_offs.len);
+    try relocs.ensureUnusedCapacity(gpa, name_offs.len);
+    for (name_offs) |off| {
+        const name_len: u32 = @intCast(mem.findScalar(u8, name_bytes[off..], 0).?);
+        const reloc_offset = output_offset + @as(u32, @intCast(code.items.len - table_start));
+        switch (ptr_size) {
+            4 => {
+                @memset(code.addManyAsArrayAssumeCapacity(4), 0);
+                mem.writeInt(u32, code.addManyAsArrayAssumeCapacity(4), name_len, .little);
+            },
+            8 => {
+                @memset(code.addManyAsArrayAssumeCapacity(8), 0);
+                mem.writeInt(u64, code.addManyAsArrayAssumeCapacity(8), @intCast(name_len), .little);
+            },
+            else => unreachable,
+        }
+        relocs.appendAssumeCapacity(.{
+            .tag = if (ptr_size == 4) .memory_addr_i32 else .memory_addr_i64,
+            .offset = reloc_offset,
+            .pointee = .{ .data = data_index },
+            .addend = @intCast(off),
+        });
+    }
+}
+
+fn emitRelocSection(
+    wasm: *const Wasm,
+    binary_bytes: *ArrayList(u8),
+    section_index: u32,
+    reloc_name: []const u8,
+    relocs: []const Relocation,
+    symbol_table_offsets: SymbolTableOffsets,
+) !void {
+    const comp = wasm.base.comp;
+    const gpa = comp.gpa;
+
+    const header_offset = try reserveCustomSectionHeader(gpa, binary_bytes);
+    defer writeCustomSectionHeader(binary_bytes, header_offset);
+
+    try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(reloc_name.len)));
+    try binary_bytes.appendSlice(gpa, reloc_name);
+
+    try appendLeb128(gpa, binary_bytes, section_index);
+    try appendLeb128(gpa, binary_bytes, @as(u32, @intCast(relocs.len)));
+
+    for (relocs) |r| {
+        try binary_bytes.append(gpa, @backingInt(r.tag));
+        try appendLeb128(gpa, binary_bytes, r.offset);
+        switch (r.tag) {
+            .memory_addr_leb,
+            .memory_addr_sleb,
+            .memory_addr_i32,
+            .memory_addr_rel_sleb,
+            .memory_addr_leb64,
+            .memory_addr_sleb64,
+            .memory_addr_i64,
+            .memory_addr_rel_sleb64,
+            .memory_addr_tls_sleb,
+            .memory_addr_locrel_i32,
+            .memory_addr_tls_sleb64,
+            => {
+                const symbol_index: u32 = symbol_table_offsets.data + @backingInt(r.pointee.data);
+                try appendLeb128(gpa, binary_bytes, symbol_index);
+            },
+            .section_offset_i32 => {
+                @panic("TODO");
+            },
+            .type_index_leb => {
+                try appendLeb128(gpa, binary_bytes, @backingInt(r.pointee.type_index));
+            },
+            .function_offset_i32,
+            .function_offset_i64,
+            .function_index_leb,
+            .function_index_i32,
+            .table_index_sleb,
+            .table_index_i32,
+            .table_index_sleb64,
+            .table_index_i64,
+            .table_index_rel_sleb,
+            .table_index_rel_sleb64,
+            => {
+                const symbol_index: u32 = symbol_table_offsets.function + @backingInt(r.pointee.function);
+                try appendLeb128(gpa, binary_bytes, symbol_index);
+            },
+            .global_index_leb, .global_index_i32 => {
+                const symbol_index: u32 = symbol_table_offsets.global + @backingInt(r.pointee.global);
+                try appendLeb128(gpa, binary_bytes, symbol_index);
+            },
+            .table_number_leb => {
+                const symbol_index: u32 = symbol_table_offsets.table + @backingInt(r.pointee.table);
+                try appendLeb128(gpa, binary_bytes, symbol_index);
+            },
+            .event_index_leb => @panic("TODO"),
+        }
+        switch (r.tag) {
+            .memory_addr_leb,
+            .memory_addr_sleb,
+            .memory_addr_i32,
+            .memory_addr_rel_sleb,
+            .memory_addr_leb64,
+            .memory_addr_sleb64,
+            .memory_addr_i64,
+            .memory_addr_rel_sleb64,
+            .memory_addr_tls_sleb,
+            .memory_addr_locrel_i32,
+            .memory_addr_tls_sleb64,
+            .function_offset_i32,
+            .function_offset_i64,
+            .section_offset_i32,
+            => {
+                try appendLeb128(gpa, binary_bytes, r.addend);
+            },
+            else => {},
+        }
+    }
+}
+
+fn processZcuRelocs(
+    wasm: *const Wasm,
+    out: *ArrayList(Relocation),
+    output_offset: u32,
+    input_offset: u32,
+    relocs: Wasm.ZcuRelocation.Slice,
+) !void {
+    const gpa = wasm.base.comp.gpa;
+    for (
+        relocs.tags(wasm),
+        relocs.pointees(wasm),
+        relocs.offsets(wasm),
+        relocs.addends(wasm),
+    ) |tag, pointee, offset, addend| {
+        const output_pointee: Relocation.Pointee = switch (pointee) {
+            .function_nav => |nav_index| .{ .function = .fromIpNav(wasm, nav_index) },
+            .function_name => |name| .{ .function = .fromSymbolName(wasm, name) },
+            .tag_function => |ip_index| .{ .function = .fromTagIndexType(wasm, ip_index) },
+            .data_uav => |ip_index| .{ .data = .fromUav(wasm, ip_index) },
+            .data_nav => |nav_index| .{ .data = .fromNav(wasm, nav_index) },
+            .data_resolution => |resolution| .{ .data = .fromResolution(wasm, resolution) },
+            .stack_pointer => .{ .global = .fromSymbolName(wasm, wasm.preloaded_strings.__stack_pointer) },
+            .type_index => |type_index| .{ .type_index = .fromTypeIndex(type_index, &wasm.flush_buffer) },
+        };
+        try out.append(gpa, .{
+            .tag = tag,
+            .offset = output_offset + (offset - input_offset),
+            .pointee = output_pointee,
+            .addend = addend,
+        });
+    }
+}
+
+fn processRelocs(
+    wasm: *const Wasm,
+    out: *ArrayList(Relocation),
+    output_offset: u32,
+    input_offset: u32,
+    relocs: Wasm.ObjectRelocation.IterableSlice,
+) !void {
+    const gpa = wasm.base.comp.gpa;
+    for (
+        relocs.slice.tags(wasm),
+        relocs.slice.pointees(wasm),
+        relocs.slice.offsets(wasm),
+        relocs.slice.addends(wasm),
+    ) |tag, pointee, offset, addend| {
+        if (offset >= relocs.end) break;
+        const rebased_offset = output_offset + (offset - input_offset);
+        try out.ensureUnusedCapacity(gpa, 1);
+        switch (tag) {
+            .function_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .function_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+            .function_index_leb => out.appendAssumeCapacity(.{
+                .tag = .function_index_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+            .function_offset_i32 => @panic("TODO this value is not known yet"),
+            .function_offset_i64 => @panic("TODO this value is not known yet"),
+            .table_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .table_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+            .table_index_i64 => out.appendAssumeCapacity(.{
+                .tag = .table_index_i64,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+            .table_index_rel_sleb => @panic("TODO what does this reloc tag mean?"),
+            .table_index_rel_sleb64 => @panic("TODO what does this reloc tag mean?"),
+            .table_index_sleb => out.appendAssumeCapacity(.{
+                .tag = .table_index_sleb,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+            .table_index_sleb64 => out.appendAssumeCapacity(.{
+                .tag = .table_index_sleb64,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromObjectFunctionHandlingWeak(wasm, pointee.function) },
+                .addend = addend,
+            }),
+
+            .function_import_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .function_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .function_import_index_leb => out.appendAssumeCapacity(.{
+                .tag = .function_index_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .function_import_offset_i32 => @panic("TODO this value is not known yet"),
+            .function_import_offset_i64 => @panic("TODO this value is not known yet"),
+            .table_import_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .table_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .table_import_index_i64 => out.appendAssumeCapacity(.{
+                .tag = .table_index_i64,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .table_import_index_rel_sleb => @panic("TODO what does this reloc tag mean?"),
+            .table_import_index_rel_sleb64 => @panic("TODO what does this reloc tag mean?"),
+            .table_import_index_sleb => out.appendAssumeCapacity(.{
+                .tag = .table_index_sleb,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .table_import_index_sleb64 => out.appendAssumeCapacity(.{
+                .tag = .table_index_sleb64,
+                .offset = rebased_offset,
+                .pointee = .{ .function = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+
+            .global_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .global_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .global = .fromObjectGlobalHandlingWeak(wasm, pointee.global) },
+                .addend = addend,
+            }),
+            .global_index_leb => out.appendAssumeCapacity(.{
+                .tag = .global_index_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .global = .fromObjectGlobalHandlingWeak(wasm, pointee.global) },
+                .addend = addend,
+            }),
+
+            .global_import_index_i32 => out.appendAssumeCapacity(.{
+                .tag = .global_index_i32,
+                .offset = rebased_offset,
+                .pointee = .{ .global = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .global_import_index_leb => out.appendAssumeCapacity(.{
+                .tag = .global_index_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .global = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+
+            .memory_addr_i32,
+            .memory_addr_i64,
+            .memory_addr_leb,
+            .memory_addr_leb64,
+            .memory_addr_sleb,
+            .memory_addr_sleb64,
+            .memory_addr_tls_sleb,
+            .memory_addr_tls_sleb64,
+            => out.appendAssumeCapacity(.{
+                .tag = memoryRelocationType(tag),
+                .offset = rebased_offset,
+                .pointee = .{ .data = .fromObjectData(wasm, pointee.data) },
+                .addend = addend,
+            }),
+            .memory_addr_locrel_i32 => @panic("TODO implement relocation memory_addr_locrel_i32"),
+            .memory_addr_rel_sleb => @panic("TODO implement relocation memory_addr_rel_sleb"),
+            .memory_addr_rel_sleb64 => @panic("TODO implement relocation memory_addr_rel_sleb64"),
+
+            .memory_addr_import_i32,
+            .memory_addr_import_i64,
+            .memory_addr_import_leb,
+            .memory_addr_import_leb64,
+            .memory_addr_import_sleb,
+            .memory_addr_import_sleb64,
+            => out.appendAssumeCapacity(.{
+                .tag = memoryRelocationType(tag),
+                .offset = rebased_offset,
+                .pointee = .{ .data = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+            .memory_addr_import_locrel_i32 => @panic("TODO implement relocation memory_addr_import_locrel_i32"),
+            .memory_addr_import_rel_sleb => @panic("TODO implement relocation memory_addr_import_rel_sleb"),
+            .memory_addr_import_rel_sleb64 => @panic("TODO implement memory_addr_import_rel_sleb64"),
+            .memory_addr_import_tls_sleb => @panic("TODO"),
+            .memory_addr_import_tls_sleb64 => @panic("TODO"),
+
+            .section_offset_i32 => @panic("TODO this value is not known yet"),
+
+            .table_number_leb => out.appendAssumeCapacity(.{
+                .tag = .table_number_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .table = .fromObjectTable(wasm, pointee.table) },
+                .addend = addend,
+            }),
+            .table_import_number_leb => out.appendAssumeCapacity(.{
+                .tag = .table_number_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .table = .fromSymbolName(wasm, pointee.symbol_name) },
+                .addend = addend,
+            }),
+
+            .type_index_leb => out.appendAssumeCapacity(.{
+                .tag = .type_index_leb,
+                .offset = rebased_offset,
+                .pointee = .{ .type_index = .fromTypeIndex(pointee.type_index, &wasm.flush_buffer) },
+                .addend = addend,
+            }),
+        }
+    }
+}
+
+fn memoryRelocationType(tag: Wasm.ObjectRelocation.Tag) Object.RelocationType {
+    return switch (tag) {
+        .memory_addr_i32, .memory_addr_import_i32 => .memory_addr_i32,
+        .memory_addr_i64, .memory_addr_import_i64 => .memory_addr_i64,
+        .memory_addr_leb, .memory_addr_import_leb => .memory_addr_leb,
+        .memory_addr_leb64, .memory_addr_import_leb64 => .memory_addr_leb64,
+        .memory_addr_locrel_i32, .memory_addr_import_locrel_i32 => .memory_addr_locrel_i32,
+        .memory_addr_rel_sleb, .memory_addr_import_rel_sleb => .memory_addr_rel_sleb,
+        .memory_addr_rel_sleb64, .memory_addr_import_rel_sleb64 => .memory_addr_rel_sleb64,
+        .memory_addr_sleb, .memory_addr_import_sleb => .memory_addr_sleb,
+        .memory_addr_sleb64, .memory_addr_import_sleb64 => .memory_addr_sleb64,
+        .memory_addr_tls_sleb, .memory_addr_import_tls_sleb => .memory_addr_tls_sleb,
+        .memory_addr_tls_sleb64, .memory_addr_import_tls_sleb64 => .memory_addr_tls_sleb64,
+        else => unreachable,
+    };
 }
 
 fn applyRelocs(code: []u8, code_offset: u32, relocs: Wasm.ObjectRelocation.IterableSlice, wasm: *const Wasm) void {
@@ -1544,19 +2562,19 @@ fn reloc_sleb64_table_index(code: []u8, i: IndirectFunctionTableIndex) void {
 }
 
 fn reloc_u32_function(code: []u8, function: Wasm.OutputFunctionIndex) void {
-    mem.writeInt(u32, code[0..4], @intFromEnum(function), .little);
+    mem.writeInt(u32, code[0..4], @backingInt(function), .little);
 }
 
 fn reloc_leb_function(code: []u8, function: Wasm.OutputFunctionIndex) void {
-    leb.writeUnsignedFixed(5, code[0..5], @intFromEnum(function));
+    leb.writeUnsignedFixed(5, code[0..5], @backingInt(function));
 }
 
 fn reloc_u32_global(code: []u8, global: Wasm.GlobalIndex) void {
-    mem.writeInt(u32, code[0..4], @intFromEnum(global), .little);
+    mem.writeInt(u32, code[0..4], @backingInt(global), .little);
 }
 
 fn reloc_leb_global(code: []u8, global: Wasm.GlobalIndex) void {
-    leb.writeUnsignedFixed(5, code[0..5], @intFromEnum(global));
+    leb.writeUnsignedFixed(5, code[0..5], @backingInt(global));
 }
 
 const RelocAddr = struct {
@@ -1569,17 +2587,28 @@ const RelocAddr = struct {
     fn fromSymbolName(wasm: *const Wasm, name: String, addend: i32) RelocAddr {
         const flush = &wasm.flush_buffer;
         if (wasm.object_data_imports.getPtr(name)) |import| {
-            return fromDataLoc(flush, import.resolution.dataLoc(wasm), addend);
-        } else if (wasm.data_imports.get(name)) |id| {
-            return fromDataLoc(flush, .fromDataImportId(wasm, id), addend);
-        } else {
-            unreachable;
+            if (import.resolution != .unresolved) {
+                if (wasm.syntheticDataAddr(import.resolution)) |addr| {
+                    return fromAddr(addr, addend);
+                }
+                return fromDataLoc(flush, import.resolution.dataLoc(wasm), addend);
+            }
         }
+        if (flush.data_exports.get(name)) |symbol| {
+            return fromDataLoc(flush, symbol.resolution.dataLoc(wasm), addend);
+        }
+        if (wasm.data_imports.get(name)) |id| {
+            return fromDataLoc(flush, .fromDataImportId(wasm, id), addend);
+        }
+        unreachable;
     }
 
     fn fromDataLoc(flush: *const Flush, data_loc: Wasm.DataLoc, addend: i32) RelocAddr {
-        const base_addr: i64 = flush.data_segments.get(data_loc.segment).?;
-        return .{ .addr = @intCast(base_addr + data_loc.offset + addend) };
+        return fromAddr(flush.data_segments.get(data_loc.segment).? + data_loc.offset, addend);
+    }
+
+    fn fromAddr(addr: u32, addend: i32) RelocAddr {
+        return .{ .addr = @intCast(@as(i64, addr) + addend) };
     }
 };
 
@@ -1608,11 +2637,11 @@ fn reloc_sleb64_addr(code: []u8, ra: RelocAddr) void {
 }
 
 fn reloc_leb_table(code: []u8, table: Wasm.TableIndex) void {
-    leb.writeUnsignedFixed(5, code[0..5], @intFromEnum(table));
+    leb.writeUnsignedFixed(5, code[0..5], @backingInt(table));
 }
 
 fn reloc_leb_type(code: []u8, index: FuncTypeIndex) void {
-    leb.writeUnsignedFixed(5, code[0..5], @intFromEnum(index));
+    leb.writeUnsignedFixed(5, code[0..5], @backingInt(index));
 }
 
 fn emitCallCtorsFunction(wasm: *const Wasm, binary_bytes: *ArrayList(u8)) Allocator.Error!void {
@@ -1621,33 +2650,29 @@ fn emitCallCtorsFunction(wasm: *const Wasm, binary_bytes: *ArrayList(u8)) Alloca
     try binary_bytes.ensureUnusedCapacity(gpa, 5 + 1);
     appendReservedUleb32(binary_bytes, 0); // no locals
 
-    for (wasm.object_init_funcs.items) |init_func| {
+    for (wasm.flush_buffer.sorted_init_funcs.items) |init_func| {
         const func = init_func.function_index.ptr(wasm);
-        if (!func.object_index.ptr(wasm).is_included) continue;
         const ty = func.type_index.ptr(wasm);
         const n_returns = ty.returns.slice(wasm).len;
 
         // Call function by its function index
         try binary_bytes.ensureUnusedCapacity(gpa, 1 + 5 + n_returns + 1);
         const call_index: Wasm.OutputFunctionIndex = .fromObjectFunction(wasm, init_func.function_index);
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.call));
-        appendReservedUleb32(binary_bytes, @intFromEnum(call_index));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.call));
+        appendReservedUleb32(binary_bytes, @backingInt(call_index));
 
         // drop all returned values from the stack as __wasm_call_ctors has no return value
-        binary_bytes.appendNTimesAssumeCapacity(@intFromEnum(std.wasm.Opcode.drop), n_returns);
+        binary_bytes.appendNTimesAssumeCapacity(@backingInt(std.wasm.Opcode.drop), n_returns);
     }
 
-    binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end)); // end function body
+    binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end)); // end function body
 }
 
-fn emitInitMemoryFunction(
-    wasm: *const Wasm,
-    binary_bytes: *ArrayList(u8),
-    virtual_addrs: *const VirtualAddrs,
-) Allocator.Error!void {
+fn emitInitMemoryFunction(wasm: *const Wasm, binary_bytes: *ArrayList(u8)) Allocator.Error!void {
     const comp = wasm.base.comp;
     const gpa = comp.gpa;
     const shared_memory = comp.config.shared_memory;
+    const virtual_addrs = &wasm.flush_buffer.virtual_addrs;
 
     // Passive segments are used to avoid memory being reinitialized on each
     // thread's instantiation. These passive segments are initialized and
@@ -1664,41 +2689,39 @@ fn emitInitMemoryFunction(
         try binary_bytes.ensureUnusedCapacity(gpa, 2 * 3 + 6 * 3 + 1 + 6 * 3 + 1 + 5 * 4 + 1 + 1);
         // destination blocks
         // based on values we jump to corresponding label
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.block)); // $drop
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.BlockType.empty));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.block)); // $drop
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.BlockType.empty));
 
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.block)); // $wait
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.BlockType.empty));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.block)); // $wait
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.BlockType.empty));
 
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.block)); // $init
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.BlockType.empty));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.block)); // $init
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.BlockType.empty));
 
         // atomically check
         appendReservedI32Const(binary_bytes, flag_address);
         appendReservedI32Const(binary_bytes, 0);
         appendReservedI32Const(binary_bytes, 1);
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.atomics_prefix));
-        appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.AtomicsOpcode.i32_atomic_rmw_cmpxchg));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.atomics_prefix));
+        appendReservedUleb32(binary_bytes, @backingInt(std.wasm.AtomicsOpcode.i32_atomic_rmw_cmpxchg));
         appendReservedUleb32(binary_bytes, 2); // alignment
         appendReservedUleb32(binary_bytes, 0); // offset
 
         // based on the value from the atomic check, jump to the label.
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.br_table));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.br_table));
         appendReservedUleb32(binary_bytes, 2); // length of the table (we have 3 blocks but because of the mandatory default the length is 2).
         appendReservedUleb32(binary_bytes, 0); // $init
         appendReservedUleb32(binary_bytes, 1); // $wait
         appendReservedUleb32(binary_bytes, 2); // $drop
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
     }
 
     const segment_groups = wasm.flush_buffer.data_segment_groups.items;
-    var prev_end: u32 = 0;
     for (segment_groups, 0..) |group, segment_index| {
-        defer prev_end = group.end_addr;
         const segment = group.first_segment;
         if (!segment.isPassive(wasm)) continue;
 
-        const start_addr: u32 = @intCast(segment.alignment(wasm).forward(prev_end));
+        const start_addr = wasm.flush_buffer.data_segments.get(segment).?;
         const segment_size: u32 = group.end_addr - start_addr;
 
         try binary_bytes.ensureUnusedCapacity(gpa, 6 + 6 + 1 + 5 + 6 + 6 + 1 + 6 * 2 + 1 + 1);
@@ -1713,19 +2736,19 @@ fn emitInitMemoryFunction(
             // global.  This allows the runtime to use this static copy of the
             // TLS data for the first/main thread.
             appendReservedI32Const(binary_bytes, start_addr);
-            binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.global_set));
+            binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.global_set));
             appendReservedUleb32(binary_bytes, virtual_addrs.tls_base.?);
         }
 
         appendReservedI32Const(binary_bytes, 0);
         appendReservedI32Const(binary_bytes, segment_size);
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.misc_prefix));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.misc_prefix));
         if (segment.isBss(wasm)) {
             // fill bss segment with zeroes
-            appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.MiscOpcode.memory_fill));
+            appendReservedUleb32(binary_bytes, @backingInt(std.wasm.MiscOpcode.memory_fill));
         } else {
             // initialize the segment
-            appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.MiscOpcode.memory_init));
+            appendReservedUleb32(binary_bytes, @backingInt(std.wasm.MiscOpcode.memory_init));
             appendReservedUleb32(binary_bytes, @intCast(segment_index));
         }
         binary_bytes.appendAssumeCapacity(0); // memory index immediate
@@ -1737,38 +2760,38 @@ fn emitInitMemoryFunction(
         // we set the init memory flag to value '2'
         appendReservedI32Const(binary_bytes, flag_address);
         appendReservedI32Const(binary_bytes, 2);
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.atomics_prefix));
-        appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.AtomicsOpcode.i32_atomic_store));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.atomics_prefix));
+        appendReservedUleb32(binary_bytes, @backingInt(std.wasm.AtomicsOpcode.i32_atomic_store));
         appendReservedUleb32(binary_bytes, @as(u32, 2)); // alignment
         appendReservedUleb32(binary_bytes, @as(u32, 0)); // offset
 
         // notify any waiters for segment initialization completion
         appendReservedI32Const(binary_bytes, flag_address);
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_const));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_const));
         appendReservedLeb128(binary_bytes, @as(i32, -1)); // number of waiters
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.atomics_prefix));
-        appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.AtomicsOpcode.memory_atomic_notify));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.atomics_prefix));
+        appendReservedUleb32(binary_bytes, @backingInt(std.wasm.AtomicsOpcode.memory_atomic_notify));
         appendReservedUleb32(binary_bytes, @as(u32, 2)); // alignment
         appendReservedUleb32(binary_bytes, @as(u32, 0)); // offset
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.drop));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.drop));
 
         // branch and drop segments
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.br));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.br));
         appendReservedUleb32(binary_bytes, @as(u32, 1));
 
         // wait for thread to initialize memory segments
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end)); // end $wait
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end)); // end $wait
         appendReservedI32Const(binary_bytes, flag_address);
         appendReservedI32Const(binary_bytes, 1); // expected flag value
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_const));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i64_const));
         appendReservedLeb128(binary_bytes, @as(i64, -1)); // timeout
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.atomics_prefix));
-        appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.AtomicsOpcode.memory_atomic_wait32));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.atomics_prefix));
+        appendReservedUleb32(binary_bytes, @backingInt(std.wasm.AtomicsOpcode.memory_atomic_wait32));
         appendReservedUleb32(binary_bytes, @as(u32, 2)); // alignment
         appendReservedUleb32(binary_bytes, @as(u32, 0)); // offset
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.drop));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.drop));
 
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end)); // end $drop
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end)); // end $drop
     }
 
     for (segment_groups, 0..) |group, segment_index| {
@@ -1781,13 +2804,13 @@ fn emitInitMemoryFunction(
 
         try binary_bytes.ensureUnusedCapacity(gpa, 1 + 5 + 5 + 1);
 
-        binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.misc_prefix));
-        appendReservedUleb32(binary_bytes, @intFromEnum(std.wasm.MiscOpcode.data_drop));
+        binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.misc_prefix));
+        appendReservedUleb32(binary_bytes, @backingInt(std.wasm.MiscOpcode.data_drop));
         appendReservedUleb32(binary_bytes, @intCast(segment_index));
     }
 
     // End of the function body
-    binary_bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+    binary_bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
 }
 
 fn emitInitTlsFunction(wasm: *const Wasm, bytes: *ArrayList(u8)) Allocator.Error!void {
@@ -1811,28 +2834,28 @@ fn emitInitTlsFunction(wasm: *const Wasm, bytes: *ArrayList(u8)) Allocator.Error
 
         const param_local: u32 = 0;
 
-        bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
+        bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
         appendReservedUleb32(bytes, param_local);
 
-        const tls_base_global_index: Wasm.GlobalIndex = @enumFromInt(wasm.globals.getIndex(.__tls_base).?);
-        bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.global_set));
-        appendReservedUleb32(bytes, @intFromEnum(tls_base_global_index));
+        const tls_base_global_index: Wasm.GlobalIndex = @fromBackingInt(@intCast(wasm.globals.getIndex(.__tls_base).?));
+        bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.global_set));
+        appendReservedUleb32(bytes, @backingInt(tls_base_global_index));
 
         // load stack values for the bulk-memory operation
         {
-            bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
+            bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
             appendReservedUleb32(bytes, param_local);
 
-            bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_const));
+            bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_const));
             appendReservedUleb32(bytes, 0); //segment offset
 
-            bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_const));
+            bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_const));
             appendReservedUleb32(bytes, group_size); //segment offset
         }
 
         // perform the bulk-memory operation to initialize the data segment
-        bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.misc_prefix));
-        appendReservedUleb32(bytes, @intFromEnum(std.wasm.MiscOpcode.memory_init));
+        bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.misc_prefix));
+        appendReservedUleb32(bytes, @backingInt(std.wasm.MiscOpcode.memory_init));
         // segment immediate
         appendReservedUleb32(bytes, data_segment_index);
         // memory index immediate (always 0)
@@ -1843,24 +2866,22 @@ fn emitInitTlsFunction(wasm: *const Wasm, bytes: *ArrayList(u8)) Allocator.Error
     // which performs all runtime TLS relocations. This is a synthetic function,
     // generated by the linker.
     if (wasm.functions.getIndex(.__wasm_apply_global_tls_relocs)) |function_index| {
-        const output_function_index: Wasm.OutputFunctionIndex = .fromFunctionIndex(wasm, @enumFromInt(function_index));
-        bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.call));
-        appendReservedUleb32(bytes, @intFromEnum(output_function_index));
+        const output_function_index: Wasm.OutputFunctionIndex = .fromFunctionIndex(wasm, @fromBackingInt(@intCast(function_index)));
+        bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.call));
+        appendReservedUleb32(bytes, @backingInt(output_function_index));
     }
 
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+    bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
 }
 
 fn emitStartSection(gpa: Allocator, bytes: *ArrayList(u8), i: Wasm.OutputFunctionIndex) !void {
     const header_offset = try reserveVecSectionHeader(gpa, bytes);
-    replaceVecSectionHeader(bytes, header_offset, .start, @intFromEnum(i));
+    replaceVecSectionHeader(bytes, header_offset, .start, @backingInt(i));
 }
 
-fn emitTagNameFunction(
+fn emitTagIndexFunction(
     wasm: *Wasm,
     code: *ArrayList(u8),
-    table_base_addr: u32,
-    table_index: u32,
     enum_type_ip: InternPool.Index,
 ) !void {
     const comp = wasm.base.comp;
@@ -1870,39 +2891,40 @@ fn emitTagNameFunction(
     const enum_type = ip.loadEnumType(enum_type_ip);
     const tag_values = enum_type.field_values.get(ip);
 
-    const slice_abi_size = 8;
-    const encoded_alignment = @ctz(@as(u32, 4));
-
     if (tag_values.len == 0) {
-        // Auto-numbered, therefore a direct table lookup.
+        // Auto-numbered
 
-        try code.ensureUnusedCapacity(
-            gpa,
-            6 * @sizeOf(std.wasm.Opcode) +
-                7 * 5 + // appendReservedUleb32
-                1 * 6, // appendReservedI32Const
-        );
+        const len = enum_type.field_names.len;
+
+        try code.ensureUnusedCapacity(gpa, 13 + 5 * 2);
 
         appendReservedUleb32(code, 0); // no locals
 
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.block));
+        code.appendAssumeCapacity(@backingInt(std.wasm.BlockType.empty));
+
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
         appendReservedUleb32(code, 0);
 
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
-        appendReservedUleb32(code, 1);
+        appendReservedI32Const(code, len);
 
-        appendReservedI32Const(code, slice_abi_size);
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_mul));
+        // if < len -> break out of block
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_lt_u));
 
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_load));
-        appendReservedUleb32(code, encoded_alignment);
-        appendReservedUleb32(code, table_base_addr + table_index * 8);
-
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_store));
-        appendReservedUleb32(code, encoded_alignment);
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.br_if));
         appendReservedUleb32(code, 0);
 
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+        // invalid -> return -1
+        appendReservedI32Const(code, ~@as(u32, 0));
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.@"return"));
+
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
+
+        // valid -> return input
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
+        appendReservedUleb32(code, 0);
+
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
 
         return;
     }
@@ -1920,17 +2942,10 @@ fn emitTagNameFunction(
 
     appendReservedUleb32(code, 0); // no locals
 
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
-    appendReservedUleb32(code, 0);
-
-    // Outer block that computes table offset.
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.block));
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.BlockType.i32));
-
     for (tag_values, 0..) |tag_value, tag_index| {
         // block for this if case
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.block));
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.BlockType.empty));
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.block));
+        code.appendAssumeCapacity(@backingInt(std.wasm.BlockType.empty));
 
         const val: Zcu.Value = .fromInterned(tag_value);
         if (is_big_int) {
@@ -1945,22 +2960,22 @@ fn emitTagNameFunction(
             try code.ensureUnusedCapacity(gpa, 35 * num_limbs);
 
             for (0..num_limbs) |limb_index| {
-                code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
-                appendReservedUleb32(code, 1);
+                code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
+                appendReservedUleb32(code, 0);
 
-                code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_load));
+                code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i64_load));
                 appendReservedUleb32(code, @ctz(@as(u32, 8)));
                 appendReservedUleb32(code, @intCast(limb_index * 8));
 
                 appendReservedI64Const(code, limbs[limb_index]);
-                code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_ne));
+                code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i64_ne));
 
-                code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.br_if));
+                code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.br_if));
                 appendReservedUleb32(code, 0);
             }
         } else {
-            code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.local_get));
-            appendReservedUleb32(code, 1);
+            code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.local_get));
+            appendReservedUleb32(code, 0);
 
             switch (int_info.bits) {
                 0...32 => {
@@ -1969,7 +2984,7 @@ fn emitTagNameFunction(
                         .unsigned => @intCast(val.toUnsignedInt(zcu)),
                     };
                     appendReservedI32Const(code, x);
-                    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_ne));
+                    code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_ne));
                 },
                 33...64 => {
                     const x: u64 = switch (int_info.signedness) {
@@ -1977,42 +2992,30 @@ fn emitTagNameFunction(
                         .unsigned => val.toUnsignedInt(zcu),
                     };
                     appendReservedI64Const(code, x);
-                    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_ne));
+                    code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i64_ne));
                 },
                 else => unreachable,
             }
 
-            code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.br_if));
+            code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.br_if));
             appendReservedUleb32(code, 0);
         }
 
-        // Put the table offset of the result on the stack.
-        appendReservedI32Const(code, @intCast(tag_index * slice_abi_size));
+        appendReservedI32Const(code, @intCast(tag_index));
 
-        // break outside blocks
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.br));
-        appendReservedUleb32(code, 1);
-
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.@"return"));
         // end the block for this case
-        code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+        code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
     }
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.@"unreachable"));
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
 
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_load));
-    appendReservedUleb32(code, encoded_alignment);
-    appendReservedUleb32(code, table_base_addr + table_index * 8);
+    appendReservedI32Const(code, ~@as(u32, 0));
 
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_store));
-    appendReservedUleb32(code, encoded_alignment);
-    appendReservedUleb32(code, 0);
-
-    code.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+    code.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
 }
 
 /// Writes an unsigned 32-bit integer as a LEB128-encoded 'i32.const' value.
 fn appendReservedI32Const(bytes: *ArrayList(u8), val: u32) void {
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_const));
+    bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i32_const));
     var w: std.Io.Writer = .fromArrayList(bytes);
     defer bytes.* = w.toArrayList();
     return w.writeSleb128(@as(i32, @bitCast(val))) catch |err| switch (err) {
@@ -2022,7 +3025,7 @@ fn appendReservedI32Const(bytes: *ArrayList(u8), val: u32) void {
 
 /// Writes an unsigned 64-bit integer as a LEB128-encoded 'i64.const' value.
 fn appendReservedI64Const(bytes: *ArrayList(u8), val: u64) void {
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i64_const));
+    bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.i64_const));
     var w: std.Io.Writer = .fromArrayList(bytes);
     defer bytes.* = w.toArrayList();
     return w.writeSleb128(@as(i64, @bitCast(val))) catch |err| switch (err) {
@@ -2038,13 +3041,16 @@ fn appendReservedUleb32(bytes: *ArrayList(u8), val: u32) void {
     };
 }
 
-fn appendGlobal(gpa: Allocator, bytes: *ArrayList(u8), mutable: u8, val: u32) Allocator.Error!void {
-    try bytes.ensureUnusedCapacity(gpa, 9);
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Valtype.i32));
+fn appendGlobal(gpa: Allocator, bytes: *ArrayList(u8), mutable: u8, val: u64, is64: bool) Allocator.Error!void {
+    try bytes.ensureUnusedCapacity(gpa, if (is64) 14 else 9);
+    bytes.appendAssumeCapacity(@backingInt(@as(std.wasm.Valtype, if (is64) .i64 else .i32)));
     bytes.appendAssumeCapacity(mutable);
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.i32_const));
-    appendReservedUleb32(bytes, val);
-    bytes.appendAssumeCapacity(@intFromEnum(std.wasm.Opcode.end));
+    if (is64) {
+        appendReservedI64Const(bytes, val);
+    } else {
+        appendReservedI32Const(bytes, @intCast(val));
+    }
+    bytes.appendAssumeCapacity(@backingInt(std.wasm.Opcode.end));
 }
 
 fn appendLeb128(gpa: Allocator, bytes: *ArrayList(u8), value: anytype) Allocator.Error!void {

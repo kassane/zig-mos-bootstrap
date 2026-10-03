@@ -124,15 +124,15 @@ const Fiber = struct {
             const shift = 1;
 
             fn subWrap(lhs: Awaiting, rhs: Awaiting) Awaiting {
-                return @enumFromInt(@intFromEnum(lhs) -% @intFromEnum(rhs));
+                return @fromBackingInt(@intCast(@backingInt(lhs) -% @backingInt(rhs)));
             }
 
             fn fromCancelable(cancelable: *Cancelable) Awaiting {
-                return @enumFromInt(@shrExact(@intFromPtr(cancelable), shift));
+                return @fromBackingInt(@intCast(@shrExact(@intFromPtr(cancelable), shift)));
             }
 
             fn toCancelable(awaiting: Awaiting) *Cancelable {
-                return @ptrFromInt(@shlExact(@as(usize, @intFromEnum(awaiting)), shift));
+                return @ptrFromInt(@shlExact(@as(usize, @backingInt(awaiting)), shift));
             }
         };
 
@@ -157,7 +157,7 @@ const Fiber = struct {
         const unblocked: CancelProtection = .{ .user = .unblocked, .acknowledged = false };
 
         fn check(cancel_protection: CancelProtection) Io.CancelProtection {
-            return @enumFromInt(@intFromBool(cancel_protection != unblocked));
+            return @fromBackingInt(@intCast(@intFromBool(cancel_protection != unblocked)));
         }
 
         fn acknowledge(cancel_protection: *CancelProtection) void {
@@ -458,8 +458,6 @@ pub fn io(ev: *Evented) Io {
             .netListenUnix = netListenUnixUnavailable,
             .netConnectUnix = netConnectUnixUnavailable,
             .netSocketCreatePair = netSocketCreatePairUnavailable,
-            .netSend = netSendUnavailable,
-            .netWrite = netWriteUnavailable,
             .netWriteFile = netWriteFileUnavailable,
             .netClose = netClose,
             .netShutdown = netShutdownUnavailable,
@@ -580,6 +578,7 @@ pub fn deinit(ev: *Evented) void {
     ev.stderr_mutex.deinit();
     for (&ev.futexes) |*futex| futex.deinit();
     ev.exit_semaphore.as_object().release();
+    ev.backing_allocator_mutex.deinit();
     ev.backing_allocator.free(ev.main_loop_stack[0..main_loop_stack_size]);
     ev.queue.as_object().release();
 }
@@ -825,7 +824,7 @@ const Mutex = struct {
         sleeper: Sleeper = undefined,
         cancelable: Cancelable,
         mutex: *Mutex,
-        node: std.DoublyLinkedList.Node = undefined,
+        node: std.DoublyLinkedList.Node = .{},
 
         fn add(context: ?*anyopaque) callconv(.c) void {
             const waiter: *Waiter = @ptrCast(@alignCast(context));
@@ -1712,7 +1711,9 @@ fn operate(userdata: ?*anyopaque, operation: Io.Operation) Io.Cancelable!Io.Oper
         },
         .device_io_control => |*o| return .{ .device_io_control = try deviceIoControl(o) },
         .net_receive => @panic("TODO implement net_receive operation"),
+        .net_send => @panic("TODO implement net_send operation"),
         .net_read => @panic("TODO implement net_read operation"),
+        .net_write => @panic("TODO implement net_write operation"),
     }
 }
 
@@ -1892,7 +1893,7 @@ fn deviceIoControl(o: *const Io.Operation.DeviceIoControl) Io.Cancelable!i32 {
         switch (c.errno(rc)) {
             .SUCCESS => return rc,
             .INTR => {},
-            else => |err| return -@as(i32, @intFromEnum(err)),
+            else => |err| return -@as(i32, @backingInt(err)),
         }
     }
 }
@@ -2134,7 +2135,9 @@ fn batchDrainSubmitted(
                 },
                 .device_io_control => {},
                 .net_receive => @panic("TODO implement batched net_receive"),
+                .net_send => @panic("TODO implement batched net_send"),
                 .net_read => @panic("TODO implement batched net_read"),
+                .net_write => @panic("TODO implement batched net_write"),
             };
             if (concurrency) return error.ConcurrencyUnavailable;
             break :result try operate(ev, storage.submission.operation);
@@ -2194,7 +2197,9 @@ fn batchSourceEvent(context: ?*anyopaque) callconv(.c) void {
         },
         .device_io_control => unreachable,
         .net_receive => @panic("TODO implement batched net_receive"),
+        .net_send => @panic("TODO implement batched net_send"),
         .net_read => @panic("TODO implement batched net_read"),
+        .net_write => @panic("TODO implement batched net_write"),
     };
 
     switch (pending.node.prev) {
@@ -2781,7 +2786,7 @@ fn realPath(ev: *Evented, fd: c.fd_t, out_buffer: []u8) File.RealPathError!usize
             else => |err| return unexpectedErrno(err),
         }
     }
-    const n = std.mem.indexOfScalar(u8, &buffer, 0) orelse buffer.len;
+    const n = std.mem.findScalar(u8, &buffer, 0) orelse buffer.len;
     if (n > out_buffer.len) return error.NameTooLong;
     @memcpy(out_buffer[0..n], buffer[0..n]);
     return n;
@@ -2803,9 +2808,9 @@ fn dirRealPathFile(
         while (true) {
             if (c.realpath(sub_path_posix, out_buffer.ptr)) |redundant_pointer| {
                 assert(redundant_pointer == out_buffer.ptr);
-                return std.mem.indexOfScalar(u8, out_buffer, 0) orelse out_buffer.len;
+                return std.mem.findScalar(u8, out_buffer, 0) orelse out_buffer.len;
             }
-            const err: c.E = @enumFromInt(c._errno().*);
+            const err: c.E = @fromBackingInt(@intCast(c._errno().*));
             switch (err) {
                 .INTR => {},
                 .INVAL => return errnoBug(err),
@@ -3347,12 +3352,12 @@ fn fileWriteFileStreaming(
 ) File.Writer.WriteFileError!usize {
     const ev: *Evented = @ptrCast(@alignCast(userdata));
     const reader_buffered = file_reader.interface.buffered();
-    if (reader_buffered.len >= @intFromEnum(limit)) {
+    if (reader_buffered.len >= @backingInt(limit)) {
         const n = try fileWriteStreaming(ev, file, header, &.{limit.slice(reader_buffered)}, 1);
         file_reader.interface.toss(n -| header.len);
         return n;
     }
-    const file_limit = @intFromEnum(limit) - reader_buffered.len;
+    const file_limit = @backingInt(limit) - reader_buffered.len;
     const out_fd = file.handle;
     const in_fd = file_reader.file.handle;
 
@@ -3441,7 +3446,7 @@ fn fileWriteFilePositional(
 ) File.WriteFilePositionalError!usize {
     const ev: *Evented = @ptrCast(@alignCast(userdata));
     const reader_buffered = file_reader.interface.buffered();
-    if (reader_buffered.len >= @intFromEnum(limit)) {
+    if (reader_buffered.len >= @backingInt(limit)) {
         const n = try fileWritePositional(
             ev,
             file,
@@ -3791,7 +3796,7 @@ fn fileRealPath(userdata: ?*anyopaque, file: File, out_buffer: []u8) File.RealPa
             else => |err| return unexpectedErrno(err),
         }
     }
-    const n = std.mem.indexOfScalar(u8, &buffer, 0) orelse buffer.len;
+    const n = std.mem.findScalar(u8, &buffer, 0) orelse buffer.len;
     if (n > out_buffer.len) return error.NameTooLong;
     @memcpy(out_buffer[0..n], buffer[0..n]);
     return n;
@@ -3866,7 +3871,7 @@ fn fileMemoryMapCreate(
     const contents = while (true) {
         const casted_offset = std.math.cast(i64, options.offset) orelse return error.Unseekable;
         const rc = c.mmap(null, options.len, prot, flags, file.handle, casted_offset);
-        const err: c.E = if (rc != c.MAP_FAILED) .SUCCESS else @enumFromInt(c._errno().*);
+        const err: c.E = if (rc != c.MAP_FAILED) .SUCCESS else @fromBackingInt(@intCast(c._errno().*));
         switch (err) {
             .SUCCESS => break @as([*]align(page_align) u8, @ptrCast(@alignCast(rc)))[0..options.len],
             .INTR => {},
@@ -3897,7 +3902,7 @@ fn fileMemoryMapDestroy(userdata: ?*anyopaque, mm: *File.MemoryMap) void {
     if (memory.len == 0) return;
     switch (c.errno(c.munmap(memory.ptr, memory.len))) {
         .SUCCESS => {},
-        else => |err| if (builtin.mode == .Debug)
+        else => |err| if (builtin.mode == .debug)
             std.log.err("failed to unmap {d} bytes at {*}: {t}", .{ memory.len, memory.ptr, err }),
     }
     mm.* = undefined;
@@ -4026,7 +4031,7 @@ fn unlockStderr(userdata: ?*anyopaque) void {
 fn processCurrentPath(userdata: ?*anyopaque, buffer: []u8) process.CurrentPathError!usize {
     const ev: *Evented = @ptrCast(@alignCast(userdata));
     _ = ev;
-    const err: c.E = if (c.getcwd(buffer.ptr, buffer.len)) |_| .SUCCESS else @enumFromInt(c._errno().*);
+    const err: c.E = if (c.getcwd(buffer.ptr, buffer.len)) |_| .SUCCESS else @fromBackingInt(@intCast(c._errno().*));
     switch (err) {
         .SUCCESS => return std.mem.findScalar(u8, buffer, 0).?,
         .NOENT => return error.CurrentDirUnlinked,
@@ -4714,7 +4719,7 @@ fn sleep(userdata: ?*anyopaque, timeout: Io.Timeout) Io.Cancelable!void {
         return ev.yield(.{ .after = ev.timeFromTimeout(timeout) });
     };
     var waiter: SleepWaiter = .{
-        .cancelable = .{ .queue = queue, .cancel = &Futex.Waiter.canceled },
+        .cancelable = .{ .queue = queue, .cancel = &SleepWaiter.canceled },
         .timer = timer,
     };
     timer.as_object().set_context(&waiter);
@@ -4865,36 +4870,6 @@ fn netSocketCreatePairUnavailable(
     return error.OperationUnsupported;
 }
 
-fn netSendUnavailable(
-    userdata: ?*anyopaque,
-    handle: net.Socket.Handle,
-    messages: []net.OutgoingMessage,
-    flags: net.SendFlags,
-) struct { ?net.Socket.SendError, usize } {
-    const ev: *Evented = @ptrCast(@alignCast(userdata));
-    _ = ev;
-    _ = handle;
-    _ = messages;
-    _ = flags;
-    return .{ error.NetworkDown, 0 };
-}
-
-fn netWriteUnavailable(
-    userdata: ?*anyopaque,
-    handle: net.Socket.Handle,
-    header: []const u8,
-    data: []const []const u8,
-    splat: usize,
-) net.Stream.Writer.Error!usize {
-    const ev: *Evented = @ptrCast(@alignCast(userdata));
-    _ = ev;
-    _ = handle;
-    _ = header;
-    _ = data;
-    _ = splat;
-    return error.NetworkDown;
-}
-
 fn netWriteFileUnavailable(
     userdata: ?*anyopaque,
     socket_handle: net.Socket.Handle,
@@ -4908,13 +4883,13 @@ fn netWriteFileUnavailable(
     _ = header;
     _ = file_reader;
     _ = limit;
-    return error.NetworkDown;
+    return error.Unimplemented;
 }
 
-fn netClose(userdata: ?*anyopaque, handles: []const net.Socket.Handle) void {
+fn netClose(userdata: ?*anyopaque, sockets: []const net.Socket) void {
     const ev: *Evented = @ptrCast(@alignCast(userdata));
     _ = ev;
-    for (handles) |handle| closeFd(handle);
+    for (sockets) |socket| closeFd(socket.handle);
 }
 
 fn netShutdownUnavailable(

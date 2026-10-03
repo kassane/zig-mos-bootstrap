@@ -1,20 +1,25 @@
 const Server = @This();
 
-const builtin = @import("builtin");
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
-const native_endian = builtin.target.cpu.arch.endian();
-const need_bswap = native_endian != .little;
 const Cache = std.Build.Cache;
 const OutMessage = std.zig.Server.Message;
 const InMessage = std.zig.Client.Message;
 const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
+const Configuration = std.Build.Configuration;
 
 in: *Reader,
 out: *Writer,
+
+/// The ABI version of the build system protocol. Will be bumped whenever a
+/// backwards incompatible changes to the protocol is made.
+///
+/// Does not apply to the internal compiler protocol or test runner.
+///
+/// See `version` in `Message.Handshake`.
+pub const build_system_version: u32 = 1;
 
 pub const Message = struct {
     pub const Header = extern struct {
@@ -69,8 +74,82 @@ pub const Message = struct {
         broadcast_fuzz_input,
         /// Body is a TimeReport.
         time_report,
+        /// Body is a sequence of:
+        /// - root_dir: InputDir,
+        /// - sub_path: [:0]u8,
+        discovered_inputs,
+        /// Body is a Config.
+        config,
+
+        /// The first message sent by the server over the build system protocol.
+        /// Body is a `Handshake`.
+        /// This message only applies to the build system protocol.
+        bsp_handshake = 0x80000000,
+        /// Notifies that a new configuration file is available.
+        /// Body is a cwd relative path to the configuration file.
+        /// This message only applies to the build system protocol.
+        bsp_configuration,
+        /// build.zig itself failed to build from source.
+        /// Body is an `ErrorBundle`
+        /// This message only applies to the build system protocol.
+        bsp_configuration_failed,
+        /// Does not have a body.
+        /// This message only applies to the build system protocol.
+        bsp_build_started,
+        /// Does not have a body.
+        /// This message only applies to the build system protocol.
+        bsp_build_completed,
+        /// Body is a `Configuration.Step.Index`.
+        /// This message only applies to the build system protocol.
+        bsp_step_started,
+        /// Body is a `BuildStepCompleted`.
+        /// This message only applies to the build system protocol.
+        bsp_step_completed,
 
         _,
+    };
+
+    /// Trailing:
+    /// * base_paths: BasePaths,
+    pub const Handshake = extern struct {
+        /// See `build_system_version`.
+        version: u32,
+        flags: Flags,
+
+        pub const Flags = packed struct(u32) {
+            file_system_watch_supported: bool,
+            unused: u31 = 0,
+        };
+    };
+
+    /// Trailing:
+    /// * error_bundle: ErrorBundle,
+    /// * generated_file: [generated_files_len]GeneratedFile,
+    /// * path_bytes: [_]u8, // for each GeneratedFile
+    ///   - PathPrefix
+    ///   - sub_path: [_]u8,
+    pub const BuildStepCompleted = extern struct {
+        step_index: Configuration.Step.Index,
+        status: Status,
+        error_bundle: ErrorBundle,
+        generated_files_len: u32,
+        // TODO result_error_msgs
+        // TODO result_stderr
+        // TODO result_peak_rss
+        // TODO result_duration_ns
+
+        pub const Status = enum(u32) {
+            success,
+            failure,
+            skipped,
+            skipped_oom,
+        };
+    };
+
+    pub const GeneratedFile = extern struct {
+        index: Configuration.GeneratedFileIndex,
+        /// Includes only the path bytes, not the prefix or null byte.
+        path_len: u32,
     };
 
     pub const PathPrefix = enum(u8) {
@@ -78,6 +157,7 @@ pub const Message = struct {
         zig_lib,
         local_cache,
         global_cache,
+        build_root,
     };
 
     /// Trailing:
@@ -124,7 +204,7 @@ pub const Message = struct {
         flags: Flags,
         pub const Flags = packed struct(u32) {
             use_llvm: bool,
-            _: u31 = 0,
+            unused: u31 = 0,
         };
     };
 
@@ -138,22 +218,30 @@ pub const Message = struct {
             reserved: u7 = 0,
         };
     };
-};
 
-pub const Options = struct {
-    in: *Reader,
-    out: *Writer,
-    zig_version: []const u8,
-};
-
-pub fn init(options: Options) !Server {
-    var s: Server = .{
-        .in = options.in,
-        .out = options.out,
+    /// A reference to one of the `.input_dir`s from the `.args` message.
+    pub const InputDir = enum(u32) {
+        /// Server cwd relative path, or absolute path.
+        cwd,
+        /// Numbered in the order that `.input_dir`s appear in the `.args` message.
+        _,
     };
-    try s.serveStringMessage(.zig_version, options.zig_version);
-    return s;
-}
+
+    /// Properties of the output binary target that are decided by the compiler.
+    pub const Config = extern struct {
+        flags: Flags,
+
+        pub const Flags = packed struct(u8) {
+            output_mode: std.lang.OutputMode,
+            link_mode: std.lang.LinkMode,
+            link_libc: bool,
+            link_libcpp: bool,
+            link_libunwind: bool,
+            pie: bool,
+            unused: u1 = 0,
+        };
+    };
+};
 
 pub fn receiveMessage(s: *Server) !InMessage.Header {
     return s.in.takeStruct(InMessage.Header, .little);
@@ -181,6 +269,11 @@ pub fn serveStringMessage(s: *Server, tag: OutMessage.Tag, msg: []const u8) !voi
 /// Don't forget to flush!
 pub fn serveMessageHeader(s: *const Server, header: OutMessage.Header) !void {
     try s.out.writeStruct(header, .little);
+}
+
+pub fn serveBodylessMessage(s: *const Server, tag: OutMessage.Tag) Writer.Error!void {
+    try s.serveMessageHeader(.{ .tag = tag, .bytes_len = 0 });
+    try s.out.flush();
 }
 
 pub fn serveU32Message(s: *const Server, tag: OutMessage.Tag, int: u32) !void {
@@ -247,7 +340,7 @@ pub fn serveTestResults(s: *Server, msg: OutMessage.TestResults) !void {
     try s.out.flush();
 }
 
-pub fn serveErrorBundle(s: *Server, error_bundle: std.zig.ErrorBundle) !void {
+pub fn serveErrorBundle(s: *Server, tag: Message.Tag, error_bundle: std.zig.ErrorBundle) !void {
     const eb_hdr: OutMessage.ErrorBundle = .{
         .extra_len = @intCast(error_bundle.extra.len),
         .string_bytes_len = @intCast(error_bundle.string_bytes.len),
@@ -255,7 +348,7 @@ pub fn serveErrorBundle(s: *Server, error_bundle: std.zig.ErrorBundle) !void {
     const bytes_len = @sizeOf(OutMessage.ErrorBundle) +
         4 * error_bundle.extra.len + error_bundle.string_bytes.len;
     try s.serveMessageHeader(.{
-        .tag = .error_bundle,
+        .tag = tag,
         .bytes_len = @intCast(bytes_len),
     });
     try s.out.writeStruct(eb_hdr, .little);
@@ -264,34 +357,16 @@ pub fn serveErrorBundle(s: *Server, error_bundle: std.zig.ErrorBundle) !void {
     try s.out.flush();
 }
 
-pub fn allocErrorBundle(gpa: std.mem.Allocator, body: []const u8) error{ OutOfMemory, EndOfStream }!std.zig.ErrorBundle {
+pub fn allocErrorBundle(gpa: Allocator, body: []const u8) error{ OutOfMemory, EndOfStream }!std.zig.ErrorBundle {
     var r: Reader = .fixed(body);
     const hdr = r.takeStruct(OutMessage.ErrorBundle, .little) catch |err| switch (err) {
-        error.EndOfStream => |e| return e,
         error.ReadFailed => unreachable,
-    };
-
-    var eb: std.zig.ErrorBundle = .{
-        .string_bytes = &.{},
-        .extra = &.{},
-    };
-    errdefer eb.deinit(gpa);
-
-    const extra = try gpa.alloc(u32, hdr.extra_len);
-    eb.extra = extra;
-    const string_bytes = try gpa.alloc(u8, hdr.string_bytes_len);
-    eb.string_bytes = string_bytes;
-
-    r.readSliceEndian(u32, extra, .little) catch |err| switch (err) {
         error.EndOfStream => |e| return e,
-        error.ReadFailed => unreachable,
     };
-    r.readSliceAll(string_bytes) catch |err| switch (err) {
-        error.EndOfStream => |e| return e,
+    return std.zig.ErrorBundle.readAlloc(&r, gpa, hdr.extra_len, hdr.string_bytes_len) catch |err| switch (err) {
         error.ReadFailed => unreachable,
+        else => |e| return e,
     };
-
-    return eb;
 }
 
 pub const TestMetadata = struct {
@@ -317,5 +392,14 @@ pub fn serveTestMetadata(s: *Server, test_metadata: TestMetadata) !void {
     try s.out.writeSliceEndian(u32, test_metadata.names, .little);
     try s.out.writeSliceEndian(u32, test_metadata.expected_panic_msgs, .little);
     try s.out.writeAll(test_metadata.string_bytes);
+    try s.out.flush();
+}
+
+pub fn serveConfig(s: *Server, config: OutMessage.Config) !void {
+    try s.serveMessageHeader(.{
+        .tag = .config,
+        .bytes_len = @intCast(@sizeOf(OutMessage.Config)),
+    });
+    try s.out.writeStruct(config, .little);
     try s.out.flush();
 }

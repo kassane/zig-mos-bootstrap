@@ -11,7 +11,7 @@ pub fn fromInt(comptime E: type, integer: anytype) ?E {
     const enum_info = @typeInfo(E).@"enum";
     if (enum_info.mode == .nonexhaustive) {
         if (std.math.cast(enum_info.tag_type, integer)) |tag| {
-            return @enumFromInt(tag);
+            return @fromBackingInt(@intCast(tag));
         }
         return null;
     }
@@ -21,7 +21,7 @@ pub fn fromInt(comptime E: type, integer: anytype) ?E {
     // without requiring an inline loop.
     // This generates better machine code.
     for (values(E)) |value| {
-        if (@intFromEnum(value) == integer) return value;
+        if (@backingInt(value) == integer) return value;
     }
     return null;
 }
@@ -33,7 +33,8 @@ pub fn fromInt(comptime E: type, integer: anytype) ?E {
 pub fn EnumFieldStruct(comptime E: type, comptime Data: type, comptime field_default: ?Data) type {
     @setEvalBranchQuota(@typeInfo(E).@"enum".field_names.len + eval_branch_quota_cushion);
     const default_ptr: ?*const anyopaque = if (field_default) |d| @ptrCast(&d) else null;
-    return @Struct(.auto, null, std.meta.fieldNames(E), &@splat(Data), &@splat(.{ .default_value_ptr = default_ptr }));
+    const field_names = @typeInfo(E).@"enum".field_names;
+    return @Struct(.auto, null, field_names, &@splat(Data), &@splat(.{ .default_value_ptr = default_ptr }));
 }
 
 /// Looks up the supplied field values in the given enum type.
@@ -43,7 +44,7 @@ pub inline fn valuesFromFields(comptime E: type, comptime field_values: []const 
         @setEvalBranchQuota(@typeInfo(E).@"enum".field_names.len + eval_branch_quota_cushion);
         var result: [field_values.len]E = undefined;
         for (&result, field_values) |*r, f_value| {
-            r.* = @enumFromInt(f_value);
+            r.* = @fromBackingInt(@intCast(f_value));
         }
         const final = result;
         return &final;
@@ -64,7 +65,7 @@ pub fn tagName(comptime E: type, e: E) ?[:0]const u8 {
     const field_values = @typeInfo(E).@"enum".field_values;
     @setEvalBranchQuota(field_names.len);
     return inline for (field_names, field_values) |f_name, f_value| {
-        if (@intFromEnum(e) == f_value) break f_name;
+        if (@backingInt(e) == f_value) break f_name;
     } else null;
 }
 
@@ -72,7 +73,7 @@ test tagName {
     const E = enum(u8) { a, b, _ };
     try testing.expect(tagName(E, .a) != null);
     try testing.expectEqualStrings("a", tagName(E, .a).?);
-    try testing.expect(tagName(E, @as(E, @enumFromInt(42))) == null);
+    try testing.expect(tagName(E, @as(E, @fromBackingInt(@intCast(42)))) == null);
 }
 
 /// Determines the length of a direct-mapped enum array, indexed by
@@ -168,7 +169,7 @@ pub fn directEnumArrayDefault(
     var result: [len]Data = @splat(default orelse undefined);
     inline for (@typeInfo(@TypeOf(init_values)).@"struct".field_names) |f_name| {
         const enum_value = @field(E, f_name);
-        const index = @as(usize, @intCast(@intFromEnum(enum_value)));
+        const index = @as(usize, @intCast(@backingInt(enum_value)));
         result[index] = @field(init_values, f_name);
     }
     return result;
@@ -222,8 +223,8 @@ test fromInt {
     try testing.expect(fromInt(E1, zero).? == E1.A);
     try testing.expect(fromInt(E2, one).? == E2.B);
     try testing.expect(fromInt(E3, zero).? == E3.A);
-    try testing.expect(fromInt(E3, 127).? == @as(E3, @enumFromInt(127)));
-    try testing.expect(fromInt(E3, -128).? == @as(E3, @enumFromInt(-128)));
+    try testing.expect(fromInt(E3, 127).? == @as(E3, @fromBackingInt(@intCast(127))));
+    try testing.expect(fromInt(E3, -128).? == @as(E3, @fromBackingInt(@intCast(-128))));
     try testing.expectEqual(null, fromInt(E1, one));
     try testing.expectEqual(null, fromInt(E3, 128));
     try testing.expectEqual(null, fromInt(E3, -129));
@@ -419,6 +420,8 @@ pub fn EnumSet(comptime E: type) type {
 /// If the enum is exhaustive but not dense, a mapping will be constructed from
 /// enum values to dense indices.  This type does no dynamic
 /// allocation and can be copied by value.
+///
+/// Default initialization is deprecated; use .empty instead.
 pub fn EnumMap(comptime E: type, comptime V: type) type {
     return struct {
         const Self = @This();
@@ -440,6 +443,11 @@ pub fn EnumMap(comptime E: type, comptime V: type) type {
         /// bit is zero, the value is undefined.
         values: [Indexer.count]Value = undefined,
 
+        pub const empty: Self = .{
+            .bits = .empty,
+            .values = undefined,
+        };
+
         /// Initializes the map using a sparse struct of optionals
         pub fn init(init_values: EnumFieldStruct(E, ?Value, @as(?Value, null))) Self {
             @setEvalBranchQuota(2 * @typeInfo(E).@"enum".field_names.len);
@@ -454,7 +462,7 @@ pub fn EnumMap(comptime E: type, comptime V: type) type {
                     }
                 }
             } else {
-                inline for (std.meta.fieldNames(E)) |field_name| {
+                inline for (@typeInfo(E).@"enum".field_names) |field_name| {
                     const key = @field(E, field_name);
                     if (@field(init_values, field_name)) |*v| {
                         const i = comptime Indexer.indexOf(key);
@@ -469,12 +477,10 @@ pub fn EnumMap(comptime E: type, comptime V: type) type {
         /// Initializes a full mapping with all keys set to value.
         /// Consider using EnumArray instead if the map will remain full.
         pub fn initFull(value: Value) Self {
-            var result: Self = .{
+            return .{
                 .bits = .full,
-                .values = undefined,
+                .values = @splat(value),
             };
-            @memset(&result.values, value);
-            return result;
         }
 
         /// Initializes a full mapping with supplied values.
@@ -644,7 +650,10 @@ pub fn EnumMap(comptime E: type, comptime V: type) type {
 test EnumMap {
     const Ball = enum { red, green, blue };
 
-    const some = EnumMap(Ball, u8).init(.{
+    const none: EnumMap(Ball, u8) = .empty;
+    try testing.expectEqual(0, none.count());
+
+    const some: EnumMap(Ball, u8) = .init(.{
         .green = 0xff,
         .blue = 0x80,
     });
@@ -652,6 +661,9 @@ test EnumMap {
     try testing.expectEqual(null, some.get(.red));
     try testing.expectEqual(0xff, some.get(.green));
     try testing.expectEqual(0x80, some.get(.blue));
+
+    const all: EnumMap(Ball, u8) = .initFull(0);
+    try testing.expectEqual(3, all.count());
 }
 
 /// A multiset of enum elements up to a count of usize. Backed
@@ -677,7 +689,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
             const info = @typeInfo(E).@"enum";
             inline for (info.field_names, info.field_values) |field_name, field_value| {
                 const c = @field(init_counts, field_name);
-                const key: E = @enumFromInt(field_value);
+                const key: E = @fromBackingInt(@intCast(field_value));
                 self.counts.set(key, c);
             }
             return self;
@@ -746,7 +758,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// asserts operation will not overflow any key.
         pub fn addSetAssertSafe(self: *Self, other: Self) void {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 self.addAssertSafe(key, other.getCount(key));
             }
         }
@@ -754,7 +766,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// Increases the all key counts by given multiset.
         pub fn addSet(self: *Self, other: Self) error{Overflow}!void {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 try self.add(key, other.getCount(key));
             }
         }
@@ -764,7 +776,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// then that key will have a key count of zero.
         pub fn removeSet(self: *Self, other: Self) void {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 self.remove(key, other.getCount(key));
             }
         }
@@ -773,7 +785,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// given multiset.
         pub fn eql(self: Self, other: Self) bool {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 if (self.getCount(key) != other.getCount(key)) {
                     return false;
                 }
@@ -785,7 +797,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// equal to the given multiset.
         pub fn subsetOf(self: Self, other: Self) bool {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 if (self.getCount(key) > other.getCount(key)) {
                     return false;
                 }
@@ -797,7 +809,7 @@ pub fn BoundedEnumMultiset(comptime E: type, comptime CountSize: type) type {
         /// equal to the given multiset.
         pub fn supersetOf(self: Self, other: Self) bool {
             inline for (@typeInfo(E).@"enum".field_values) |field_value| {
-                const key = @as(E, @enumFromInt(field_value));
+                const key = @as(E, @fromBackingInt(@intCast(field_value)));
                 if (self.getCount(key) < other.getCount(key)) {
                     return false;
                 }
@@ -1284,18 +1296,18 @@ pub fn EnumIndexer(comptime E: type) type {
 
             pub fn indexOf(e: E) usize {
                 if (backing_int_sign == .unsigned)
-                    return @intFromEnum(e);
+                    return @backingInt(e);
 
-                return if (@intFromEnum(e) < 0)
-                    @intCast(@intFromEnum(e) - min_value)
+                return if (@backingInt(e) < 0)
+                    @intCast(@backingInt(e) - min_value)
                 else
-                    @as(RangeType, -min_value) + @as(RangeType, @intCast(@intFromEnum(e)));
+                    @as(RangeType, -min_value) + @as(RangeType, @intCast(@backingInt(e)));
             }
             pub fn keyForIndex(i: usize) E {
                 if (backing_int_sign == .unsigned)
-                    return @enumFromInt(i);
+                    return @fromBackingInt(@intCast(i));
 
-                return @enumFromInt(@as(@Int(.signed, @bitSizeOf(RangeType) + 1), @intCast(i)) + min_value);
+                return @fromBackingInt(@intCast(@as(@Int(.signed, @bitSizeOf(RangeType) + 1), @intCast(i)) + min_value));
             }
         };
     }
@@ -1330,14 +1342,14 @@ pub fn EnumIndexer(comptime E: type) type {
             pub const Key = E;
             pub const count: comptime_int = fields_len;
             pub fn indexOf(e: E) usize {
-                return @as(usize, @intCast(@intFromEnum(e) - min));
+                return @as(usize, @intCast(@backingInt(e) - min));
             }
             pub fn keyForIndex(i: usize) E {
                 // TODO fix addition semantics.  This calculation
                 // gives up some safety to avoid artificially limiting
                 // the range of signed enum values to max_isize.
                 const enum_value = if (min < 0) @as(isize, @bitCast(i)) +% min else i + min;
-                return @as(E, @enumFromInt(@as(@typeInfo(E).@"enum".tag_type, @intCast(enum_value))));
+                return @as(E, @fromBackingInt(@intCast(@as(@typeInfo(E).@"enum".tag_type, @intCast(enum_value)))));
             }
         };
     }
@@ -1384,14 +1396,14 @@ test "EnumIndexer non-exhaustive" {
         };
         const Indexer = EnumIndexer(E);
 
-        const min_tag: E = @enumFromInt(std.math.minInt(BackingInt));
-        const max_tag: E = @enumFromInt(std.math.maxInt(BackingInt));
+        const min_tag: E = @fromBackingInt(@intCast(std.math.minInt(BackingInt)));
+        const max_tag: E = @fromBackingInt(@intCast(std.math.maxInt(BackingInt)));
 
         const RangedType = @Int(.unsigned, @bitSizeOf(BackingInt));
         const max_index: comptime_int = std.math.maxInt(RangedType);
         const number_zero_tag_index: usize = switch (@typeInfo(BackingInt).int.signedness) {
             .unsigned => 0,
-            .signed => std.math.divCeil(comptime_int, max_index, 2) catch unreachable,
+            .signed => @divCeil(max_index, 2),
         };
 
         try testing.expectEqual(E, Indexer.Key);

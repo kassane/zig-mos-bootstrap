@@ -17,12 +17,12 @@ const compiler_rt = @import("../compiler_rt.zig");
 const symbol = compiler_rt.symbol;
 const builtin = @import("builtin");
 
-extern fn memset(dest: ?[*]u8, c: u8, n: usize) callconv(.c) ?[*]u8;
+extern fn memset(dest: ?[*]u8, c: c_int, n: usize) callconv(.c) ?[*]u8;
 extern fn memcpy(noalias dest: ?[*]u8, noalias src: ?[*]const u8, n: usize) callconv(.c) ?[*]u8;
 extern fn memmove(dest: ?[*]u8, src: ?[*]const u8, n: usize) callconv(.c) ?[*]u8;
 
 comptime {
-    @export(&__stack_chk_fail, .{ .name = if (builtin.os.tag == .openbsd) "__stack_smash_handler" else "__stack_chk_fail", .linkage = compiler_rt.linkage, .visibility = compiler_rt.visibility });
+    symbol(&__stack_chk_fail, if (builtin.os.tag == .openbsd) "__stack_smash_handler" else "__stack_chk_fail");
     symbol(&__chk_fail, "__chk_fail");
     symbol(&__stack_chk_guard, if (builtin.os.tag == .openbsd) "__guard_local" else "__stack_chk_guard");
     symbol(&__strcpy_chk, "__strcpy_chk");
@@ -138,7 +138,7 @@ fn __memmove_chk(dest: ?[*]u8, src: ?[*]const u8, n: usize, dest_n: usize) callc
     return memmove(dest, src, n);
 }
 
-fn __memset_chk(dest: ?[*]u8, c: u8, n: usize, dest_n: usize) callconv(.c) ?[*]u8 {
+fn __memset_chk(dest: ?[*]u8, c: c_int, n: usize, dest_n: usize) callconv(.c) ?[*]u8 {
     if (dest_n < n) __chk_fail();
     return memset(dest, c, n);
 }

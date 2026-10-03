@@ -12,7 +12,7 @@ const Compilation = @import("../Compilation.zig");
 const build_options = @import("build_options");
 const trace = @import("../tracy.zig").trace;
 const Cache = std.Build.Cache;
-const Module = @import("../Package/Module.zig");
+const Module = @import("../Module.zig");
 const link = @import("../link.zig");
 
 pub const CrtFile = enum {
@@ -242,7 +242,6 @@ pub fn buildCrtFile(comp: *Compilation, crt_file: CrtFile, prog_node: std.Progre
                 prog_node,
                 files,
                 .{
-                    .omit_frame_pointer = false,
                     .pic = true,
                 },
             );
@@ -459,12 +458,28 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) anye
     man.hash.add(target.abi);
     man.hash.add(target_os_version);
 
-    const full_abilists_path = try comp.dirs.zig_lib.join(arena, &.{abilists_path});
-    const abilists_index = try man.addFile(full_abilists_path, abilists_max_size);
+    const abilists_index = try man.addInputPath(.{
+        .root_dir = comp.dirs.zig_lib,
+        .sub_path = abilists_path,
+    }, .{
+        .request_contents = true,
+    });
 
-    if (try man.hit()) {
-        const digest = man.final();
-
+    var diag: Cache.Manifest.CheckDiagnostic = undefined;
+    const status = man.check(&diag, prog_node) catch |err| switch (err) {
+        error.OutOfMemory, error.Canceled => |e| return e,
+        error.CacheCheckFailed => {
+            comp.lockAndSetMiscFailure(
+                .freebsd_shared_objects,
+                "compiling FreeBSD libc shared objects: checking cache failed: {f}",
+                .{diag.fmt(&man)},
+            );
+            return error.AlreadyReported;
+        },
+    };
+    log.debug("freebsd_shared_objects cache {f}", .{status.fmt(&man)});
+    if (status == .hit) {
+        const digest = man.hitDigestHex();
         return queueSharedObjects(comp, .{
             .lock = man.toOwnedLock(),
             .dir_path = .{
@@ -474,7 +489,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) anye
         });
     }
 
-    const digest = man.final();
+    const digest = man.missDigestHex();
     const o_sub_path = try path.join(arena, &[_][]const u8{ "o", &digest });
 
     var o_directory: Cache.Directory = .{
@@ -483,7 +498,7 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) anye
     };
     defer o_directory.handle.close(io);
 
-    const abilists_contents = man.files.keys()[abilists_index].contents.?;
+    const abilists_contents = abilists_index.contents(&man);
     const metadata = try loadMetaData(gpa, abilists_contents);
     defer metadata.destroy(gpa);
 
@@ -974,14 +989,12 @@ pub fn buildSharedObjects(comp: *Compilation, prog_node: std.Progress.Node) anye
         }
 
         var lib_name_buf: [32]u8 = undefined; // Larger than each of the names "c", "stdthreads", etc.
-        const asm_file_basename = std.fmt.bufPrint(&lib_name_buf, "{s}.s", .{lib.name}) catch unreachable;
+        const asm_file_basename = std.mem.print(&lib_name_buf, "{s}.s", .{lib.name}) catch unreachable;
         try o_directory.handle.writeFile(io, .{ .sub_path = asm_file_basename, .data = stubs_asm.items });
         try buildSharedLib(comp, arena, o_directory, asm_file_basename, lib, prog_node);
     }
 
-    man.writeManifest() catch |err| {
-        log.warn("failed to write cache manifest for FreeBSD libc stubs: {s}", .{@errorName(err)});
-    };
+    man.finalize() catch |err| log.warn("failed to write cache manifest for FreeBSD libc stubs: {t}", .{err});
 
     return queueSharedObjects(comp, .{
         .lock = man.toOwnedLock(),
@@ -1045,7 +1058,6 @@ fn buildSharedLib(
     const version: Version = .{ .major = sover, .minor = 0, .patch = 0 };
     const ld_basename = path.basename(target.standardDynamicLinkerPath().get().?);
     const soname = if (mem.eql(u8, lib.name, "ld")) ld_basename else basename;
-    const map_file_path = try path.join(arena, &.{ bin_directory.path.?, all_map_basename });
 
     const optimize_mode = comp.compilerRtOptMode();
     const strip = comp.compilerRtStrip();
@@ -1078,7 +1090,6 @@ fn buildSharedLib(
             .omit_frame_pointer = comp.root_mod.omit_frame_pointer,
             .valgrind = false,
             .optimize_mode = optimize_mode,
-            .structured_cfg = comp.root_mod.structured_cfg,
         },
         .global = config,
         .cc_argv = &.{},
@@ -1115,7 +1126,10 @@ fn buildSharedLib(
         .verbose_llvm_cpu_features = comp.verbose_llvm_cpu_features,
         .clang_passthrough_mode = comp.clang_passthrough_mode,
         .version = version,
-        .version_script = map_file_path,
+        .version_script = .{
+            .root_dir = bin_directory,
+            .sub_path = all_map_basename,
+        },
         .soname = soname,
         .c_source_files = &c_source_files,
         .skip_linker_dependencies = true,

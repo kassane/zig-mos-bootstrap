@@ -1,4 +1,5 @@
 const builtin = @import("builtin");
+const compiler_rt = @This();
 const ofmt_c = builtin.object_format == .c;
 const native_endian = builtin.cpu.arch.endian();
 
@@ -22,26 +23,14 @@ else
     unreachable;
 
 pub inline fn symbol(comptime func: *const anyopaque, comptime name: []const u8) void {
-    @export(func, .{ .name = name, .linkage = linkage, .visibility = visibility });
+    // The function shouldn't be exported at all when testing compiler_rt.
+    // Instead, we just need to reference the function so that it's compiled.
+    if (!builtin.is_test) @export(func, .{
+        .name = name,
+        .linkage = if (ofmt_c) .strong else .weak,
+        .visibility = .hidden,
+    });
 }
-
-/// For now, we prefer weak linkage because some of the routines we implement here may also be
-/// provided by system/dynamic libc. Eventually we should be more disciplined about this on a
-/// per-symbol, per-target basis: https://github.com/ziglang/zig/issues/11883
-pub const linkage: std.builtin.GlobalLinkage = if (builtin.is_test)
-    .internal
-else if (ofmt_c)
-    .strong
-else
-    .weak;
-
-/// Determines the symbol's visibility to other objects.
-/// For WebAssembly this allows the symbol to be resolved to other modules, but will not
-/// export it to the host runtime.
-pub const visibility: std.builtin.SymbolVisibility = if (linkage == .internal or builtin.link_mode == .dynamic)
-    .default
-else
-    .hidden;
 
 pub const test_safety = switch (builtin.zig_backend) {
     .stage2_aarch64 => false,
@@ -84,144 +73,17 @@ comptime {
     // Float routines
     // conversion
     _ = @import("compiler_rt/extendf.zig");
-    _ = @import("compiler_rt/extendhfsf2.zig");
-    _ = @import("compiler_rt/extendhfdf2.zig");
-    _ = @import("compiler_rt/extendhftf2.zig");
-    _ = @import("compiler_rt/extendhfxf2.zig");
-    _ = @import("compiler_rt/extendsfdf2.zig");
-    _ = @import("compiler_rt/extendsftf2.zig");
-    _ = @import("compiler_rt/extendsfxf2.zig");
-    _ = @import("compiler_rt/extenddftf2.zig");
-    _ = @import("compiler_rt/extenddfxf2.zig");
-    _ = @import("compiler_rt/extendxftf2.zig");
-
     _ = @import("compiler_rt/truncf.zig");
-    _ = @import("compiler_rt/truncsfhf2.zig");
-    _ = @import("compiler_rt/truncdfhf2.zig");
-    _ = @import("compiler_rt/truncdfsf2.zig");
-    _ = @import("compiler_rt/truncxfhf2.zig");
-    _ = @import("compiler_rt/truncxfsf2.zig");
-    _ = @import("compiler_rt/truncxfdf2.zig");
-    _ = @import("compiler_rt/trunctfhf2.zig");
-    _ = @import("compiler_rt/trunctfsf2.zig");
-    _ = @import("compiler_rt/trunctfdf2.zig");
-    _ = @import("compiler_rt/trunctfxf2.zig");
-
     _ = @import("compiler_rt/int_from_float.zig");
-    _ = @import("compiler_rt/fixhfei.zig");
-    _ = @import("compiler_rt/fixsfsi.zig");
-    _ = @import("compiler_rt/fixsfdi.zig");
-    _ = @import("compiler_rt/fixsfti.zig");
-    _ = @import("compiler_rt/fixsfei.zig");
-    _ = @import("compiler_rt/fixdfsi.zig");
-    _ = @import("compiler_rt/fixdfdi.zig");
-    _ = @import("compiler_rt/fixdfti.zig");
-    _ = @import("compiler_rt/fixdfei.zig");
-    _ = @import("compiler_rt/fixtfsi.zig");
-    _ = @import("compiler_rt/fixtfdi.zig");
-    _ = @import("compiler_rt/fixtfti.zig");
-    _ = @import("compiler_rt/fixtfei.zig");
-    _ = @import("compiler_rt/fixxfsi.zig");
-    _ = @import("compiler_rt/fixxfdi.zig");
-    _ = @import("compiler_rt/fixxfei.zig");
-
-    _ = @import("compiler_rt/fixunshfsi.zig");
-    _ = @import("compiler_rt/fixunshfdi.zig");
-    _ = @import("compiler_rt/fixunshfti.zig");
-    _ = @import("compiler_rt/fixunshfei.zig");
-    _ = @import("compiler_rt/fixunssfsi.zig");
-    _ = @import("compiler_rt/fixunssfdi.zig");
-    _ = @import("compiler_rt/fixunssfti.zig");
-    _ = @import("compiler_rt/fixunssfei.zig");
-    _ = @import("compiler_rt/fixunsdfsi.zig");
-    _ = @import("compiler_rt/fixunsdfdi.zig");
-    _ = @import("compiler_rt/fixunsdfti.zig");
-    _ = @import("compiler_rt/fixunsdfei.zig");
-    _ = @import("compiler_rt/fixunstfsi.zig");
-    _ = @import("compiler_rt/fixunstfdi.zig");
-    _ = @import("compiler_rt/fixunstfti.zig");
-    _ = @import("compiler_rt/fixunstfei.zig");
-    _ = @import("compiler_rt/fixunsxfsi.zig");
-    _ = @import("compiler_rt/fixunsxfdi.zig");
-    _ = @import("compiler_rt/fixunsxfti.zig");
-    _ = @import("compiler_rt/fixunsxfei.zig");
-
     _ = @import("compiler_rt/float_from_int.zig");
-    _ = @import("compiler_rt/floatsihf.zig");
-    _ = @import("compiler_rt/floatsisf.zig");
-    _ = @import("compiler_rt/floatsidf.zig");
-    _ = @import("compiler_rt/floatsitf.zig");
-    _ = @import("compiler_rt/floatsixf.zig");
-    _ = @import("compiler_rt/floatdihf.zig");
-    _ = @import("compiler_rt/floatdisf.zig");
-    _ = @import("compiler_rt/floatdidf.zig");
-    _ = @import("compiler_rt/floatditf.zig");
-    _ = @import("compiler_rt/floatdixf.zig");
-    _ = @import("compiler_rt/floattihf.zig");
-    _ = @import("compiler_rt/floattisf.zig");
-    _ = @import("compiler_rt/floattidf.zig");
-    _ = @import("compiler_rt/floattitf.zig");
-    _ = @import("compiler_rt/floattixf.zig");
-    _ = @import("compiler_rt/floateihf.zig");
-    _ = @import("compiler_rt/floateisf.zig");
-    _ = @import("compiler_rt/floateidf.zig");
-    _ = @import("compiler_rt/floateitf.zig");
-    _ = @import("compiler_rt/floateixf.zig");
-    _ = @import("compiler_rt/floatunsihf.zig");
-    _ = @import("compiler_rt/floatunsisf.zig");
-    _ = @import("compiler_rt/floatunsidf.zig");
-    _ = @import("compiler_rt/floatunsitf.zig");
-    _ = @import("compiler_rt/floatunsixf.zig");
-    _ = @import("compiler_rt/floatundihf.zig");
-    _ = @import("compiler_rt/floatundisf.zig");
-    _ = @import("compiler_rt/floatundidf.zig");
-    _ = @import("compiler_rt/floatunditf.zig");
-    _ = @import("compiler_rt/floatundixf.zig");
-    _ = @import("compiler_rt/floatuntihf.zig");
-    _ = @import("compiler_rt/floatuntisf.zig");
-    _ = @import("compiler_rt/floatuntidf.zig");
-    _ = @import("compiler_rt/floatuntitf.zig");
-    _ = @import("compiler_rt/floatuntixf.zig");
-    _ = @import("compiler_rt/floatuneihf.zig");
-    _ = @import("compiler_rt/floatuneisf.zig");
-    _ = @import("compiler_rt/floatuneidf.zig");
-    _ = @import("compiler_rt/floatuneitf.zig");
-    _ = @import("compiler_rt/floatuneixf.zig");
 
     // comparison
     _ = @import("compiler_rt/comparef.zig");
-    _ = @import("compiler_rt/cmpdf2.zig");
-    _ = @import("compiler_rt/cmptf2.zig");
-    _ = @import("compiler_rt/cmpxf2.zig");
-    _ = @import("compiler_rt/unorddf2.zig");
-    _ = @import("compiler_rt/gehf2.zig");
-    _ = @import("compiler_rt/gesf2.zig");
-    _ = @import("compiler_rt/gedf2.zig");
-    _ = @import("compiler_rt/gexf2.zig");
-    _ = @import("compiler_rt/getf2.zig");
 
     // arithmetic
     _ = @import("compiler_rt/addf3.zig");
-    _ = @import("compiler_rt/addhf3.zig");
-    _ = @import("compiler_rt/addsf3.zig");
-    _ = @import("compiler_rt/adddf3.zig");
-    _ = @import("compiler_rt/addtf3.zig");
-    _ = @import("compiler_rt/addxf3.zig");
-
-    _ = @import("compiler_rt/subhf3.zig");
-    _ = @import("compiler_rt/subsf3.zig");
-    _ = @import("compiler_rt/subdf3.zig");
-    _ = @import("compiler_rt/subtf3.zig");
-    _ = @import("compiler_rt/subxf3.zig");
-
     _ = @import("compiler_rt/mulf3.zig");
-    _ = @import("compiler_rt/mulhf3.zig");
-    _ = @import("compiler_rt/mulsf3.zig");
-    _ = @import("compiler_rt/muldf3.zig");
-    _ = @import("compiler_rt/multf3.zig");
-    _ = @import("compiler_rt/mulxf3.zig");
 
-    _ = @import("compiler_rt/divhf3.zig");
     _ = @import("compiler_rt/divsf3.zig");
     _ = @import("compiler_rt/divdf3.zig");
     _ = @import("compiler_rt/divxf3.zig");
@@ -235,25 +97,17 @@ comptime {
         symbol(&__negsf2, "__negsf2");
         symbol(&__negdf2, "__negdf2");
     }
-    if (want_ppc_abi) symbol(&__negtf2, "__negkf2");
-    symbol(&__negtf2, "__negtf2");
+    if (want_ppc_abi) {
+        symbol(&__negtf2, "__negkf2");
+    } else {
+        symbol(&__negtf2, "__negtf2");
+    }
     symbol(&__negxf2, "__negxf2");
 
     // other
     _ = @import("compiler_rt/powiXf2.zig");
     _ = @import("compiler_rt/mulc3.zig");
-    _ = @import("compiler_rt/mulhc3.zig");
-    _ = @import("compiler_rt/mulsc3.zig");
-    _ = @import("compiler_rt/muldc3.zig");
-    _ = @import("compiler_rt/mulxc3.zig");
-    _ = @import("compiler_rt/multc3.zig");
-
     _ = @import("compiler_rt/divc3.zig");
-    _ = @import("compiler_rt/divhc3.zig");
-    _ = @import("compiler_rt/divsc3.zig");
-    _ = @import("compiler_rt/divdc3.zig");
-    _ = @import("compiler_rt/divxc3.zig");
-    _ = @import("compiler_rt/divtc3.zig");
 
     // Math routines. Alphabetically sorted.
     _ = @import("compiler_rt/cos.zig");
@@ -279,7 +133,7 @@ comptime {
     _ = @import("compiler_rt/divmodei4.zig");
     _ = @import("compiler_rt/udivmodei4.zig");
 
-    _ = @import("compiler_rt/limb64.zig");
+    if (builtin.cpu.arch.isWasm()) _ = @import("compiler_rt/limb64.zig");
 
     // extra
     _ = @import("compiler_rt/os_version_check.zig");
@@ -290,7 +144,7 @@ comptime {
     _ = @import("compiler_rt/clear_cache.zig");
     _ = @import("compiler_rt/hexagon.zig");
 
-    if (@import("builtin").object_format != .c) {
+    if (builtin.object_format != .c) {
         if (builtin.zig_backend != .stage2_aarch64) _ = @import("compiler_rt/atomics.zig");
         _ = @import("compiler_rt/stack_probe.zig");
 
@@ -302,7 +156,6 @@ comptime {
         _ = @import("compiler_rt/memcpy.zig");
         if (!ofmt_c) {
             symbol(&memset, "memset");
-            symbol(&__memset, "__memset");
         }
         _ = @import("compiler_rt/memmove.zig");
         symbol(&memcmp, "memcmp");
@@ -367,10 +220,7 @@ pub const want_aeabi = switch (builtin.abi) {
     .gnueabihf,
     .android,
     .androideabi,
-    => switch (builtin.cpu.arch) {
-        .arm, .armeb, .thumb, .thumbeb => true,
-        else => false,
-    },
+    => builtin.cpu.arch.isArm(),
     else => false,
 };
 
@@ -403,10 +253,6 @@ pub const want_windows_x86_msvc_abi = e: {
 pub const want_ppc_abi = builtin.cpu.arch.isPowerPC();
 
 pub const want_float_exceptions = !builtin.cpu.arch.isWasm();
-
-// Libcalls that involve u128 on Windows x86-64 are expected by LLVM to use the
-// calling convention of @Vector(2, u64), rather than what's standard.
-pub const want_windows_v2u64_abi = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64 and !ofmt_c;
 
 /// This governs whether to use these symbol names for f16/f32 conversions
 /// rather than the standard names:
@@ -445,19 +291,109 @@ pub const gnu_f16_abi = switch (builtin.cpu.arch) {
     else => !builtin.os.tag.isDarwin(),
 };
 
-pub const want_sparc_abi = builtin.cpu.arch.isSPARC();
+pub const want_sparc64_abi = builtin.cpu.arch == .sparc64;
+pub const want_sparc32_abi = builtin.cpu.arch == .sparc;
 
-pub fn F16T(comptime OtherType: type) type {
-    return switch (builtin.cpu.arch) {
-        .x86, .x86_64 => if (builtin.target.os.tag.isDarwin()) switch (OtherType) {
-            // Starting with LLVM 16, Darwin uses different abi for f16
-            // depending on the type of the other return/argument..???
-            f32, f64 => u16,
-            f80, f128 => f16,
-            else => unreachable,
-        } else f16,
-        else => f16,
+/// For operations converting between `f16` and another floating point type.
+pub fn f16Conv(comptime OtherType: type) type {
+    switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 16)) {
+        .hard => {},
+        .soft => return softFloatAbi(f16),
+    }
+    if (builtin.cpu.arch.isX86() and builtin.os.tag.isDarwin()) switch (OtherType) {
+        else => unreachable,
+        // Starting with LLVM 16, Darwin uses different abi for f16
+        // depending on the type of the other return/argument..???
+        f32, f64 => return softFloatAbi(f16),
+        f80, f128 => {},
     };
+    return hardFloatAbi(f16);
+}
+pub const @"f16" = switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 16)) {
+    .hard => hardFloatAbi(f16),
+    .soft => softFloatAbi(f16),
+};
+pub const @"f32" = switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 32)) {
+    .hard => hardFloatAbi(f32),
+    .soft => softFloatAbi(f32),
+};
+pub const @"f64" = switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 64)) {
+    .hard => hardFloatAbi(f64),
+    .soft => softFloatAbi(f64),
+};
+pub const @"f80" = switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 80)) {
+    .hard => hardFloatAbi(f80),
+    .soft => struct {
+        pub const Abi = extern struct { mantissa: u64, exponent: u16 };
+        const Repr = packed struct { mantissa: u64, exponent: u16 };
+        pub inline fn toAbi(raw: f80) Abi {
+            const repr: Repr = @bitCast(raw);
+            return .{ .mantissa = repr.mantissa, .exponent = repr.exponent };
+        }
+        pub inline fn fromAbi(abi: Abi) f80 {
+            const repr: Repr = .{ .mantissa = abi.mantissa, .exponent = abi.exponent };
+            return @bitCast(repr);
+        }
+        pub const complex = complexAbi(f80, @This());
+    },
+};
+pub const @"f128" = switch (std.zig.target.compilerRtFloatAbi(&builtin.target, 128)) {
+    .hard => hardFloatAbi(f128),
+    .soft => struct {
+        pub const Abi = switch (builtin.cpu.arch.endian()) {
+            .big => extern struct { hi: u64, lo: u64 },
+            .little => extern struct { lo: u64, hi: u64 },
+        };
+        const Repr = packed struct { lo: u64, hi: u64 };
+        pub inline fn toAbi(raw: f128) Abi {
+            const repr: Repr = @bitCast(raw);
+            return .{ .lo = repr.lo, .hi = repr.hi };
+        }
+        pub inline fn fromAbi(abi: Abi) f128 {
+            const repr: Repr = .{ .lo = abi.lo, .hi = abi.hi };
+            return @bitCast(repr);
+        }
+        pub const complex = complexAbi(f128, @This());
+    },
+};
+fn hardFloatAbi(comptime Float: type) type {
+    return struct {
+        pub const Abi = Float;
+        pub inline fn toAbi(raw: Float) Abi {
+            return raw;
+        }
+        pub inline fn fromAbi(abi: Abi) Float {
+            return abi;
+        }
+        pub const complex = complexAbi(Float, @This());
+    };
+}
+fn softFloatAbi(comptime Float: type) type {
+    return struct {
+        pub const Abi = @Int(.unsigned, @bitSizeOf(Float));
+        pub inline fn toAbi(raw: Float) Abi {
+            return @bitCast(raw);
+        }
+        pub inline fn fromAbi(abi: Abi) Float {
+            return @bitCast(abi);
+        }
+        pub const complex = complexAbi(Float, @This());
+    };
+}
+fn complexAbi(comptime Float: type, comptime float: type) type {
+    return struct {
+        pub const Abi = extern struct { real: float.Abi, imag: float.Abi };
+        pub inline fn toAbi(raw: Complex(Float)) Abi {
+            return .{ .real = float.toAbi(raw.real), .imag = float.toAbi(raw.imag) };
+        }
+        pub inline fn fromAbi(abi: Abi) Complex(Float) {
+            return .{ .real = float.fromAbi(abi.real), .imag = float.fromAbi(abi.imag) };
+        }
+    };
+}
+
+pub fn Complex(comptime Float: type) type {
+    return struct { real: Float, imag: Float };
 }
 
 pub fn wideMultiply(comptime Z: type, a: Z, b: Z, hi: *Z, lo: *Z) void {
@@ -592,31 +528,31 @@ pub inline fn fneg(a: anytype) @TypeOf(a) {
     return @bitCast(negated);
 }
 
-fn __negxf2(a: f80) callconv(.c) f80 {
-    return fneg(a);
+fn __neghf2(a: compiler_rt.f16.Abi) callconv(.c) compiler_rt.f16.Abi {
+    return compiler_rt.f16.toAbi(fneg(compiler_rt.f16.fromAbi(a)));
 }
 
-fn __neghf2(a: f16) callconv(.c) f16 {
-    return fneg(a);
+fn __negsf2(a: compiler_rt.f32.Abi) callconv(.c) compiler_rt.f32.Abi {
+    return compiler_rt.f32.toAbi(fneg(compiler_rt.f32.fromAbi(a)));
 }
 
-fn __negdf2(a: f64) callconv(.c) f64 {
+fn __negdf2(a: compiler_rt.f64.Abi) callconv(.c) compiler_rt.f64.Abi {
+    return compiler_rt.f64.toAbi(fneg(compiler_rt.f64.fromAbi(a)));
+}
+
+fn __negxf2(a: compiler_rt.f80.Abi) callconv(.c) compiler_rt.f80.Abi {
+    return compiler_rt.f80.toAbi(fneg(compiler_rt.f80.fromAbi(a)));
+}
+
+fn __negtf2(a: compiler_rt.f128.Abi) callconv(.c) compiler_rt.f128.Abi {
+    return compiler_rt.f128.toAbi(fneg(compiler_rt.f128.fromAbi(a)));
+}
+
+fn __aeabi_fneg(a: f32) callconv(.{ .arm_aapcs = .{} }) f32 {
     return fneg(a);
 }
 
 fn __aeabi_dneg(a: f64) callconv(.{ .arm_aapcs = .{} }) f64 {
-    return fneg(a);
-}
-
-fn __negtf2(a: f128) callconv(.c) f128 {
-    return fneg(a);
-}
-
-fn __negsf2(a: f32) callconv(.c) f32 {
-    return fneg(a);
-}
-
-fn __aeabi_fneg(a: f32) callconv(.{ .arm_aapcs = .{} }) f32 {
     return fneg(a);
 }
 
@@ -653,14 +589,88 @@ inline fn negXi2(comptime T: type, a: T) T {
     return -a;
 }
 
-pub fn memset(dest: ?[*]u8, c: u8, len: usize) callconv(.c) ?[*]u8 {
-    @setRuntimeSafety(false);
+fn memsetSmallPowerOf2(d: [*]u8, b: u8, comptime size: usize) void {
+    @disableIntrinsics();
+
+    if (size > @sizeOf(usize)) {
+        d[0..size].* = @splat(b);
+    } else {
+        const T = @Int(.unsigned, 8 * size);
+        var splatted: T = 0; // Setting this to undefined causes a memset call and thus infinite recursion in Debug test-compiler-rt.
+        @as(*[size]u8, @ptrCast(&splatted)).* = @splat(b);
+        @as(*align(1) T, @ptrCast(d)).* = splatted;
+    }
+}
+
+fn shortMemset(
+    log_min: comptime_int,
+    log_max: comptime_int,
+    d: [*]u8,
+    b: u8,
+    len: usize,
+) void {
+    @disableIntrinsics();
+
+    if (log_min + 1 != log_max) {
+        const mid = (log_min + log_max) / 2;
+        if (len > 1 << mid) {
+            shortMemset(mid, log_max, d, b, len);
+        } else {
+            shortMemset(log_min, mid, d, b, len);
+        }
+    } else {
+        const size = 1 << log_min;
+
+        memsetSmallPowerOf2(d, b, size);
+        memsetSmallPowerOf2(d + len - size, b, size);
+    }
+}
+
+fn fastMemset(dest: ?[*]u8, c: c_int, len: usize) callconv(.c) ?[*]u8 {
+    @disableIntrinsics();
+
+    const b: u8 = @truncate(@as(c_uint, @bitCast(c)));
+    const n = std.simd.suggestVectorLength(u8) orelse @sizeOf(usize);
+
+    const d = dest.?;
+
+    if (len > 2 * n) {
+        memsetSmallPowerOf2(d, b, n);
+
+        const begin_aligned = std.mem.alignBackward(usize, @intFromPtr(d) + n, n);
+        const end_aligned = std.mem.alignForward(usize, @intFromPtr(d) + len - n, n);
+
+        const aligned_ptr: [*]align(n) u8 = @ptrFromInt(begin_aligned);
+
+        var i: usize = 0;
+        while (true) {
+            memsetSmallPowerOf2(aligned_ptr + n * i, b, n);
+
+            i += 1;
+            if (i == @divExact(end_aligned - begin_aligned, n))
+                break;
+        }
+
+        memsetSmallPowerOf2(d + len - n, b, n);
+    } else {
+        if (len == 0) return dest;
+
+        shortMemset(0, @ctz(@as(usize, 2 * n)), d, b, len);
+    }
+
+    return dest;
+}
+
+fn smallMemset(dest: ?[*]u8, c: c_int, len: usize) callconv(.c) ?[*]u8 {
+    @disableIntrinsics();
+
+    const b: u8 = @truncate(@as(c_uint, @bitCast(c)));
 
     if (len != 0) {
         var d = dest.?;
         var n = len;
         while (true) {
-            d[0] = c;
+            d[0] = b;
             n -= 1;
             if (n == 0) break;
             d += 1;
@@ -670,11 +680,10 @@ pub fn memset(dest: ?[*]u8, c: u8, len: usize) callconv(.c) ?[*]u8 {
     return dest;
 }
 
-pub fn __memset(dest: ?[*]u8, c: u8, n: usize, dest_n: usize) callconv(.c) ?[*]u8 {
-    if (dest_n < n)
-        @panic("buffer overflow");
-    return memset(dest, c, n);
-}
+pub const memset = if (builtin.optimize == .small)
+    smallMemset
+else
+    fastMemset;
 
 pub fn bcmp(vl: [*]allowzero const u8, vr: [*]allowzero const u8, n: usize) callconv(.c) c_int {
     @setRuntimeSafety(false);

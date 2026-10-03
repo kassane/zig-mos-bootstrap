@@ -1,6 +1,6 @@
 value: i64 = 0,
 output_section_index: u32 = 0,
-symbols: std.AutoArrayHashMapUnmanaged(Elf.Ref, void) = .empty,
+symbols: std.array_hash_map.Auto(Elf.Ref, void) = .empty,
 output_symtab_ctx: Elf.SymtabCtx = .{},
 
 pub fn deinit(thunk: *Thunk, allocator: Allocator) void {
@@ -91,6 +91,7 @@ pub const Index = u32;
 
 const aarch64 = struct {
     fn write(thunk: Thunk, elf_file: *Elf, writer: anytype) !void {
+        dev.checkAny(&.{ .llvm_backend, .aarch64_backend });
         for (thunk.symbols.keys(), 0..) |ref, i| {
             const sym = elf_file.symbol(ref).?;
             const saddr = thunk.address(elf_file) + @as(i64, @intCast(i * trampoline_size));
@@ -113,6 +114,7 @@ const aarch64 = struct {
 };
 
 const assert = std.debug.assert;
+const dev = @import("../../dev.zig");
 const elf = std.elf;
 const log = std.log.scoped(.link);
 const math = std.math;

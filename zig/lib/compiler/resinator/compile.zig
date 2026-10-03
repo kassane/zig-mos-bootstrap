@@ -540,7 +540,7 @@ pub const Compiler = struct {
         //       This currently only checks for NUL bytes, but it should probably also check for
         //       platform-specific invalid characters like '*', '?', '"', '<', '>', '|' (Windows)
         //       Related: https://github.com/ziglang/zig/pull/14533#issuecomment-1416888193
-        if (std.mem.indexOfScalar(u8, filename_utf8, 0) != null) {
+        if (std.mem.findScalar(u8, filename_utf8, 0) != null) {
             return self.addErrorDetailsAndFail(.{
                 .err = .invalid_filename,
                 .token = node.filename.getFirstToken(),
@@ -606,7 +606,7 @@ pub const Compiler = struct {
                             .GROUP_CURSOR => .ANICURSOR,
                             else => unreachable,
                         };
-                        header.type_value.ordinal = @intFromEnum(new_predefined_type);
+                        header.type_value.ordinal = @backingInt(new_predefined_type);
                         header.memory_flags = MemoryFlags.defaults(new_predefined_type);
                         header.applyMemoryFlags(node.common_resource_attributes, self.source);
                         header.data_size = std.math.cast(u32, try file_reader.getSize()) orelse {
@@ -668,7 +668,7 @@ pub const Compiler = struct {
                     applyToGroupMemoryFlags(&header.memory_flags, node.common_resource_attributes, self.source);
 
                     const first_icon_id = self.state.icon_id;
-                    const entry_type = if (predefined_type == .GROUP_ICON) @intFromEnum(res.RT.ICON) else @intFromEnum(res.RT.CURSOR);
+                    const entry_type = if (predefined_type == .GROUP_ICON) @backingInt(res.RT.ICON) else @backingInt(res.RT.CURSOR);
                     for (icon_dir.entries, 0..) |*entry, entry_i_usize| {
                         // We know that the entry index must fit within a u16, so
                         // cast it here to simplify usage sites.
@@ -1909,7 +1909,7 @@ pub const Compiler = struct {
         }
 
         if (res.ControlClass.fromControl(control_type)) |control_class| {
-            const ordinal = NameOrOrdinal{ .ordinal = @intFromEnum(control_class) };
+            const ordinal = NameOrOrdinal{ .ordinal = @backingInt(control_class) };
             try ordinal.write(data_writer);
         } else {
             const class_node = control.class.?;
@@ -1944,7 +1944,7 @@ pub const Compiler = struct {
                 const parsed = try self.parseQuotedStringAsWideString(literal_node.token);
                 defer self.allocator.free(parsed);
                 if (rc.ControlClass.fromWideString(parsed)) |control_class| {
-                    const ordinal = NameOrOrdinal{ .ordinal = @intFromEnum(control_class) };
+                    const ordinal = NameOrOrdinal{ .ordinal = @backingInt(control_class) };
                     try ordinal.write(data_writer);
                 } else {
                     // NUL acts as a terminator
@@ -1959,7 +1959,7 @@ pub const Compiler = struct {
                 const literal_slice = literal_node.token.slice(self.source);
                 // This succeeding is guaranteed by the parser
                 const control_class = rc.ControlClass.map.get(literal_slice) orelse unreachable;
-                const ordinal = NameOrOrdinal{ .ordinal = @intFromEnum(control_class) };
+                const ordinal = NameOrOrdinal{ .ordinal = @backingInt(control_class) };
                 try ordinal.write(data_writer);
             }
         }
@@ -2620,7 +2620,7 @@ pub const Compiler = struct {
             const type_value = type: {
                 const resource_type = ResourceType.fromString(type_bytes);
                 if (res.RT.fromResource(resource_type)) |rt_constant| {
-                    break :type NameOrOrdinal{ .ordinal = @intFromEnum(rt_constant) };
+                    break :type NameOrOrdinal{ .ordinal = @backingInt(rt_constant) };
                 } else {
                     break :type try NameOrOrdinal.fromString(allocator, type_bytes);
                 }
@@ -2746,7 +2746,7 @@ pub const Compiler = struct {
         // 1. Any permutation that does not have PRELOAD in it just uses the
         //    default flags.
         const initial_flags = flags.*;
-        var flags_set = std.enums.EnumSet(rc.CommonResourceAttributes).empty;
+        var flags_set: std.enums.EnumSet(rc.CommonResourceAttributes) = .empty;
         for (tokens) |token| {
             const attribute = rc.CommonResourceAttributes.map.get(token.slice(source)).?;
             flags_set.insert(attribute);
@@ -2769,7 +2769,7 @@ pub const Compiler = struct {
         // 3. If none of DISCARDABLE, SHARED, or PURE is specified, then PRELOAD
         //    implies `flags &= ~SHARED` and LOADONCALL implies `flags |= SHARED`
         const shared_set = comptime blk: {
-            var set = std.enums.EnumSet(rc.CommonResourceAttributes).empty;
+            var set: std.enums.EnumSet(rc.CommonResourceAttributes) = .empty;
             set.insert(.discardable);
             set.insert(.shared);
             set.insert(.pure);
@@ -2919,11 +2919,11 @@ fn validateSearchPath(path: []const u8) error{BadPathName}!void {
             var component_iterator = std.fs.path.componentIterator(path);
             while (component_iterator.next()) |component| {
                 // https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
-                if (std.mem.indexOfAny(u8, component.name, "\x00<>:\"|?*") != null) return error.BadPathName;
+                if (std.mem.findAny(u8, component.name, "\x00<>:\"|?*") != null) return error.BadPathName;
             }
         },
         else => {
-            if (std.mem.indexOfScalar(u8, path, 0) != null) return error.BadPathName;
+            if (std.mem.findScalar(u8, path, 0) != null) return error.BadPathName;
         },
     }
 }
@@ -2974,7 +2974,7 @@ pub const FontDir = struct {
 
         var header = Compiler.ResourceHeader{
             .name_value = try NameOrOrdinal.nameFromString(compiler.allocator, .{ .slice = "FONTDIR", .code_page = .windows1252 }),
-            .type_value = NameOrOrdinal{ .ordinal = @intFromEnum(res.RT.FONTDIR) },
+            .type_value = NameOrOrdinal{ .ordinal = @backingInt(res.RT.FONTDIR) },
             .memory_flags = res.MemoryFlags.defaults(res.RT.FONTDIR),
             .language = compiler.state.language,
             .version = compiler.state.version,
@@ -3049,7 +3049,7 @@ pub const StringTablesByLanguage = struct {
     /// when the first STRINGTABLE for the language was defined, and all blocks for a given
     /// language are written contiguously.
     /// Using an ArrayHashMap here gives us this property for free.
-    tables: std.AutoArrayHashMapUnmanaged(res.Language, StringTable) = .empty,
+    tables: std.array_hash_map.Auto(res.Language, StringTable) = .empty,
 
     pub fn deinit(self: *StringTablesByLanguage, allocator: Allocator) void {
         self.tables.deinit(allocator);
@@ -3080,7 +3080,7 @@ pub const StringTable = struct {
     /// was added to the block (i.e. `STRINGTABLE { 16 "b" 0 "a" }` would then get written
     /// with block ID 2 (the one with "b") first and block ID 1 (the one with "a") second).
     /// Using an ArrayHashMap here gives us this property for free.
-    blocks: std.AutoArrayHashMapUnmanaged(u16, Block) = .empty,
+    blocks: std.array_hash_map.Auto(u16, Block) = .empty,
 
     pub const Block = struct {
         strings: std.ArrayList(Token) = .empty,
@@ -3230,7 +3230,7 @@ pub const StringTable = struct {
 
             const header = Compiler.ResourceHeader{
                 .name_value = .{ .ordinal = block_id },
-                .type_value = .{ .ordinal = @intFromEnum(res.RT.STRING) },
+                .type_value = .{ .ordinal = @backingInt(res.RT.STRING) },
                 .memory_flags = self.memory_flags,
                 .language = language,
                 .version = self.version,

@@ -5,7 +5,7 @@ const mem = std.mem;
 const maxInt = std.math.maxInt;
 
 pub fn lookup(vername: []const u8, name: []const u8) usize {
-    const vdso_addr = linux.getauxval(std.elf.AT_SYSINFO_EHDR);
+    const vdso_addr = linux.getauxval(std.elf.AT.SYSINFO_EHDR);
     if (vdso_addr == 0) return 0;
 
     const eh = @as(*elf.Ehdr, @ptrFromInt(vdso_addr));
@@ -19,14 +19,14 @@ pub fn lookup(vername: []const u8, name: []const u8) usize {
             i += 1;
             ph_addr += eh.e_phentsize;
         }) {
-            const this_ph = @as(*elf.Phdr, @ptrFromInt(ph_addr));
-            switch (this_ph.p_type) {
+            const this_ph = @as(*elf.ElfN.Phdr, @ptrFromInt(ph_addr));
+            switch (this_ph.type) {
                 // On WSL1 as well as older kernels, the VDSO ELF image is pre-linked in the upper half
-                // of the memory space (e.g. p_vaddr = 0xffffffffff700000 on WSL1).
+                // of the memory space (e.g. vaddr = 0xffffffffff700000 on WSL1).
                 // Wrapping operations are used on this line as well as subsequent calculations relative to base
                 // (lines 47, 78) to ensure no overflow check is tripped.
-                elf.PT_LOAD => base = vdso_addr +% this_ph.p_offset -% this_ph.p_vaddr,
-                elf.PT_DYNAMIC => maybe_dynv = @as([*]usize, @ptrFromInt(vdso_addr + this_ph.p_offset)),
+                .LOAD => base = vdso_addr +% this_ph.offset -% this_ph.vaddr,
+                .DYNAMIC => maybe_dynv = @as([*]usize, @ptrFromInt(vdso_addr + this_ph.offset)),
                 else => {},
             }
         }
@@ -84,7 +84,7 @@ fn checkver(def_arg: *elf.Verdef, vsym_arg: elf.Versym, vername: []const u8, str
     var def = def_arg;
     const vsym_index = vsym_arg.VERSION;
     while (true) {
-        if (0 == (def.flags & elf.VER_FLG_BASE) and @intFromEnum(def.ndx) == vsym_index) break;
+        if (0 == (def.flags & elf.VER_FLG_BASE) and @backingInt(def.ndx) == vsym_index) break;
         if (def.next == 0) return false;
         def = @ptrFromInt(@intFromPtr(def) + def.next);
     }

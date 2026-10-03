@@ -48,7 +48,7 @@ fn logFn(
 ) void {
     const prefix = if (scope == .default) "" else @tagName(scope) ++ ": ";
     var buf: [500]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, prefix ++ format, args) catch l: {
+    const line = std.mem.print(&buf, prefix ++ format, args) catch l: {
         buf[buf.len - 3 ..][0..3].* = "...".*;
         break :l &buf;
     };
@@ -90,7 +90,7 @@ export fn query_exec(ignore_case: bool) [*]Decl.Index {
     query_exec_fallible(query, ignore_case) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM"),
     };
-    query_results.items[0] = @enumFromInt(query_results.items.len - 1);
+    query_results.items[0] = @fromBackingInt(@intCast(query_results.items.len - 1));
     return query_results.items.ptr;
 }
 
@@ -153,11 +153,11 @@ fn query_exec_fallible(query: []const u8, ignore_case: bool) !void {
                 continue;
             }
             // substring, case insensitive match of full decl path
-            if (std.mem.indexOf(u8, g.full_path_search_text_lower.items, term) != null) {
+            if (std.mem.find(u8, g.full_path_search_text_lower.items, term) != null) {
                 points += 2;
                 continue;
             }
-            if (std.mem.indexOf(u8, g.doc_search_text.items, term) != null) {
+            if (std.mem.find(u8, g.doc_search_text.items, term) != null) {
                 points += 1;
                 continue;
             }
@@ -165,7 +165,7 @@ fn query_exec_fallible(query: []const u8, ignore_case: bool) !void {
         }
 
         if (query_results.items.len < max_matched_items or bypass_limit) {
-            try query_results.append(gpa, @enumFromInt(decl_index));
+            try query_results.append(gpa, @fromBackingInt(@intCast(decl_index)));
             try g.scores.append(gpa, .{
                 .points = points,
                 .segments = @intCast(count_scalar(g.full_path_search_text.items, '.')),
@@ -264,7 +264,7 @@ const ErrorIdentifier = packed struct(u64) {
 };
 
 var string_result: ArrayList(u8) = .empty;
-var error_set_result: std.StringArrayHashMapUnmanaged(ErrorIdentifier) = .empty;
+var error_set_result: std.array_hash_map.String(ErrorIdentifier) = .empty;
 
 export fn decl_error_set(decl_index: Decl.Index) Slice(ErrorIdentifier) {
     return Slice(ErrorIdentifier).init(decl_error_set_fallible(decl_index) catch @panic("OOM"));
@@ -305,7 +305,7 @@ fn sort_error_set_result() void {
 
 fn addErrorsFromDecl(
     decl_index: Decl.Index,
-    out: *std.StringArrayHashMapUnmanaged(ErrorIdentifier),
+    out: *std.array_hash_map.String(ErrorIdentifier),
 ) Oom!void {
     switch (decl_index.get().categorize()) {
         .error_set => |node| try addErrorsFromExpr(decl_index, out, node),
@@ -316,7 +316,7 @@ fn addErrorsFromDecl(
 
 fn addErrorsFromExpr(
     decl_index: Decl.Index,
-    out: *std.StringArrayHashMapUnmanaged(ErrorIdentifier),
+    out: *std.array_hash_map.String(ErrorIdentifier),
     node: Ast.Node.Index,
 ) Oom!void {
     const decl = decl_index.get();
@@ -343,7 +343,7 @@ fn addErrorsFromExpr(
 
 fn addErrorsFromNode(
     decl_index: Decl.Index,
-    out: *std.StringArrayHashMapUnmanaged(ErrorIdentifier),
+    out: *std.array_hash_map.String(ErrorIdentifier),
     node: Ast.Node.Index,
 ) Oom!void {
     const decl = decl_index.get();
@@ -717,8 +717,8 @@ fn render_docs(
                 node: markdown.Document.Node.Index,
                 writer: *Writer,
             ) Writer.Error!void {
-                const data = doc.nodes.items(.data)[@intFromEnum(node)];
-                switch (doc.nodes.items(.tag)[@intFromEnum(node)]) {
+                const data = doc.nodes.items(.data)[@backingInt(node)];
+                switch (doc.nodes.items(.tag)[@backingInt(node)]) {
                     .code_span => {
                         try writer.writeAll("<code>");
                         const content = doc.string(data.text.content);
@@ -803,10 +803,10 @@ fn unpackInner(tar_bytes: []u8) !void {
                 if (std.mem.endsWith(u8, tar_file.name, ".zig")) {
                     log.debug("found file: '{s}'", .{tar_file.name});
                     const file_name = try gpa.dupe(u8, tar_file.name);
-                    if (std.mem.indexOfScalar(u8, file_name, '/')) |pkg_name_end| {
+                    if (std.mem.findScalar(u8, file_name, '/')) |pkg_name_end| {
                         const pkg_name = file_name[0..pkg_name_end];
                         const gop = try Walk.modules.getOrPut(gpa, pkg_name);
-                        const file: Walk.File.Index = @enumFromInt(Walk.files.entries.len);
+                        const file: Walk.File.Index = @fromBackingInt(@intCast(Walk.files.entries.len));
                         if (!gop.found_existing or
                             std.mem.eql(u8, file_name[pkg_name_end..], "/root.zig") or
                             std.mem.eql(u8, file_name[pkg_name_end + 1 .. file_name.len - ".zig".len], pkg_name))
@@ -837,7 +837,7 @@ export fn module_name(index: u32) String {
 }
 
 export fn find_module_root(pkg: Walk.ModuleIndex) Decl.Index {
-    const root_file = Walk.modules.values()[@intFromEnum(pkg)];
+    const root_file = Walk.modules.values()[@backingInt(pkg)];
     const result = root_file.findRootDecl();
     assert(result != .none);
     return result;
@@ -854,7 +854,7 @@ export fn set_input_string(len: usize) [*]u8 {
 /// Looks up the root struct decl corresponding to a file by path.
 /// Uses `input_string`.
 export fn find_file_root() Decl.Index {
-    const file: Walk.File.Index = @enumFromInt(Walk.files.getIndex(input_string.items) orelse return .none);
+    const file: Walk.File.Index = @fromBackingInt(@intCast(Walk.files.getIndex(input_string.items) orelse return .none));
     return file.findRootDecl();
 }
 
@@ -874,7 +874,7 @@ export fn find_decl() Decl.Index {
         if (std.mem.eql(u8, g.match_fqn.items, input_string.items)) {
             //const path = @as(Decl.Index, @enumFromInt(decl_index)).get().file.path();
             //log.debug("find_decl '{s}' found in {s}", .{ input_string.items, path });
-            return @enumFromInt(decl_index);
+            return @fromBackingInt(@intCast(decl_index));
         }
     }
     return .none;
@@ -930,7 +930,7 @@ export fn namespace_members(parent: Decl.Index, include_private: bool) Slice(Dec
     for (Walk.decls.items, 0..) |*decl, i| {
         if (decl.parent == parent) {
             if (include_private or decl.is_pub()) {
-                g.members.append(gpa, @enumFromInt(i)) catch @panic("OOM");
+                g.members.append(gpa, @fromBackingInt(@intCast(i))) catch @panic("OOM");
             }
         }
     }

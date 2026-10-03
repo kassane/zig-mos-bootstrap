@@ -26,6 +26,10 @@ cwd: ?Build.LazyPath,
 /// Override this field to modify the environment, or use setEnvironmentVariable
 environ_map: ?*EnvMap,
 
+/// Named files that will be provided to the parent process.
+/// See `std.process.Preopens`.
+preopens: std.array_hash_map.Auto(Configuration.String, Build.LazyPath),
+
 /// Controls the `NO_COLOR` and `CLICOLOR_FORCE` environment variables.
 color: Color = .auto,
 
@@ -64,9 +68,11 @@ rename_step_with_output_arg: bool,
 /// executed binary will not fail the build if the binary cannot be executed
 /// due to being for a foreign binary to the host system which is running the
 /// build graph.
+///
 /// Command-line arguments such as -fqemu and -fwasmtime may affect whether a
 /// binary is detected as foreign, as well as system configuration such as
 /// Rosetta (macOS) and binfmt_misc (Linux).
+///
 /// If this Run step is considered to have side-effects, then this flag does
 /// nothing.
 skip_foreign_checks: bool,
@@ -86,7 +92,6 @@ captured_stdout: ?*CapturedStdIo,
 captured_stderr: ?*CapturedStdIo,
 
 has_side_effects: bool,
-test_runner_mode: bool = false,
 
 /// If this Run step was produced by a Compile step, it is tracked here.
 producer: ?*Step.Compile,
@@ -121,7 +126,10 @@ pub const StdIo = union(enum) {
     check: std.ArrayList(Check),
     /// This Run step is running a zig unit test binary and will communicate
     /// extra metadata over the IPC protocol.
+    /// Deprecated, use `.protocol`.
     zig_test,
+    /// This Run step is running a binary that will communicate over the IPC protocol.
+    protocol,
 
     pub const Check = union(enum) {
         expect_stderr_exact: []const u8,
@@ -129,33 +137,52 @@ pub const StdIo = union(enum) {
         expect_stdout_exact: []const u8,
         expect_stdout_match: []const u8,
         expect_term: process.Child.Term,
+        expect_stderr_snapshot: std.Build.LazyPath,
+        expect_stdout_snapshot: std.Build.LazyPath,
     };
 };
 
 pub const Arg = union(enum) {
-    artifact: PrefixedArtifact,
-    lazy_path: PrefixedLazyPath,
+    artifact: DecoratedArtifact,
+    lazy_path: DecoratedLazyPath,
     decorated_directory: DecoratedLazyPath,
-    file_content: PrefixedLazyPath,
+    file_content: DecoratedFileContent,
     bytes: []const u8,
     output_file: *Output,
     output_file_dep: *Output,
     output_directory: *Output,
     /// The arguments passed after "--" on the "zig build" CLI.
     passthru,
+
+    enable_darling: ToggleFlags,
+    enable_qemu: ToggleFlags,
+    enable_rosetta: ToggleFlags,
+    enable_wasmtime: ToggleFlags,
+    enable_wine: ToggleFlags,
 };
 
-pub const PrefixedArtifact = struct {
+pub const ToggleFlags = struct {
+    /// The string to pass when enabled, or null to omit the arg.
+    enabled: ?[]const u8 = null,
+    /// The string to pass when disabled, or null to omit the arg.
+    disabled: ?[]const u8 = null,
+};
+
+pub const DecoratedArtifact = struct {
     prefix: []const u8,
+    suffix: []const u8,
     artifact: *Step.Compile,
-};
-
-pub const PrefixedLazyPath = struct {
-    prefix: []const u8,
-    lazy_path: std.Build.LazyPath,
+    make_absolute: bool,
 };
 
 pub const DecoratedLazyPath = struct {
+    prefix: []const u8,
+    lazy_path: std.Build.LazyPath,
+    suffix: []const u8,
+    make_absolute: bool,
+};
+
+pub const DecoratedFileContent = struct {
     prefix: []const u8,
     lazy_path: std.Build.LazyPath,
     suffix: []const u8,
@@ -165,10 +192,14 @@ pub const Output = struct {
     generated_file: Configuration.GeneratedFileIndex,
     prefix: []const u8,
     basename: []const u8,
+    suffix: []const u8,
+    make_absolute: bool,
 };
 
 pub const CapturedStdIo = struct {
-    output: Output,
+    generated_file: Configuration.GeneratedFileIndex,
+    prefix: []const u8,
+    basename: []const u8,
     trim_whitespace: TrimWhitespace,
 
     pub const Options = struct {
@@ -192,6 +223,7 @@ pub fn create(owner: *std.Build, name: []const u8) *Run {
         .argv = .empty,
         .cwd = null,
         .environ_map = null,
+        .preopens = .empty,
         .disable_zig_progress = false,
         .stdio = .infer_from_args,
         .stdin = .none,
@@ -209,27 +241,51 @@ pub fn create(owner: *std.Build, name: []const u8) *Run {
 }
 
 pub fn setName(run: *Run, name: []const u8) void {
-    run.step.name = name;
+    run.step.name = run.step.owner.graph.dupeString(name);
     run.rename_step_with_output_arg = false;
 }
 
+/// Deprecated, use `enableProtocolMode`.
 pub fn enableTestRunnerMode(run: *Run) void {
-    if (run.test_runner_mode) return;
     run.stdio = .zig_test;
-    run.test_runner_mode = true;
 }
 
+pub fn enableProtocolMode(run: *Run) void {
+    run.stdio = .protocol;
+}
+
+pub const ArgOptions = struct {
+    prefix: []const u8 = "",
+    suffix: []const u8 = "",
+};
+
+pub const PathArgOptions = struct {
+    prefix: []const u8 = "",
+    suffix: []const u8 = "",
+    /// Makes the path absolute before passing it to the child process. Not supported by all hosts,
+    /// prefer accepting relative paths when possible.
+    make_absolute: bool = false,
+};
+
+/// Deprecated, use `addArtifactArg2`.
 pub fn addArtifactArg(run: *Run, artifact: *Step.Compile) void {
-    run.addPrefixedArtifactArg("", artifact);
+    run.addArtifactArg2(artifact, .{});
 }
 
+/// Deprecated, use `addArtifactArg2`.
 pub fn addPrefixedArtifactArg(run: *Run, prefix: []const u8, artifact: *Step.Compile) void {
+    run.addArtifactArg2(artifact, .{ .prefix = prefix });
+}
+
+pub fn addArtifactArg2(run: *Run, artifact: *Step.Compile, options: PathArgOptions) void {
     const graph = run.step.owner.graph;
     const arena = graph.arena;
 
-    const prefixed_artifact: PrefixedArtifact = .{
-        .prefix = graph.dupeString(prefix),
+    const prefixed_artifact: DecoratedArtifact = .{
+        .prefix = graph.dupeString(options.prefix),
         .artifact = artifact,
+        .suffix = graph.dupeString(options.suffix),
+        .make_absolute = options.make_absolute,
     };
     run.argv.append(arena, .{ .artifact = prefixed_artifact }) catch @panic("OOM");
 
@@ -237,19 +293,18 @@ pub fn addPrefixedArtifactArg(run: *Run, prefix: []const u8, artifact: *Step.Com
     bin_file.addStepDependencies(&run.step);
 }
 
-/// Provides a file path as a command line argument to the command being run.
-///
-/// Returns a `std.Build.LazyPath` which can be used as inputs to other APIs
-/// throughout the build system.
-///
-/// `sub_path` is the name of the generated output file which may have zero or
-/// more path components.
-///
-/// Related:
-/// * `addPrefixedOutputFileArg` - same thing but prepends a string to the argument
-/// * `addFileArg` - for input files given to the child process
+/// Deprecated, use `addOutputFileArg2`.
 pub fn addOutputFileArg(run: *Run, sub_path: []const u8) std.Build.LazyPath {
-    return run.addPrefixedOutputFileArg("", sub_path);
+    return run.addOutputFileArg2(sub_path, .{});
+}
+
+/// Deprecated, use `addOutputFileArg2`.
+pub fn addPrefixedOutputFileArg(
+    run: *Run,
+    prefix: []const u8,
+    sub_path: []const u8,
+) std.Build.LazyPath {
+    return run.addOutputFileArg2(sub_path, .{ .prefix = prefix });
 }
 
 /// Provides a file path as a command line argument to the command being run.
@@ -264,16 +319,15 @@ pub fn addOutputFileArg(run: *Run, sub_path: []const u8) std.Build.LazyPath {
 /// throughout the build system.
 ///
 /// Related:
-/// * `addOutputFileArg` - same thing but without the prefix
 /// * `addFileArg` - for input files given to the child process
-pub fn addPrefixedOutputFileArg(
+pub fn addOutputFileArg2(
     run: *Run,
-    prefix: []const u8,
     /// The name of the generated output file which may have zero or more path
     /// components.
     ///
     /// Asserted to be non-empty.
     sub_path: []const u8,
+    options: PathArgOptions,
 ) std.Build.LazyPath {
     const b = run.step.owner;
     const graph = b.graph;
@@ -282,9 +336,11 @@ pub fn addPrefixedOutputFileArg(
 
     const output = graph.create(Output);
     output.* = .{
-        .prefix = graph.dupeString(prefix),
+        .prefix = graph.dupeString(options.prefix),
         .basename = graph.dupeString(sub_path),
+        .suffix = graph.dupeString(options.suffix),
         .generated_file = graph.addGeneratedFile(&run.step),
+        .make_absolute = options.make_absolute,
     };
     run.argv.append(arena, .{ .output_file = output }) catch @panic("OOM");
 
@@ -295,17 +351,14 @@ pub fn addPrefixedOutputFileArg(
     return .{ .generated = .{ .index = output.generated_file } };
 }
 
-/// Appends an input file to the command line arguments.
-///
-/// The child process will see a file path. Modifications to this file will be
-/// detected as a cache miss in subsequent builds, causing the child process to
-/// be re-executed.
-///
-/// Related:
-/// * `addPrefixedFileArg` - same thing but prepends a string to the argument
-/// * `addOutputFileArg` - for files generated by the child process
+/// See `addFileArg2`.
 pub fn addFileArg(run: *Run, lp: std.Build.LazyPath) void {
-    run.addPrefixedFileArg("", lp);
+    run.addFileArg2(lp, .{});
+}
+
+/// See `addFileArg2`.
+pub fn addPrefixedFileArg(run: *Run, prefix: []const u8, lp: std.Build.LazyPath) void {
+    run.addFileArg2(lp, .{ .prefix = prefix });
 }
 
 /// Appends an input file to the command line arguments prepended with a string.
@@ -318,36 +371,29 @@ pub fn addFileArg(run: *Run, lp: std.Build.LazyPath) void {
 /// subsequent builds, causing the child process to be re-executed.
 ///
 /// Related:
-/// * `addFileArg` - same thing but without the prefix
 /// * `addOutputFileArg` - for files generated by the child process
-pub fn addPrefixedFileArg(run: *Run, prefix: []const u8, lp: std.Build.LazyPath) void {
+pub fn addFileArg2(run: *Run, lp: std.Build.LazyPath, options: PathArgOptions) void {
     const graph = run.step.owner.graph;
     const arena = graph.arena;
 
-    const prefixed_file_source: PrefixedLazyPath = .{
-        .prefix = graph.dupeString(prefix),
+    const prefixed_file_source: DecoratedLazyPath = .{
+        .prefix = graph.dupeString(options.prefix),
         .lazy_path = lp.dupe(graph),
+        .suffix = graph.dupeString(options.suffix),
+        .make_absolute = options.make_absolute,
     };
     run.argv.append(arena, .{ .lazy_path = prefixed_file_source }) catch @panic("OOM");
     lp.addStepDependencies(&run.step);
 }
 
-/// Appends the content of an input file to the command line arguments.
-///
-/// The child process will see a single argument, even if the file contains whitespace.
-/// This means that the entire file content up to EOF is rendered as one contiguous
-/// string, including escape sequences. Notably, any (trailing) newlines will show up
-/// like this: "hello,\nfile world!\n"
-///
-/// Modifications to the source file will be detected as a cache miss in subsequent
-/// builds, causing the child process to be re-executed.
-///
-/// This function may not be used to supply the first argument of a `Run` step.
-///
-/// Related:
-/// * `addPrefixedFileContentArg` - same thing but prepends a string to the argument
+/// Deprecated, use `addFileContentArg2`.
 pub fn addFileContentArg(run: *Run, lp: std.Build.LazyPath) void {
-    run.addPrefixedFileContentArg("", lp);
+    return run.addFileContentArg2(lp, .{});
+}
+
+/// Deprecated, use `addFileContentArg2`.
+pub fn addPrefixedFileContentArg(run: *Run, prefix: []const u8, lp: std.Build.LazyPath) void {
+    return run.addFileContentArg2(lp, .{ .prefix = prefix });
 }
 
 /// Appends the content of an input file to the command line arguments prepended with a string.
@@ -368,7 +414,7 @@ pub fn addFileContentArg(run: *Run, lp: std.Build.LazyPath) void {
 ///
 /// Related:
 /// * `addFileContentArg` - same thing but without the prefix
-pub fn addPrefixedFileContentArg(run: *Run, prefix: []const u8, lp: std.Build.LazyPath) void {
+pub fn addFileContentArg2(run: *Run, lp: std.Build.LazyPath, options: ArgOptions) void {
     const graph = run.step.owner.graph;
     const arena = graph.arena;
 
@@ -379,24 +425,27 @@ pub fn addPrefixedFileContentArg(run: *Run, prefix: []const u8, lp: std.Build.La
         @panic("'addFileContentArg'/'addPrefixedFileContentArg' cannot be first argument");
     }
 
-    const prefixed_file_source: PrefixedLazyPath = .{
-        .prefix = graph.dupeString(prefix),
+    const file_content: DecoratedFileContent = .{
+        .prefix = graph.dupeString(options.prefix),
         .lazy_path = lp.dupe(graph),
+        .suffix = graph.dupeString(options.suffix),
     };
-    run.argv.append(arena, .{ .file_content = prefixed_file_source }) catch @panic("OOM");
+    run.argv.append(arena, .{ .file_content = file_content }) catch @panic("OOM");
     lp.addStepDependencies(&run.step);
 }
 
-/// Provides a directory path as a command line argument to the command being run.
-///
-/// Returns a `std.Build.LazyPath` which can be used as inputs to other APIs
-/// throughout the build system.
-///
-/// Related:
-/// * `addPrefixedOutputDirectoryArg` - same thing but prepends a string to the argument
-/// * `addDirectoryArg` - for input directories given to the child process
+/// Deprecated, use `addOutputDirectoryArg2`.
 pub fn addOutputDirectoryArg(run: *Run, basename: []const u8) std.Build.LazyPath {
-    return run.addPrefixedOutputDirectoryArg("", basename);
+    return run.addOutputDirectoryArg2(basename, .{});
+}
+
+/// Deprecated, use `addOutputDirectoryArg2`.
+pub fn addPrefixedOutputDirectoryArg(
+    run: *Run,
+    prefix: []const u8,
+    basename: []const u8,
+) std.Build.LazyPath {
+    return run.addOutputDirectoryArg2(basename, .{ .prefix = prefix });
 }
 
 /// Provides a directory path as a command line argument to the command being run.
@@ -412,12 +461,11 @@ pub fn addOutputDirectoryArg(run: *Run, basename: []const u8) std.Build.LazyPath
 /// throughout the build system.
 ///
 /// Related:
-/// * `addOutputDirectoryArg` - same thing but without the prefix
 /// * `addDirectoryArg` - for input directories given to the child process
-pub fn addPrefixedOutputDirectoryArg(
+pub fn addOutputDirectoryArg2(
     run: *Run,
-    prefix: []const u8,
     basename: []const u8,
+    options: PathArgOptions,
 ) std.Build.LazyPath {
     if (basename.len == 0) @panic("basename must not be empty");
     const graph = run.step.owner.graph;
@@ -425,9 +473,11 @@ pub fn addPrefixedOutputDirectoryArg(
 
     const output = arena.create(Output) catch @panic("OOM");
     output.* = .{
-        .prefix = graph.dupeString(prefix),
+        .prefix = graph.dupeString(options.prefix),
         .basename = graph.dupeString(basename),
+        .suffix = graph.dupeString(options.suffix),
         .generated_file = graph.addGeneratedFile(&run.step),
+        .make_absolute = options.make_absolute,
     };
     run.argv.append(arena, .{ .output_directory = output }) catch @panic("OOM");
 
@@ -438,56 +488,67 @@ pub fn addPrefixedOutputDirectoryArg(
     return .{ .generated = .{ .index = output.generated_file } };
 }
 
+/// Deprecated, use `addDirectoryArg2`.
 pub fn addDirectoryArg(run: *Run, lazy_directory: std.Build.LazyPath) void {
-    run.addDecoratedDirectoryArg("", lazy_directory, "");
+    run.addDirectoryArg2(lazy_directory, .{});
 }
 
+/// Deprecated, use `addDirectoryArg2`.
 pub fn addPrefixedDirectoryArg(run: *Run, prefix: []const u8, lazy_directory: std.Build.LazyPath) void {
-    const graph = run.step.owner.graph;
-    const arena = graph.arena;
-    run.argv.append(arena, .{ .decorated_directory = .{
-        .prefix = graph.dupeString(prefix),
-        .lazy_path = lazy_directory.dupe(graph),
-        .suffix = "",
-    } }) catch @panic("OOM");
-    lazy_directory.addStepDependencies(&run.step);
+    run.addDirectoryArg2(lazy_directory, .{ .prefix = prefix });
 }
 
+/// Deprecated, use `addDirectoryArg2`.
 pub fn addDecoratedDirectoryArg(
     run: *Run,
     prefix: []const u8,
     lazy_directory: std.Build.LazyPath,
     suffix: []const u8,
 ) void {
+    run.addDirectoryArg2(lazy_directory, .{ .prefix = prefix, .suffix = suffix });
+}
+
+pub fn addDirectoryArg2(
+    run: *Run,
+    lazy_directory: std.Build.LazyPath,
+    options: PathArgOptions,
+) void {
     const graph = run.step.owner.graph;
     const arena = graph.arena;
     run.argv.append(arena, .{ .decorated_directory = .{
-        .prefix = graph.dupeString(prefix),
+        .prefix = graph.dupeString(options.prefix),
         .lazy_path = lazy_directory.dupe(graph),
-        .suffix = graph.dupeString(suffix),
+        .suffix = graph.dupeString(options.suffix),
+        .make_absolute = options.make_absolute,
     } }) catch @panic("OOM");
     lazy_directory.addStepDependencies(&run.step);
+}
+
+/// Deprecated, use `addDepFileOutputArg2`.
+pub fn addDepFileOutputArg(run: *Run, basename: []const u8) std.Build.LazyPath {
+    return run.addDepFileOutputArg2(basename, .{});
+}
+
+/// Deprecated, use `addDepFileOutputArg2`.
+pub fn addPrefixedDepFileOutputArg(run: *Run, prefix: []const u8, basename: []const u8) std.Build.LazyPath {
+    return run.addDepFileOutputArg2(basename, .{ .prefix = prefix });
 }
 
 /// Add a path argument to a dep file (.d) for the child process to write its
 /// discovered additional dependencies.
 /// Only one dep file argument is allowed by instance.
-pub fn addDepFileOutputArg(run: *Run, basename: []const u8) std.Build.LazyPath {
-    return run.addPrefixedDepFileOutputArg("", basename);
-}
-
-/// Add a prefixed path argument to a dep file (.d) for the child process to
-/// write its discovered additional dependencies.
-pub fn addPrefixedDepFileOutputArg(run: *Run, prefix: []const u8, basename: []const u8) std.Build.LazyPath {
+pub fn addDepFileOutputArg2(run: *Run, basename: []const u8, options: PathArgOptions) std.Build.LazyPath {
     const b = run.step.owner;
     const graph = b.graph;
     const arena = graph.arena;
 
     const dep_file = arena.create(Output) catch @panic("OOM");
     dep_file.* = .{
-        .prefix = graph.dupeString(prefix),
+        .prefix = graph.dupeString(options.prefix),
         .basename = graph.dupeString(basename),
+        .suffix = graph.dupeString(options.suffix),
         .generated_file = graph.addGeneratedFile(&run.step),
+        .make_absolute = options.make_absolute,
     };
 
     run.argv.append(arena, .{ .output_file_dep = dep_file }) catch @panic("OOM");
@@ -535,6 +596,46 @@ pub fn addPassthruArgs(run: *Run) void {
     run.argv.append(arena, .passthru) catch @panic("OOM");
 }
 
+/// Appends a custom string to the command line depending on the `-fdarling`
+/// value passed to `zig build`.
+pub fn addThirdPartyEnabledArgDarling(run: *Run, toggle_flags: ToggleFlags) void {
+    const graph = run.step.owner.graph;
+    const arena = graph.arena;
+    run.argv.append(arena, .{ .enable_darling = toggle_flags }) catch @panic("OOM");
+}
+
+/// Appends a custom string to the command line depending on the `-fqemu`
+/// value passed to `zig build`.
+pub fn addThirdPartyEnabledArgQemu(run: *Run, toggle_flags: ToggleFlags) void {
+    const graph = run.step.owner.graph;
+    const arena = graph.arena;
+    run.argv.append(arena, .{ .enable_qemu = toggle_flags }) catch @panic("OOM");
+}
+
+/// Appends a custom string to the command line depending on the `-frosetta`
+/// value passed to `zig build`.
+pub fn addThirdPartyEnabledArgRosetta(run: *Run, toggle_flags: ToggleFlags) void {
+    const graph = run.step.owner.graph;
+    const arena = graph.arena;
+    run.argv.append(arena, .{ .enable_rosetta = toggle_flags }) catch @panic("OOM");
+}
+
+/// Appends a custom string to the command line depending on the `-fwasmtime`
+/// value passed to `zig build`.
+pub fn addThirdPartyEnabledArgWasmtime(run: *Run, toggle_flags: ToggleFlags) void {
+    const graph = run.step.owner.graph;
+    const arena = graph.arena;
+    run.argv.append(arena, .{ .enable_wasmtime = toggle_flags }) catch @panic("OOM");
+}
+
+/// Appends a custom string to the command line depending on the `-fwine`
+/// value passed to `zig build`.
+pub fn addThirdPartyEnabledArgWine(run: *Run, toggle_flags: ToggleFlags) void {
+    const graph = run.step.owner.graph;
+    const arena = graph.arena;
+    run.argv.append(arena, .{ .enable_wine = toggle_flags }) catch @panic("OOM");
+}
+
 pub fn setStdIn(run: *Run, stdin: StdIn) void {
     switch (stdin) {
         .lazy_path => |lazy_path| lazy_path.addStepDependencies(&run.step),
@@ -579,6 +680,18 @@ pub fn setEnvironmentVariable(run: *Run, key: []const u8, value: []const u8) voi
 
 pub fn removeEnvironmentVariable(run: *Run, key: []const u8) void {
     _ = run.getEnvMap().swapRemove(key);
+}
+
+pub fn setPreopen(run: *Run, name: []const u8, resource: Build.LazyPath) void {
+    const graph = run.step.owner.graph;
+    const wc = &graph.wip_configuration;
+    const arena = graph.arena;
+    resource.addStepDependencies(&run.step);
+    run.preopens.put(
+        arena,
+        wc.addString(name) catch @panic("OOM"),
+        resource.dupe(graph),
+    ) catch @panic("OOM");
 }
 
 /// Adds a check for exact stderr match. Does not add any other checks.
@@ -632,52 +745,59 @@ pub fn addCheck(run: *Run, new_check: StdIo.Check) void {
         .check => |*checks| checks.append(b.allocator, new_check) catch @panic("OOM"),
         else => @panic("illegal call to addCheck: conflicting helper method calls. Suggest to directly set stdio field of Run instead"),
     }
+
+    switch (new_check) {
+        .expect_stderr_snapshot,
+        .expect_stdout_snapshot,
+        => |file| run.addFileInput(file),
+        else => {},
+    }
 }
 
 pub fn captureStdErr(run: *Run, options: CapturedStdIo.Options) std.Build.LazyPath {
-    assert(run.stdio != .inherit);
-    assert(run.stdio != .zig_test);
+    switch (run.stdio) {
+        .infer_from_args, .check => {},
+        .inherit, .zig_test, .protocol => unreachable,
+    }
 
     const b = run.step.owner;
     const graph = b.graph;
     const arena = graph.arena;
 
-    if (run.captured_stderr) |captured| return .{ .generated = .{ .index = captured.output.generated_file } };
+    if (run.captured_stderr) |captured| return .{ .generated = .{ .index = captured.generated_file } };
 
     const captured = arena.create(CapturedStdIo) catch @panic("OOM");
     captured.* = .{
-        .output = .{
-            .prefix = "",
-            .basename = if (options.basename) |basename| graph.dupeString(basename) else "stderr",
-            .generated_file = graph.addGeneratedFile(&run.step),
-        },
+        .prefix = "",
+        .basename = if (options.basename) |basename| graph.dupeString(basename) else "stderr",
+        .generated_file = graph.addGeneratedFile(&run.step),
         .trim_whitespace = options.trim_whitespace,
     };
     run.captured_stderr = captured;
-    return .{ .generated = .{ .index = captured.output.generated_file } };
+    return .{ .generated = .{ .index = captured.generated_file } };
 }
 
 pub fn captureStdOut(run: *Run, options: CapturedStdIo.Options) std.Build.LazyPath {
-    assert(run.stdio != .inherit);
-    assert(run.stdio != .zig_test);
+    switch (run.stdio) {
+        .infer_from_args, .check => {},
+        .inherit, .zig_test, .protocol => unreachable,
+    }
 
     const b = run.step.owner;
     const graph = b.graph;
     const arena = graph.arena;
 
-    if (run.captured_stdout) |captured| return .{ .generated = .{ .index = captured.output.generated_file } };
+    if (run.captured_stdout) |captured| return .{ .generated = .{ .index = captured.generated_file } };
 
     const captured = arena.create(CapturedStdIo) catch @panic("OOM");
     captured.* = .{
-        .output = .{
-            .prefix = "",
-            .basename = if (options.basename) |basename| graph.dupeString(basename) else "stdout",
-            .generated_file = graph.addGeneratedFile(&run.step),
-        },
+        .prefix = "",
+        .basename = if (options.basename) |basename| graph.dupeString(basename) else "stdout",
+        .generated_file = graph.addGeneratedFile(&run.step),
         .trim_whitespace = options.trim_whitespace,
     };
     run.captured_stdout = captured;
-    return .{ .generated = .{ .index = captured.output.generated_file } };
+    return .{ .generated = .{ .index = captured.generated_file } };
 }
 
 /// Adds an additional input files that, when modified, indicates that this Run

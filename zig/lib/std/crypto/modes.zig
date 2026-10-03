@@ -37,14 +37,13 @@ pub fn ctrSlice(
     debug.assert(counter_offset + counter_size <= block_length);
     debug.assert(counter_size > 0 and counter_size <= block_length);
 
-    var counterBlock = iv;
     var i: usize = 0;
 
     const CounterInt = @Int(.unsigned, counter_size * 8);
 
     const parallel_count = BlockCipher.block.parallel.optimal_parallel_blocks;
     const wide_block_length = parallel_count * block_length;
-    var cnt_val = mem.readInt(CounterInt, counterBlock[counter_offset..][0..counter_size], endian);
+    var cnt_val = mem.readInt(CounterInt, iv[counter_offset..][0..counter_size], endian);
     if (src.len >= wide_block_length) {
         var counters: [parallel_count * block_length]u8 = undefined;
         inline for (0..parallel_count) |j| {
@@ -55,23 +54,21 @@ pub fn ctrSlice(
             inline while (j < parallel_count) : (j += 1) {
                 mem.writeInt(CounterInt, counters[j * block_length + counter_offset ..][0..counter_size], cnt_val +% j, endian);
             }
-            cnt_val += parallel_count;
+            cnt_val +%= parallel_count;
             block_cipher.xorWide(parallel_count, dst[i .. i + wide_block_length][0..wide_block_length], src[i .. i + wide_block_length][0..wide_block_length], counters);
         }
-        mem.writeInt(CounterInt, counterBlock[counter_offset..][0..counter_size], cnt_val, endian);
-    }
-    while (i + block_length <= src.len) : (i += block_length) {
-        block_cipher.xor(dst[i .. i + block_length][0..block_length], src[i .. i + block_length][0..block_length], counterBlock);
-        cnt_val +%= 1;
-        mem.writeInt(CounterInt, counterBlock[counter_offset..][0..counter_size], cnt_val, endian);
     }
     if (i < src.len) {
-        var pad: [block_length]u8 = @splat(0);
-        const src_slice = src[i..];
-        @memcpy(pad[0..src_slice.len], src_slice);
-        block_cipher.xor(&pad, &pad, counterBlock);
-        const pad_slice = pad[0 .. src.len - i];
-        @memcpy(dst[i..][0..pad_slice.len], pad_slice);
+        const rem = src.len - i;
+        var counters: [wide_block_length]u8 = undefined;
+        inline for (0..parallel_count) |j| {
+            counters[j * block_length ..][0..block_length].* = iv;
+            const block_ctr = cnt_val +% @as(CounterInt, j);
+            mem.writeInt(CounterInt, counters[j * block_length + counter_offset ..][0..counter_size], block_ctr, endian);
+        }
+        var keystream: [wide_block_length]u8 = undefined;
+        block_cipher.encryptWide(parallel_count, &keystream, &counters);
+        for (dst[i..][0..rem], src[i..][0..rem], keystream[0..rem]) |*d, s, k| d.* = s ^ k;
     }
 }
 
@@ -223,5 +220,12 @@ test "ctr mode" {
         // The actual output for this test with little-endian counter=1
         const expected = [_]u8{ 0x7e, 0x48, 0x15, 0xa8, 0x16, 0x66, 0xf0, 0xea, 0xad, 0x3c, 0x07, 0x97, 0x2f, 0xe8, 0x25, 0xc1 };
         try testing.expectEqualSlices(u8, expected[0..], out[0..]);
+    }
+
+    // Make the counter wrap
+    {
+        const iv_top: [16]u8 = @splat(0xff);
+        var buf: [256]u8 = @splat(0);
+        ctr(aes.AesEncryptCtx(aes.Aes128), ctx, buf[0..], buf[0..], iv_top, .little);
     }
 }

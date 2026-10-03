@@ -14,14 +14,15 @@ const mem = std.mem;
 const elf = std.elf;
 const math = std.math;
 const assert = std.debug.assert;
-const native_arch = @import("builtin").cpu.arch;
+const builtin = @import("builtin");
+const native_arch = builtin.cpu.arch;
 const linux = std.os.linux;
 const page_size_min = std.heap.page_size_min;
 
 /// Represents an ELF TLS variant.
 ///
 /// In all variants, the TP and the TLS blocks must be aligned to the `p_align` value in the
-/// `PT_TLS` ELF program header. Everything else has natural alignment.
+/// `PT.TLS` ELF program header. Everything else has natural alignment.
 ///
 /// The location of the DTV does not actually matter. For simplicity, we put it in the TLS area, but
 /// there is no actual ABI requirement that it reside there.
@@ -41,13 +42,13 @@ const Variant = enum {
     I_original,
     /// The modified Variant I:
     ///
-    /// ---------------------------------------------------
-    /// | DTV | Zig TCB | ABI TCB | [Offset] | TLS Blocks |
-    /// -------------------------------------^-------------
-    ///                                      `-- The TP register points here.
+    /// --------------------------------------------
+    /// | DTV | Zig TCB | ABI TCB |   TLS Blocks   |
+    /// ------------------------------^-------------
+    ///                               `-- The TP register points here (*inside* the TLS blocks).
     ///
-    /// The offset (which can be zero) is applied to the TP only; there is never a physical gap
-    /// between the ABI TCB and the TLS blocks. This implies that we only need to align the TP.
+    /// The offset from the start of the TLS blocks to the TP register is `current_tp_offset`. It
+    /// may be zero, in which case the TP register points to the start of the TLS blocks.
     ///
     /// The first (and only) word in the ABI TCB points to the DTV.
     I_modified,
@@ -106,7 +107,7 @@ const current_variant: Variant = switch (native_arch) {
     else => @compileError("undefined TLS variant for this architecture"),
 };
 
-/// The Offset value for the modified Variant I.
+/// The offset value for the modified Variant I.
 const current_tp_offset = switch (native_arch) {
     .m68k,
     .mips,
@@ -260,10 +261,9 @@ pub fn setThreadPointer(addr: usize) void {
         },
         .alpha => {
             asm volatile (
-                \\ lda $16, 0(%[addr])
                 \\ wruniq
                 :
-                : [addr] "r" (addr),
+                : [addr] "{$16}" (addr),
             );
         },
         .arc, .arceb => {
@@ -281,7 +281,7 @@ pub fn setThreadPointer(addr: usize) void {
             assert(rc == 0);
         },
         .m68k => {
-            const rc = linux.syscall1(.set_thread_area, addr);
+            const rc = @call(.always_inline, linux.syscall1, .{ .set_thread_area, addr });
             assert(rc == 0);
         },
         .hexagon => {
@@ -294,9 +294,10 @@ pub fn setThreadPointer(addr: usize) void {
         .hppa => {
             asm volatile (
                 \\ ble 0xe0(%%sr2, %%r0)
+                \\  nop
                 :
-                : [addr] "={r26}" (addr),
-                : .{ .r29 = true });
+                : [addr] "{r26}" (addr),
+                : .{ .r31 = true });
         },
         .loongarch32, .loongarch64 => {
             asm volatile (
@@ -356,7 +357,7 @@ pub fn setThreadPointer(addr: usize) void {
         },
         .sh, .sheb => {
             asm volatile (
-                \\ ldc gbr, %[addr]
+                \\ ldc %[addr], gbr
                 :
                 : [addr] "r" (addr),
             );
@@ -379,17 +380,117 @@ pub fn setThreadPointer(addr: usize) void {
     }
 }
 
-fn computeAreaDesc(phdrs: []elf.Phdr) void {
+pub fn getThreadPointer() usize {
     @setRuntimeSafety(false);
     @disableInstrumentation();
 
-    var tls_phdr: ?*elf.Phdr = null;
+    return switch (native_arch) {
+        .aarch64, .aarch64_be => asm (
+            \\ mrs %[ret], tpidr_el0
+            : [ret] "=r" (-> usize),
+        ),
+        .alpha => asm (
+            \\ rduniq
+            : [ret] "={$0}" (-> usize),
+        ),
+        .arc, .arceb => asm (
+            \\ mov %[ret], r25
+            : [ret] "=r" (-> usize),
+        ),
+        .arm, .armeb, .thumb, .thumbeb => asm (
+            \\ mrc p15, 0, %[ret], c13, c0, 3
+            : [ret] "=r" (-> usize),
+        ),
+        .csky => asm (
+            \\ mov %[ret], r31
+            : [ret] "=r" (-> usize),
+        ),
+        .hexagon => asm (
+            \\ %[ret] = ugp
+            : [ret] "=r" (-> usize),
+        ),
+        .hppa => asm (
+            \\ mfctl %%cr27, %[ret]
+            : [ret] "=r" (-> usize),
+        ),
+        .loongarch32, .loongarch64 => asm (
+            \\ move %[ret], $tp
+            : [ret] "=r" (-> usize),
+        ),
+        .m68k => linux.syscall0(.get_thread_area),
+        .mips, .mipsel, .mips64, .mips64el => asm (
+            \\ rdhwr %[ret], $29
+            : [ret] "=r" (-> usize),
+        ),
+        .microblaze, .microblazeel => asm (
+            \\ ori %[ret], r21, 0
+            : [ret] "=r" (-> usize),
+        ),
+        .or1k => asm (
+            \\ l.ori %[ret], r10, 0
+            : [ret] "=r" (-> usize),
+        ),
+        .riscv32, .riscv64 => asm (
+            \\ mv %[ret], tp
+            : [ret] "=r" (-> usize),
+        ),
+        .powerpc, .powerpcle => asm (
+            \\ mr %[ret], 2
+            : [ret] "=r" (-> usize),
+        ),
+        .powerpc64, .powerpc64le => asm (
+            \\ mr %[ret], 13
+            : [ret] "=r" (-> usize),
+        ),
+        .s390x => asm (
+            \\ ear %[ret], %%a0
+            \\ sllg %[ret], %[ret], 32
+            \\ ear %[ret], %%a1
+            : [ret] "=r" (-> usize),
+        ),
+        .sh, .sheb => asm (
+            \\ stc gbr, %[ret]
+            : [ret] "=r" (-> usize),
+        ),
+        .sparc, .sparc64 => asm (
+            \\ mov %%g7, %[ret]
+            : [ret] "=r" (-> usize),
+        ),
+        .x86 => asm (
+            \\ movl %%gs:0, %[ret]
+            : [ret] "=r" (-> usize),
+        ),
+        .x86_64 => switch (@sizeOf(usize)) {
+            8 => asm (
+                \\ movq %%fs:0, %[ret]
+                : [ret] "=r" (-> usize),
+            ),
+            // On x32, usize is 32 bits.
+            4 => asm (
+                \\ movl %%fs:0, %[ret]
+                : [ret] "=r" (-> usize),
+            ),
+            else => comptime unreachable,
+        },
+        .xtensa, .xtensaeb => asm (
+            \\ rur %[ret], threadptr
+            : [ret] "=r" (-> usize),
+        ),
+        else => @compileError("Unsupported architecture"),
+    };
+}
+
+fn computeAreaDesc(phdrs: []elf.ElfN.Phdr) void {
+    @setRuntimeSafety(false);
+    @disableInstrumentation();
+
+    var tls_phdr: ?*elf.ElfN.Phdr = null;
     var img_base: usize = 0;
 
     for (phdrs) |*phdr| {
-        switch (phdr.p_type) {
-            elf.PT_PHDR => img_base = @intFromPtr(phdrs.ptr) - phdr.p_vaddr,
-            elf.PT_TLS => tls_phdr = phdr,
+        switch (phdr.type) {
+            .PHDR => img_base = @intFromPtr(phdrs.ptr) - phdr.vaddr,
+            .TLS => tls_phdr = phdr,
             else => {},
         }
     }
@@ -399,12 +500,12 @@ fn computeAreaDesc(phdrs: []elf.Phdr) void {
     var block_size: usize = undefined;
 
     if (tls_phdr) |phdr| {
-        align_factor = phdr.p_align;
+        align_factor = phdr.@"align";
 
-        // The effective size in memory is represented by `p_memsz`; the length of the data stored
-        // in the `PT_TLS` segment is `p_filesz` and may be less than the former.
-        block_init = @as([*]u8, @ptrFromInt(img_base + phdr.p_vaddr))[0..phdr.p_filesz];
-        block_size = phdr.p_memsz;
+        // The effective size in memory is represented by `memsz`; the length of the data stored
+        // in the `PT.TLS` segment is `filesz` and may be less than the former.
+        block_init = @as([*]u8, @ptrFromInt(img_base + phdr.vaddr))[0..phdr.filesz];
+        block_size = phdr.memsz;
     } else {
         align_factor = @alignOf(usize);
 
@@ -550,7 +651,7 @@ var main_thread_area_buffer: [0x1000]u8 align(page_size_min) = undefined;
 
 /// Computes the layout of the static TLS area, allocates the area, initializes all of its fields,
 /// and assigns the architecture-specific value to the TP register.
-pub fn initStatic(phdrs: []elf.Phdr) void {
+pub fn initStatic(phdrs: []elf.ElfN.Phdr) void {
     @setRuntimeSafety(false);
     @disableInstrumentation();
 
@@ -614,5 +715,55 @@ inline fn mmap_tls(length: usize) usize {
             @as(usize, @bitCast(@as(isize, -1))),
             0,
         });
+    }
+}
+
+comptime {
+    assert(!builtin.link_libc); // otherwise libc should control TLS
+
+    if (builtin.output_mode == .Exe and builtin.link_mode == .static) {
+        // This is a static executable without libc, so it is our job to provide the TLS accessor
+        // function for the GD and LD models. This function is unlikely to actually be used, since
+        // the linker should be able to relax every TLS access to the LE model and therefore
+        // eliminate all calls to this function, but that isn't guaranteed.
+        const Fns = struct {
+            const TlsIndex = switch (native_arch) {
+                .x86_64 => extern struct { module: u64, offset: u64 }, // Even for x32...
+                else => extern struct { module: usize, offset: usize }, // ...but not MIPS N32!
+            };
+            fn __tls_get_addr(ti: *const TlsIndex) callconv(.c) *anyopaque {
+                comptime assert(native_arch != .s390x);
+
+                assert(ti.module == 1); // The executable's module ID is always 1
+                const tp = getThreadPointer();
+                const block: [*]u8 = switch (current_variant) {
+                    .I_original => @ptrFromInt(tp -% area_desc.abi_tcb.offset +% area_desc.block.offset),
+                    .I_modified => @ptrFromInt(tp -% current_tp_offset),
+                    // The `.I_original` approach would also work for `.II`, but there is an
+                    // alternative strategy which is one less operation:
+                    .II => @ptrFromInt(tp -% area_desc.block.size),
+                };
+                return block[@intCast(ti.offset)..];
+            }
+            fn __tls_get_offset() callconv(.naked) noreturn {
+                comptime assert(native_arch == .s390x);
+
+                // We receive the module's GOT pointer in r12 and the GOT offset in r2.
+                asm volatile (
+                    \\ la %%r1, 0(%%r12, %%r2)
+                    \\ lg %%r2, 8(%%r1)
+                    \\ lgrl %%r0, %[block_size]
+                    \\ sgr %%r2, %%r0
+                    \\ br %%r14
+                    :
+                    : [block_size] "s" (&area_desc.block.size),
+                );
+            }
+        };
+
+        if (native_arch == .s390x)
+            @export(&Fns.__tls_get_offset, .{ .name = "__tls_get_offset" })
+        else
+            @export(&Fns.__tls_get_addr, .{ .name = "__tls_get_addr" });
     }
 }

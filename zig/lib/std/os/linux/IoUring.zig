@@ -267,7 +267,7 @@ pub fn cq_ready(self: *IoUring) u32 {
 }
 
 /// Copies as many CQEs as are ready, and that can fit into the destination `cqes` slice.
-/// If none are available, enters into the kernel to wait for at most `wait_nr` CQEs.
+/// If none are available, enters into the kernel to wait for at least `wait_nr` CQEs.
 /// Returns the number of CQEs copied, advancing the CQ ring.
 /// Provides all the wait/peek methods found in liburing, but with batching and a single method.
 /// The rationale for copying CQEs rather than copying pointers is that pointers are 8 bytes
@@ -1230,7 +1230,7 @@ pub fn register_file_alloc_range(self: *IoUring, offset: u32, len: u32) !void {
         self.fd,
         .REGISTER_FILE_ALLOC_RANGE,
         @ptrCast(range),
-        @as(u32, @sizeOf(linux.io_uring_file_index_range)),
+        0,
     );
 
     return handle_registration_result(res);

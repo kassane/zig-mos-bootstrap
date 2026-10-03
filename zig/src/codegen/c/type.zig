@@ -44,7 +44,181 @@ pub const CType = union(enum) {
         param_tys: []const CType,
         ret_ty: *const CType,
         varargs: bool,
+        cc: CallingConvention,
     },
+
+    pub const CallingConvention = enum {
+        c,
+
+        cdecl,
+        regparmcall,
+        sysv_abi,
+        ms_abi,
+        stdcall,
+        fastcall,
+        thiscall,
+
+        vectorcall,
+
+        regcall,
+
+        preserve_none,
+
+        aarch64_vector_pcs,
+        aarch64_sve_pcs,
+
+        @"pcs(\"aapcs\")",
+        @"pcs(\"aapcs-vfp\")",
+
+        @"interrupt(\"ilink1\")",
+        @"interrupt(\"ilink2\")",
+        @"interrupt(\"ilink\")",
+        @"interrupt(\"firq\")",
+
+        interrupt,
+        @"interrupt(\"IRQ\")",
+        @"interrupt(\"FIQ\")",
+        @"interrupt(\"SWI\")",
+        @"interrupt(\"ABORT\")",
+        @"interrupt(\"UNDEF\")",
+
+        signal,
+
+        save_volatiles,
+        interrupt_handler,
+        fast_interrupt,
+        break_handler,
+
+        @"interrupt(\"eic\")",
+        @"interrupt(\"sw0\")",
+        @"interrupt(\"sw1\")",
+        @"interrupt(\"hw0\")",
+        @"interrupt(\"hw1\")",
+        @"interrupt(\"hw2\")",
+        @"interrupt(\"hw3\")",
+        @"interrupt(\"hw4\")",
+        @"interrupt(\"hw5\")",
+
+        riscv_vector_cc,
+        @"interrupt(\"supervisor\")",
+        @"interrupt(\"machine\")",
+
+        renesas,
+        /// Implies `interrupt_handler`.
+        trapa_handler,
+        @"interrupt_handler, nosave_low_regs",
+        @"interrupt_handler, resbank",
+
+        m68k_rtd,
+
+        tiflags,
+
+        pub fn fromLang(cc: std.lang.CallingConvention, target: *const std.Target) CallingConvention {
+            if (target.cCallingConvention()) |ccc| {
+                if (cc.eql(ccc)) {
+                    return .c;
+                }
+            }
+            return switch (cc) {
+                .auto, .naked => .c,
+
+                .x86_16_cdecl => .cdecl,
+                .x86_16_regparmcall => .regparmcall,
+                .x86_64_sysv, .x86_sysv => .sysv_abi,
+                .x86_64_win, .x86_win, .x86_mingw => .ms_abi,
+                .x86_16_stdcall, .x86_stdcall => .stdcall,
+                .x86_fastcall => .fastcall,
+                .x86_thiscall => .thiscall,
+
+                .x86_vectorcall,
+                .x86_64_vectorcall,
+                => .vectorcall,
+
+                .x86_64_regcall_v3_sysv,
+                .x86_64_regcall_v4_win,
+                .x86_regcall_v3,
+                .x86_regcall_v4_win,
+                => .regcall,
+
+                .x86_64_preserve_none,
+                .aarch64_preserve_none,
+                => .preserve_none,
+
+                .aarch64_vfabi => .aarch64_vector_pcs,
+                .aarch64_vfabi_sve => .aarch64_sve_pcs,
+
+                .arm_aapcs => .@"pcs(\"aapcs\")",
+                .arm_aapcs_vfp => .@"pcs(\"aapcs-vfp\")",
+
+                .arc_interrupt => |opts| switch (opts.type) {
+                    .ilink1 => .@"interrupt(\"ilink1\")",
+                    .ilink2 => .@"interrupt(\"ilink2\")",
+                    .ilink => .@"interrupt(\"ilink\")",
+                    .firq => .@"interrupt(\"firq\")",
+                },
+
+                .arm_interrupt => |opts| switch (opts.type) {
+                    .generic => .interrupt,
+                    .irq => .@"interrupt(\"IRQ\")",
+                    .fiq => .@"interrupt(\"FIQ\")",
+                    .swi => .@"interrupt(\"SWI\")",
+                    .abort => .@"interrupt(\"ABORT\")",
+                    .undef => .@"interrupt(\"UNDEF\")",
+                },
+
+                .avr_signal => .signal,
+
+                .microblaze_interrupt => |opts| switch (opts.type) {
+                    .user => .save_volatiles,
+                    .regular => .interrupt_handler,
+                    .fast => .fast_interrupt,
+                    .breakpoint => .break_handler,
+                },
+
+                .mips_interrupt, .mips64_interrupt => |opts| switch (opts.mode) {
+                    .eic => .@"interrupt(\"eic\")",
+                    .sw0 => .@"interrupt(\"sw0\")",
+                    .sw1 => .@"interrupt(\"sw1\")",
+                    .hw0 => .@"interrupt(\"hw0\")",
+                    .hw1 => .@"interrupt(\"hw1\")",
+                    .hw2 => .@"interrupt(\"hw2\")",
+                    .hw3 => .@"interrupt(\"hw3\")",
+                    .hw4 => .@"interrupt(\"hw4\")",
+                    .hw5 => .@"interrupt(\"hw5\")",
+                },
+
+                .riscv64_lp64_v, .riscv32_ilp32_v => .riscv_vector_cc,
+                .riscv32_interrupt, .riscv64_interrupt => |opts| switch (opts.mode) {
+                    .supervisor => .@"interrupt(\"supervisor\")",
+                    .machine => .@"interrupt(\"machine\")",
+                },
+
+                .sh_renesas => .renesas,
+                .sh_interrupt => |opts| switch (opts.save) {
+                    .fpscr => .trapa_handler,
+                    .high => .@"interrupt_handler, nosave_low_regs",
+                    .full => .interrupt_handler,
+                    .bank => .@"interrupt_handler, resbank",
+                },
+
+                .m68k_rtd => .m68k_rtd,
+
+                .avr_interrupt,
+                .csky_interrupt,
+                .m68k_interrupt,
+                .mos_interrupt,
+                .msp430_interrupt,
+                .x86_16_interrupt,
+                .x86_interrupt,
+                .x86_64_interrupt,
+                => .interrupt,
+
+                .ez80_tiflags => .tiflags,
+
+                else => unreachable, // `Zcu.callconvSupported`
+            };
+        }
+    };
 
     /// Returns `true` if this node has a postfix operator, meaning an `[...]` or `(...)` appears
     /// after the identifier in a declarator with this type. In this case, if this node is wrapped
@@ -130,28 +304,28 @@ pub const CType = union(enum) {
         pub fn bits(int: Int, target: *const std.Target) u16 {
             return switch (int) {
                 // zig fmt: off
-            .char => target.cTypeBitSize(.char),
+                .char => target.cTypeBitSize(.char).?,
 
-            .@"unsigned short"     => target.cTypeBitSize(.ushort),
-            .@"unsigned int"       => target.cTypeBitSize(.uint),
-            .@"unsigned long"      => target.cTypeBitSize(.ulong),
-            .@"unsigned long long" => target.cTypeBitSize(.ulonglong),
+                .@"unsigned short"     => target.cTypeBitSize(.ushort).?,
+                .@"unsigned int"       => target.cTypeBitSize(.uint).?,
+                .@"unsigned long"      => target.cTypeBitSize(.ulong).?,
+                .@"unsigned long long" => target.cTypeBitSize(.ulonglong).?,
 
-            .@"signed short"     => target.cTypeBitSize(.short),
-            .@"signed int"       => target.cTypeBitSize(.int),
-            .@"signed long"      => target.cTypeBitSize(.long),
-            .@"signed long long" => target.cTypeBitSize(.longlong),
+                .@"signed short"     => target.cTypeBitSize(.short).?,
+                .@"signed int"       => target.cTypeBitSize(.int).?,
+                .@"signed long"      => target.cTypeBitSize(.long).?,
+                .@"signed long long" => target.cTypeBitSize(.longlong).?,
 
-            .uintptr_t, .intptr_t => target.ptrBitWidth(),
+                .uintptr_t, .intptr_t => target.ptrBitWidth(),
 
-            .uint8_t,  .int8_t   => 8,
-            .uint16_t, .int16_t  => 16,
-            .uint24_t, .int24_t  => 24,
-            .uint32_t, .int32_t  => 32,
-            .uint48_t, .int48_t  => 48,
-            .uint64_t, .int64_t  => 64,
-            .zig_u128, .zig_i128 => 128,
-            // zig fmt: on
+                .uint8_t,  .int8_t   => 8,
+                .uint16_t, .int16_t  => 16,
+                .uint24_t, .int24_t  => 24,
+                .uint32_t, .int32_t  => 32,
+                .uint48_t, .int48_t  => 48,
+                .uint64_t, .int64_t  => 64,
+                .zig_u128, .zig_i128 => 128,
+                // zig fmt: on
             };
         }
     };
@@ -249,6 +423,7 @@ pub const CType = union(enum) {
                 .null,
                 .enum_literal,
                 .@"opaque",
+                .spirv,
                 .noreturn,
                 .void,
                 => return .void,
@@ -375,6 +550,7 @@ pub const CType = union(enum) {
                             .ret_ty = ret_cty_buf,
                             .param_tys = param_cty_buf,
                             .varargs = func_type.is_var_args,
+                            .cc = .fromLang(func_type.cc, zcu.getTarget()),
                         } };
                     }
                     try deps.addType(gpa, cur_ty, allow_incomplete);
@@ -483,8 +659,7 @@ pub const CType = union(enum) {
     pub fn classifyInt(ty: Type, zcu: *const Zcu) IntClass {
         const int_ty: Type = switch (ty.zigTypeTag(zcu)) {
             .error_set => return classifyBitInt(.unsigned, zcu.errorSetBits(), zcu),
-            .@"enum" => ty.intTagType(zcu),
-            .@"struct", .@"union" => ty.bitpackBackingInt(zcu),
+            .@"enum", .@"struct", .@"union" => ty.backingIntType(zcu),
             .int => ty,
             else => unreachable,
         };
@@ -513,40 +688,39 @@ pub const CType = union(enum) {
         }
     }
     fn classifyBitInt(signedness: std.lang.Signedness, bits: u16, zcu: *const Zcu) IntClass {
-        const is_ez80 = zcu.getTarget().cpu.arch == .ez80;
-        return switch (bits) {
+        const target = zcu.getTarget();
+        return switch (std.zig.target.intByteSize(target, bits)) {
             0 => .void,
-            1...8 => switch (signedness) {
+            1 => switch (signedness) {
                 .unsigned => .{ .small = .uint8_t },
                 .signed => .{ .small = .int8_t },
             },
-            9...16 => switch (signedness) {
+            2 => switch (signedness) {
                 .unsigned => .{ .small = .uint16_t },
                 .signed => .{ .small = .int16_t },
             },
-            17...24 => switch (signedness) {
-                .unsigned => .{ .small = if (is_ez80) .uint24_t else .uint32_t },
-                .signed => .{ .small = if (is_ez80) .int24_t else .int32_t },
+            3 => switch (signedness) {
+                .unsigned => .{ .small = .uint24_t },
+                .signed => .{ .small = .int24_t },
             },
-            25...32 => switch (signedness) {
+            4 => switch (signedness) {
                 .unsigned => .{ .small = .uint32_t },
                 .signed => .{ .small = .int32_t },
             },
-            33...48 => switch (signedness) {
-                .unsigned => .{ .small = if (is_ez80) .uint48_t else .uint64_t },
-                .signed => .{ .small = if (is_ez80) .int48_t else .int64_t },
+            6 => switch (signedness) {
+                .unsigned => .{ .small = .uint48_t },
+                .signed => .{ .small = .int48_t },
             },
-            49...64 => switch (signedness) {
+            8 => switch (signedness) {
                 .unsigned => .{ .small = .uint64_t },
                 .signed => .{ .small = .int64_t },
             },
-            65...128 => switch (signedness) {
+            16 => switch (signedness) {
                 .unsigned => .{ .small = .zig_u128 },
                 .signed => .{ .small = .zig_i128 },
             },
-            else => {
+            else => |n| {
                 @branchHint(.unlikely);
-                const target = zcu.getTarget();
                 const limb_bytes = std.zig.target.intAlignment(target, bits);
                 return .{ .big = .{
                     .limb_size = switch (limb_bytes) {
@@ -557,10 +731,7 @@ pub const CType = union(enum) {
                         16 => .@"128",
                         else => unreachable,
                     },
-                    .limbs_len = @divExact(
-                        std.zig.target.intByteSize(target, bits),
-                        limb_bytes,
-                    ),
+                    .limbs_len = @divExact(n, limb_bytes),
                 } };
             },
         };
@@ -571,30 +742,30 @@ pub const CType = union(enum) {
     pub const Dependencies = struct {
         /// Key is any Zig type which corresponds to a C `struct`, `union`, or `typedef`. That C
         /// type must be declared and complete.
-        type: std.AutoArrayHashMapUnmanaged(InternPool.Index, void),
+        type: std.array_hash_map.Auto(InternPool.Index, void),
 
         /// Key is a Zig type which is the *payload* of an error union. The C `struct` type
         /// corresponding to such an error union must be declared and complete.
         ///
         /// These are separate from `type` to avoid redundant types for every different error set
         /// used with the same payload type---for instance a different C type for every `E!void`.
-        errunion_type: std.AutoArrayHashMapUnmanaged(InternPool.Index, void),
+        errunion_type: std.array_hash_map.Auto(InternPool.Index, void),
 
         /// Like `type`, but the type does not necessarily need to be completed yet: a forward
         /// declaration is sufficient.
-        type_fwd: std.AutoArrayHashMapUnmanaged(InternPool.Index, void),
+        type_fwd: std.array_hash_map.Auto(InternPool.Index, void),
 
         /// Like `errunion_type`, but the type does not necessarily need to be completed yet: a
         /// forward declaration is sufficient.
-        errunion_type_fwd: std.AutoArrayHashMapUnmanaged(InternPool.Index, void),
+        errunion_type_fwd: std.array_hash_map.Auto(InternPool.Index, void),
 
         /// Key is a Zig type; value is a bitmask of alignments. For every bit which is set, an
         /// aligned typedef is required. For instance, if bit 3 is set, the C type 'aligned__8_foo'
         /// must be declared through `typedef` (but not necessarily completed yet).
-        aligned_type_fwd: std.AutoArrayHashMapUnmanaged(InternPool.Index, u64),
+        aligned_type_fwd: std.array_hash_map.Auto(InternPool.Index, u64),
 
         /// Key specifies a big-int type whose C `struct` must be declared and complete.
-        bigint: std.AutoArrayHashMapUnmanaged(BigInt, void),
+        bigint: std.array_hash_map.Auto(BigInt, void),
 
         pub const empty: Dependencies = .{
             .type = .empty,
@@ -767,6 +938,13 @@ pub const CType = union(enum) {
                         try w.writeByte('(');
                     },
                 }
+                switch (ptr.elem_ty.*) {
+                    else => {},
+                    .function => |function| switch (function.cc) {
+                        .c => {},
+                        else => |cc| try w.print("zig_callconv({t}) ", .{cc}),
+                    },
+                }
                 try w.writeByte('*');
             },
 
@@ -816,7 +994,7 @@ pub const CType = union(enum) {
             => {},
 
             .pointer => |ptr| {
-                // Match opening paren "(" write `writeTypePrefix`.
+                // Match opening paren "(" in `writeTypePrefix`.
                 switch (ptr.elem_ty.kind()) {
                     .specifier, .pointer => {},
                     .postfix_op => try w.writeByte(')'),
@@ -865,6 +1043,7 @@ pub const CType = union(enum) {
             switch (ty.zigTypeTag(zcu)) {
                 .frame => unreachable,
                 .@"anyframe" => unreachable,
+                .spirv => unreachable,
 
                 .type => try w.writeAll("type"),
                 .void => try w.writeAll("void"),
@@ -907,7 +1086,7 @@ pub const CType = union(enum) {
                 },
                 .error_set => switch (ty.toIntern()) {
                     .anyerror_type => try w.writeAll("anyerror"),
-                    else => try w.print("error_{d}", .{@intFromEnum(ty.toIntern())}),
+                    else => try w.print("error_{d}", .{@backingInt(ty.toIntern())}),
                 },
                 .optional => try w.print("opt_{f}", .{fmtZigType(ty.optionalChild(zcu), zcu)}),
                 .error_union => try w.print("errunion_{f}", .{fmtZigType(ty.errorUnionPayload(zcu), zcu)}),
@@ -947,7 +1126,7 @@ pub const CType = union(enum) {
 
                 .array => if (ty.sentinel(zcu)) |s| try w.print("arr_{d}s{d}_{f}", .{
                     ty.arrayLen(zcu),
-                    @intFromEnum(s.toIntern()),
+                    @backingInt(s.toIntern()),
                     fmtZigType(ty.childType(zcu), zcu),
                 }) else try w.print("arr_{d}_{f}", .{
                     ty.arrayLen(zcu),
@@ -962,17 +1141,17 @@ pub const CType = union(enum) {
                         try w.print("_{f}", .{fmtZigType(field_ty, zcu)});
                     }
                 } else {
-                    const name = ty.containerTypeName(ip).toSlice(ip);
+                    const name = ty.containerTypeName(ip).fqn.toSlice(ip);
                     try w.print("{f}", .{@import("../c.zig").fmtIdentUnsolo(name)});
                 },
                 .@"opaque" => if (ty.toIntern() == .anyopaque_type) {
                     try w.writeAll("anyopaque");
                 } else {
-                    const name = ty.containerTypeName(ip).toSlice(ip);
+                    const name = ty.containerTypeName(ip).fqn.toSlice(ip);
                     try w.print("{f}", .{@import("../c.zig").fmtIdentUnsolo(name)});
                 },
                 .@"union", .@"enum" => {
-                    const name = ty.containerTypeName(ip).toSlice(ip);
+                    const name = ty.containerTypeName(ip).fqn.toSlice(ip);
                     try w.print("{f}", .{@import("../c.zig").fmtIdentUnsolo(name)});
                 },
             }
@@ -988,6 +1167,7 @@ pub const CType = union(enum) {
             .anyframe_type,
             .simple_type,
             .opaque_type,
+            .spirv_type,
             .error_set_type,
             .inferred_error_set_type,
             => true,

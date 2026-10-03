@@ -213,13 +213,13 @@ pub const VTable = struct {
     processSetCurrentDir: *const fn (?*anyopaque, Dir) std.process.SetCurrentDirError!void,
     processSetCurrentPath: *const fn (?*anyopaque, []const u8) std.process.SetCurrentPathError!void,
     processReplace: *const fn (?*anyopaque, std.process.ReplaceOptions) std.process.ReplaceError,
-    processReplacePath: *const fn (?*anyopaque, Dir, std.process.ReplaceOptions) std.process.ReplaceError,
     processSpawn: *const fn (?*anyopaque, std.process.SpawnOptions) std.process.SpawnError!std.process.Child,
-    processSpawnPath: *const fn (?*anyopaque, Dir, std.process.SpawnOptions) std.process.SpawnError!std.process.Child,
     childWait: *const fn (?*anyopaque, *std.process.Child) std.process.Child.WaitError!std.process.Child.Term,
     childKill: *const fn (?*anyopaque, *std.process.Child) void,
 
     progressParentFile: *const fn (?*anyopaque) std.Progress.ParentFileError!File,
+    inheritParentDir: *const fn (?*anyopaque, handle: Dir.Handle) InheritParentHandleError!Dir,
+    inheritParentFile: *const fn (?*anyopaque, handle: File.Handle, flags: File.Flags) InheritParentHandleError!File,
 
     now: *const fn (?*anyopaque, Clock) Timestamp,
     clockResolution: *const fn (?*anyopaque, Clock) Clock.ResolutionError!Duration,
@@ -235,10 +235,8 @@ pub const VTable = struct {
     netListenUnix: *const fn (?*anyopaque, *const net.UnixAddress, net.UnixAddress.ListenOptions) net.UnixAddress.ListenError!net.Socket.Handle,
     netConnectUnix: *const fn (?*anyopaque, *const net.UnixAddress) net.UnixAddress.ConnectError!net.Socket.Handle,
     netSocketCreatePair: *const fn (?*anyopaque, net.Socket.CreatePairOptions) net.Socket.CreatePairError![2]net.Socket,
-    netSend: *const fn (?*anyopaque, net.Socket.Handle, []net.OutgoingMessage, net.SendFlags) struct { ?net.Socket.SendError, usize },
-    netWrite: *const fn (?*anyopaque, dest: net.Socket.Handle, header: []const u8, data: []const []const u8, splat: usize) net.Stream.Writer.Error!usize,
     netWriteFile: *const fn (?*anyopaque, net.Socket.Handle, header: []const u8, *Io.File.Reader, Io.Limit) net.Stream.Writer.WriteFileError!usize,
-    netClose: *const fn (?*anyopaque, handle: []const net.Socket.Handle) void,
+    netClose: *const fn (?*anyopaque, sockets: []const net.Socket) void,
     netShutdown: *const fn (?*anyopaque, handle: net.Socket.Handle, how: net.ShutdownHow) net.ShutdownError!void,
     netInterfaceNameResolve: *const fn (?*anyopaque, *const net.Interface.Name) net.Interface.Name.ResolveError!net.Interface,
     netInterfaceName: *const fn (?*anyopaque, net.Interface) net.Interface.NameError!net.Interface.Name,
@@ -252,7 +250,9 @@ pub const Operation = union(enum) {
     /// other systems this tag is unreachable.
     device_io_control: DeviceIoControl,
     net_receive: NetReceive,
+    net_send: NetSend,
     net_read: NetRead,
+    net_write: NetWrite,
 
     pub const Tag = @typeInfo(Operation).@"union".tag_type.?;
 
@@ -373,23 +373,116 @@ pub const Operation = union(enum) {
             /// the OS where it was queued up to be reported at the next call
             /// to send or receive on the bound socket.
             PortUnreachable,
+            /// The remote peer did not respond to ongoing communication, causing the
+            /// OS to abort the connection.
+            ConnectionTimedOut,
         } || Io.UnexpectedError;
 
         pub const Result = struct { ?net.Socket.ReceiveError, usize };
     };
 
+    pub const NetSend = struct {
+        socket_handle: net.Socket.Handle,
+        messages: []net.OutgoingMessage,
+        flags: net.SendFlags,
+
+        pub const Error = error{
+            /// The socket type requires that message be sent atomically, and the
+            /// size of the message to be sent made this impossible. The message
+            /// was not transmitted, or was partially transmitted.
+            MessageOversize,
+            /// The output queue for a network interface was full. This generally indicates that the
+            /// interface has stopped sending, but may be caused by transient congestion. (Normally,
+            /// this does not occur in Linux. Packets are just silently dropped when a device queue
+            /// overflows.)
+            ///
+            /// This is also caused when there is not enough kernel memory available.
+            SystemResources,
+            /// No route to network.
+            NetworkUnreachable,
+            /// Network reached but no route to host.
+            HostUnreachable,
+            /// The local network interface used to reach the destination is offline.
+            NetworkDown,
+            /// The destination address is not listening. Can still occur for
+            /// connectionless messages.
+            ConnectionRefused,
+            /// Operating system or protocol does not support the address family.
+            AddressFamilyUnsupported,
+            /// Another TCP Fast Open is already in progress.
+            FastOpenAlreadyInProgress,
+            /// Network session was unexpectedly closed by recipient.
+            ConnectionResetByPeer,
+            /// Local end has been shut down on a connection-oriented socket, or
+            /// the socket was never connected.
+            SocketUnconnected,
+            /// An attempt was made to send to a network/broadcast address as
+            /// though it was a unicast address.
+            AccessDenied,
+            /// The remote peer did not respond to ongoing communication, causing the
+            /// OS to abort the connection.
+            ConnectionTimedOut,
+        } || Io.UnexpectedError;
+
+        pub const Result = struct { ?net.Socket.SendError, usize };
+    };
+
     pub const NetRead = struct {
         socket_handle: net.Socket.Handle,
         data: [][]u8,
+        control: []u8 = &.{},
 
         pub const Error = error{
             SystemResources,
             ConnectionResetByPeer,
             SocketUnconnected,
-            /// The file descriptor does not hold the required rights to read
-            /// from it.
+            /// File descriptor does not hold the required rights to read from it.
             AccessDenied,
             NetworkDown,
+            /// The remote peer did not respond to ongoing communication, causing the
+            /// OS to abort the connection.
+            ConnectionTimedOut,
+        } || Io.UnexpectedError;
+
+        pub const Result = Error!net.Stream.ReadResult;
+    };
+
+    pub const NetWrite = struct {
+        socket_handle: net.Socket.Handle,
+        header: []const u8 = &.{},
+        data: []const []const u8,
+        splat: usize = 1,
+        control: []const u8 = &.{},
+
+        pub const Error = error{
+            /// Another TCP Fast Open is already in progress.
+            FastOpenAlreadyInProgress,
+            /// Network session was unexpectedly closed by recipient.
+            ConnectionResetByPeer,
+            /// The output queue for a network interface was full. This generally indicates that the
+            /// interface has stopped sending, but may be caused by transient congestion. (Normally,
+            /// this does not occur in Linux. Packets are just silently dropped when a device queue
+            /// overflows.)
+            ///
+            /// This is also caused when there is not enough kernel memory available.
+            SystemResources,
+            /// No route to network.
+            NetworkUnreachable,
+            /// Network reached but no route to host.
+            HostUnreachable,
+            /// The local network interface used to reach the destination is down.
+            NetworkDown,
+            /// The destination address is not listening.
+            ConnectionRefused,
+            /// The passed address didn't have the correct address family in its sa_family field.
+            AddressFamilyUnsupported,
+            /// Local end has been shut down on a connection-oriented socket, or
+            /// the socket was never connected.
+            SocketUnconnected,
+            /// The remote peer did not respond to ongoing communication, causing the
+            /// OS to abort the connection.
+            ConnectionTimedOut,
+            SocketNotBound,
         } || Io.UnexpectedError;
 
         pub const Result = Error!usize;
@@ -437,14 +530,14 @@ pub const Operation = union(enum) {
         _,
 
         pub fn fromIndex(i: usize) OptionalIndex {
-            const oi: OptionalIndex = @enumFromInt(i);
+            const oi: OptionalIndex = @fromBackingInt(@intCast(i));
             assert(oi != .none);
             return oi;
         }
 
         pub fn toIndex(oi: OptionalIndex) u32 {
             assert(oi != .none);
-            return @intFromEnum(oi);
+            return @backingInt(oi);
         }
     };
     pub const List = struct {
@@ -467,6 +560,7 @@ pub const OperateTimeoutError = Cancelable || Timeout.Error || ConcurrentError;
 
 /// Performs one `Operation` with provided `timeout`.
 pub fn operateTimeout(io: Io, operation: Operation, timeout: Timeout) OperateTimeoutError!Operation.Result {
+    if (timeout == .none) return io.vtable.operate(io.userdata, operation);
     var storage: [1]Operation.Storage = undefined;
     var batch: Batch = .init(&storage);
     batch.addAt(0, operation);
@@ -640,13 +734,13 @@ pub const Limit = enum(usize) {
 
     /// `math.maxInt(usize)` is interpreted to mean `.unlimited`.
     pub fn limited(n: usize) Limit {
-        return @enumFromInt(n);
+        return @fromBackingInt(@intCast(n));
     }
 
     /// Any value grater than `math.maxInt(usize)` is interpreted to mean
     /// `.unlimited`.
     pub fn limited64(n: u64) Limit {
-        return @enumFromInt(@min(n, math.maxInt(usize)));
+        return @fromBackingInt(@intCast(@min(n, math.maxInt(usize))));
     }
 
     pub fn countVec(data: []const []const u8) Limit {
@@ -656,7 +750,7 @@ pub const Limit = enum(usize) {
     }
 
     pub fn min(a: Limit, b: Limit) Limit {
-        return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@min(@backingInt(a), @backingInt(b))));
     }
 
     pub fn max(a: Limit, b: Limit) Limit {
@@ -664,15 +758,15 @@ pub const Limit = enum(usize) {
             return .unlimited;
         }
 
-        return @enumFromInt(@max(@intFromEnum(a), @intFromEnum(b)));
+        return @fromBackingInt(@intCast(@max(@backingInt(a), @backingInt(b))));
     }
 
     pub fn minInt(l: Limit, n: usize) usize {
-        return @min(n, @intFromEnum(l));
+        return @min(n, @backingInt(l));
     }
 
     pub fn minInt64(l: Limit, n: u64) usize {
-        return @min(n, @intFromEnum(l));
+        return @min(n, @backingInt(l));
     }
 
     pub fn slice(l: Limit, s: []u8) []u8 {
@@ -685,14 +779,14 @@ pub const Limit = enum(usize) {
 
     pub fn toInt(l: Limit) ?usize {
         return switch (l) {
-            else => @intFromEnum(l),
+            else => @backingInt(l),
             .unlimited => null,
         };
     }
 
     pub fn toInt64(l: Limit) ?u64 {
         return switch (l) {
-            else => @intFromEnum(l),
+            else => @backingInt(l),
             .unlimited => null,
         };
     }
@@ -702,7 +796,7 @@ pub const Limit = enum(usize) {
     /// between end-of-stream and reaching the limit.
     pub fn slice1(l: Limit, non_empty_buffer: []u8) []u8 {
         assert(non_empty_buffer.len >= 1);
-        return non_empty_buffer[0..@min(@intFromEnum(l) +| 1, non_empty_buffer.len)];
+        return non_empty_buffer[0..@min(@backingInt(l) +| 1, non_empty_buffer.len)];
     }
 
     pub fn nonzero(l: Limit) bool {
@@ -713,8 +807,8 @@ pub const Limit = enum(usize) {
     /// limit would be exceeded.
     pub fn subtract(l: Limit, amount: usize) ?Limit {
         if (l == .unlimited) return .unlimited;
-        if (amount > @intFromEnum(l)) return null;
-        return @enumFromInt(@intFromEnum(l) - amount);
+        if (amount > @backingInt(l)) return null;
+        return @fromBackingInt(@intCast(@backingInt(l) - amount));
     }
 };
 
@@ -734,6 +828,10 @@ pub const UnexpectedError = error{
     /// the respective function.
     Unexpected,
 };
+
+pub const InheritParentHandleError = error{
+    UnsupportedOperation,
+} || Cancelable || UnexpectedError;
 
 pub const Clock = enum {
     /// A settable system-wide clock that measures real (i.e. wall-clock)
@@ -778,10 +876,10 @@ pub const Clock = enum {
     /// * On Linux, corresponds `CLOCK_BOOTTIME`.
     /// * On macOS, corresponds to `CLOCK_MONOTONIC_RAW`.
     boot,
-    /// Tracks the amount of CPU in user or kernel mode used by the calling
+    /// Tracks the amount of CPU time in user or kernel mode used by the calling
     /// process.
     cpu_process,
-    /// Tracks the amount of CPU in user or kernel mode used by the calling
+    /// Tracks the amount of CPU time in user or kernel mode used by the calling
     /// thread.
     cpu_thread,
 
@@ -980,6 +1078,10 @@ pub const Timestamp = struct {
         const now_ts = clock.now(io);
         return t.durationTo(now_ts);
     }
+
+    pub fn compare(lhs: Timestamp, op: math.CompareOperator, rhs: Timestamp) bool {
+        return math.compare(lhs.nanoseconds, op, rhs.nanoseconds);
+    }
 };
 
 pub const Duration = struct {
@@ -1147,6 +1249,7 @@ pub const Duration = struct {
 
 /// Declares under what conditions an operation should return `error.Timeout`.
 pub const Timeout = union(enum) {
+    /// `.none` will wait forever
     none,
     duration: Clock.Duration,
     deadline: Clock.Timestamp,
@@ -1583,7 +1686,7 @@ pub fn futexWait(io: Io, comptime T: type, ptr: *align(@alignOf(u32)) const T, e
 /// three possible wake-up reasons if necessary.
 pub fn futexWaitTimeout(io: Io, comptime T: type, ptr: *align(@alignOf(u32)) const T, expected: T, timeout: Timeout) Cancelable!void {
     const expected_int: u32 = switch (@typeInfo(T)) {
-        .@"enum" => @bitCast(@intFromEnum(expected)),
+        .@"enum" => @bitCast(@backingInt(expected)),
         else => @bitCast(expected),
     };
     return io.vtable.futexWait(io.userdata, @ptrCast(ptr), expected_int, timeout);
@@ -1593,7 +1696,7 @@ pub fn futexWaitTimeout(io: Io, comptime T: type, ptr: *align(@alignOf(u32)) con
 /// For a description of cancelation and cancelation points, see `Future.cancel`.
 pub fn futexWaitUncancelable(io: Io, comptime T: type, ptr: *align(@alignOf(u32)) const T, expected: T) void {
     const expected_int: u32 = switch (@typeInfo(T)) {
-        .@"enum" => @bitCast(@intFromEnum(expected)),
+        .@"enum" => @bitCast(@backingInt(expected)),
         else => @bitCast(expected),
     };
     io.vtable.futexWaitUncancelable(io.userdata, @ptrCast(ptr), expected_int);
@@ -1729,9 +1832,10 @@ pub const Condition = struct {
 
             epoch = cond.epoch.load(.acquire); // `.acquire` to ensure ordered before `state` laod
 
-            // Even on error, try to consume a pending signal first. Otherwise a race might
-            // cause a signal to get stuck in the state with no corresponding waiter.
-            {
+            // We were woken normally, so try to consume a pending signal. A signal takes
+            // priority over an expired deadline, so this is checked before the deadline
+            // below. On error we safely remove ourselves as a waiter and propagate the error.
+            if (result) |_| {
                 var prev_state = cond.state.load(.monotonic);
                 while (prev_state.signals > 0) {
                     prev_state = cond.state.cmpxchgWeak(prev_state, .{
@@ -1742,22 +1846,19 @@ pub const Condition = struct {
                         return;
                     };
                 }
+            } else |err| {
+                cond.deregister(io);
+                return err;
             }
 
-            // There are no more signals available; this was a spurious wakeup or an error. If it
-            // was an error, we will remove ourselves as a waiter and return that error. If a
-            // timeout was specified and the deadline has passed, we remove ourselves as a waiter
-            // and return `error.Timeout`. Otherwise, we'll loop back to the futex wait.
-            result catch |err| {
-                const prev_state = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
-                assert(prev_state.waiters > 0); // underflow caused by illegal state
-                return err;
-            };
+            // There are no signals available and no error; if a timeout was specified and
+            // the deadline has passed, remove ourselves as a waiter and return
+            // `error.Timeout`. Otherwise, this was a spurious wakeup: loop back to the
+            // futex wait.
             switch (deadline) {
                 .none => {},
                 .deadline => |d| if (d.untilNow(io).raw.nanoseconds >= 0) {
-                    const prev_state = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
-                    assert(prev_state.waiters > 0); // underflow caused by illegal state
+                    cond.deregister(io);
                     return error.Timeout;
                 },
                 .duration => unreachable,
@@ -1801,6 +1902,24 @@ pub const Condition = struct {
 
             // There are no more signals available; this was a spurious wakeup,
             // so we'll loop back to the futex wait.
+        }
+    }
+
+    fn deregister(cond: *Condition, io: Io) void {
+        var prev_state = cond.state.load(.monotonic);
+        while (true) {
+            const new_signals = @min(prev_state.signals, prev_state.waiters - 1);
+            prev_state = cond.state.cmpxchgWeak(prev_state, .{
+                .waiters = prev_state.waiters - 1,
+                .signals = new_signals,
+            }, .monotonic, .monotonic) orelse {
+                if (prev_state.signals > 0 and prev_state.signals < prev_state.waiters) {
+                    // We kept a signal we are not consuming; wake a remaining waiter for it.
+                    _ = cond.epoch.fetchAdd(1, .release);
+                    io.futexWake(u32, &cond.epoch.raw, 1);
+                }
+                return;
+            };
         }
     }
 
@@ -2525,7 +2644,7 @@ pub fn lockStderr(io: Io, buffer: []u8, terminal_mode: ?Terminal.Mode) Cancelabl
 
 /// Same as `lockStderr` but non-blocking.
 pub fn tryLockStderr(io: Io, buffer: []u8, terminal_mode: ?Terminal.Mode) Cancelable!?LockedStderr {
-    const ls = (try io.vtable.tryLockStderr(io.userdata, buffer, terminal_mode)) orelse return null;
+    const ls = (try io.vtable.tryLockStderr(io.userdata, terminal_mode)) orelse return null;
     try ls.clear(buffer);
     return ls;
 }
@@ -2684,13 +2803,13 @@ pub const failing: std.Io = .{
         .processSetCurrentDir = failingProcessSetCurrentDir,
         .processSetCurrentPath = failingProcessSetCurrentPath,
         .processReplace = failingProcessReplace,
-        .processReplacePath = failingProcessReplacePath,
         .processSpawn = failingProcessSpawn,
-        .processSpawnPath = failingProcessSpawnPath,
         .childWait = unreachableChildWait,
         .childKill = unreachableChildKill,
 
         .progressParentFile = failingProgressParentFile,
+        .inheritParentDir = failingInheritParentDir,
+        .inheritParentFile = failingInheritParentFile,
 
         .random = noRandom,
         .randomSecure = failingRandomSecure,
@@ -2706,8 +2825,6 @@ pub const failing: std.Io = .{
         .netListenUnix = failingNetListenUnix,
         .netConnectUnix = failingNetConnectUnix,
         .netSocketCreatePair = failingNetSocketCreatePair,
-        .netSend = failingNetSend,
-        .netWrite = failingNetWrite,
         .netWriteFile = failingNetWriteFile,
         .netClose = unreachableNetClose,
         .netShutdown = failingNetShutdown,
@@ -2854,7 +2971,9 @@ pub fn failingOperate(userdata: ?*anyopaque, operation: Operation) Cancelable!Op
         .file_write_streaming => .{ .file_write_streaming = error.InputOutput },
         .device_io_control => unreachable,
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+        .net_send => .{ .net_send = .{ error.NetworkDown, 0 } },
         .net_read => .{ .net_read = error.NetworkDown },
+        .net_write => .{ .net_write = error.NetworkDown },
     };
 }
 
@@ -2964,8 +3083,8 @@ pub fn unreachableDirClose(userdata: ?*anyopaque, dirs: []const Dir) void {
 
 pub fn noDirRead(userdata: ?*anyopaque, dir_reader: *Dir.Reader, buffer: []Dir.Entry) Dir.Reader.Error!usize {
     _ = userdata;
-    _ = dir_reader;
     _ = buffer;
+    dir_reader.state = .finished;
     return 0;
 }
 
@@ -3338,22 +3457,8 @@ pub fn failingProcessReplace(userdata: ?*anyopaque, options: std.process.Replace
     return error.OperationUnsupported;
 }
 
-pub fn failingProcessReplacePath(userdata: ?*anyopaque, dir: Dir, options: std.process.ReplaceOptions) std.process.ReplaceError {
-    _ = userdata;
-    _ = dir;
-    _ = options;
-    return error.OperationUnsupported;
-}
-
 pub fn failingProcessSpawn(userdata: ?*anyopaque, options: std.process.SpawnOptions) std.process.SpawnError!std.process.Child {
     _ = userdata;
-    _ = options;
-    return error.OperationUnsupported;
-}
-
-pub fn failingProcessSpawnPath(userdata: ?*anyopaque, dir: Dir, options: std.process.SpawnOptions) std.process.SpawnError!std.process.Child {
-    _ = userdata;
-    _ = dir;
     _ = options;
     return error.OperationUnsupported;
 }
@@ -3372,6 +3477,19 @@ pub fn unreachableChildKill(userdata: ?*anyopaque, child: *std.process.Child) vo
 
 pub fn failingProgressParentFile(userdata: ?*anyopaque) std.Progress.ParentFileError!File {
     _ = userdata;
+    return error.UnsupportedOperation;
+}
+
+pub fn failingInheritParentDir(userdata: ?*anyopaque, handle: Dir.Handle) InheritParentHandleError!Dir {
+    _ = userdata;
+    _ = handle;
+    return error.UnsupportedOperation;
+}
+
+pub fn failingInheritParentFile(userdata: ?*anyopaque, handle: File.Handle, flags: File.Flags) InheritParentHandleError!File {
+    _ = userdata;
+    _ = handle;
+    _ = flags;
     return error.UnsupportedOperation;
 }
 
@@ -3450,23 +3568,6 @@ pub fn failingNetSocketCreatePair(userdata: ?*anyopaque, options: net.Socket.Cre
     return error.OperationUnsupported;
 }
 
-pub fn failingNetSend(userdata: ?*anyopaque, handle: net.Socket.Handle, messages: []net.OutgoingMessage, flags: net.SendFlags) struct { ?net.Socket.SendError, usize } {
-    _ = userdata;
-    _ = handle;
-    _ = messages;
-    _ = flags;
-    return .{ error.NetworkDown, 0 };
-}
-
-pub fn failingNetWrite(userdata: ?*anyopaque, dest: net.Socket.Handle, header: []const u8, data: []const []const u8, splat: usize) net.Stream.Writer.Error!usize {
-    _ = userdata;
-    _ = dest;
-    _ = header;
-    _ = data;
-    _ = splat;
-    return error.NetworkDown;
-}
-
 pub fn failingNetWriteFile(userdata: ?*anyopaque, handle: net.Socket.Handle, header: []const u8, file_reader: *Io.File.Reader, limit: Io.Limit) net.Stream.Writer.WriteFileError!usize {
     _ = userdata;
     _ = handle;
@@ -3476,9 +3577,9 @@ pub fn failingNetWriteFile(userdata: ?*anyopaque, handle: net.Socket.Handle, hea
     return error.NetworkDown;
 }
 
-pub fn unreachableNetClose(userdata: ?*anyopaque, handle: []const net.Socket.Handle) void {
+pub fn unreachableNetClose(userdata: ?*anyopaque, sockets: []const net.Socket) void {
     _ = userdata;
-    _ = handle;
+    _ = sockets;
     unreachable;
 }
 

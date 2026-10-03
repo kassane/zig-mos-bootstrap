@@ -16,9 +16,8 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
     const max_byval_size = target.ptrBitWidth() * 2;
     switch (ty.zigTypeTag(zcu)) {
         .@"struct" => {
-            const bit_size = ty.bitSize(zcu);
             if (ty.containerLayout(zcu) == .@"packed") {
-                if (bit_size > max_byval_size) return .memory;
+                if (ty.bitSize(zcu) > max_byval_size) return .memory;
                 return .byval;
             }
 
@@ -40,27 +39,36 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
             }
 
             // TODO this doesn't exactly match what clang produces but its better than nothing
+            const bit_size = ty.abiSize(zcu) * 8;
             if (bit_size > max_byval_size) return .memory;
             if (bit_size > max_byval_size / 2) return .double_integer;
             return .integer;
         },
         .@"union" => {
-            const bit_size = ty.bitSize(zcu);
             if (ty.containerLayout(zcu) == .@"packed") {
-                if (bit_size > max_byval_size) return .memory;
+                if (ty.bitSize(zcu) > max_byval_size) return .memory;
                 return .byval;
             }
             // TODO this doesn't exactly match what clang produces but its better than nothing
+            const bit_size = ty.abiSize(zcu) * 8;
             if (bit_size > max_byval_size) return .memory;
             if (bit_size > max_byval_size / 2) return .double_integer;
             return .integer;
         },
         .bool => return .integer,
-        .float => return .byval,
         .int, .@"enum", .error_set => {
             const bit_size = ty.bitSize(zcu);
             if (bit_size > max_byval_size) return .memory;
             return .byval;
+        },
+        .float => return switch (ty.floatBits(target)) {
+            else => unreachable,
+            16, 32, 64, 128 => .byval,
+            80 => switch (max_byval_size) {
+                else => unreachable,
+                64 => .memory,
+                128 => .double_integer,
+            },
         },
         .vector => {
             const bit_size = ty.bitSize(zcu);
@@ -87,6 +95,7 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
         .null,
         .@"fn",
         .@"opaque",
+        .spirv,
         .enum_literal,
         .array,
         => unreachable,
@@ -152,13 +161,12 @@ pub fn classifySystem(ty: Type, zcu: *Zcu) [8]SystemClass {
         },
         .error_union => {
             const payload_ty = ty.errorUnionPayload(zcu);
-            const payload_bits = payload_ty.bitSize(zcu);
 
             // the error union itself
             result[0] = .integer;
 
             // anyerror!void can fit into one register
-            if (payload_bits == 0) return result;
+            if (!payload_ty.hasRuntimeBits(zcu)) return result;
 
             return memory_class;
         },
@@ -190,7 +198,7 @@ pub fn classifySystem(ty: Type, zcu: *Zcu) [8]SystemClass {
         },
         .vector => {
             // we pass vectors through integer registers if they are small enough to fit.
-            const vec_bits = ty.totalVectorBits(zcu);
+            const vec_bits = ty.bitSize(zcu);
             if (vec_bits <= 64) {
                 result[0] = .integer;
                 return result;

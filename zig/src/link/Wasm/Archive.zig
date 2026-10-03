@@ -12,7 +12,7 @@ toc: Toc,
 
 /// Key points into `LazyArchive` `file_contents`.
 /// Value is allocated with gpa.
-const Toc = std.StringArrayHashMapUnmanaged(std.ArrayList(u32));
+const Toc = std.array_hash_map.String(std.ArrayList(u32));
 
 const ARMAG = std.elf.ARMAG;
 const ARFMAG = std.elf.ARFMAG;
@@ -45,7 +45,7 @@ const Header = extern struct {
 
     fn nameOrIndex(archive: Header) !NameOrIndex {
         const value = getValue(&archive.name);
-        const slash_index = mem.indexOfScalar(u8, value, '/') orelse return error.MalformedArchive;
+        const slash_index = mem.findScalar(u8, value, '/') orelse return error.MalformedArchive;
         const len = value.len;
         if (slash_index == len - 1) {
             // Name stored directly

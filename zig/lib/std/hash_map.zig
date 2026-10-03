@@ -191,15 +191,16 @@ pub fn HashMap(
         /// cause an existing key or value pointer to become invalidated will
         /// instead trigger an assertion.
         ///
-        /// An additional call to `lockPointers` in such state also triggers an
-        /// assertion.
+        /// `lockPointers` may be called multiple times. This allows multiple
+        /// independent users of the hash map to keep it locked simultaneously.
         ///
-        /// `unlockPointers` returns the hash map to the previous state.
+        /// `unlockPointers` restores the hash map to its previous state when
+        /// called the same number of times as `lockPointers`.
         pub fn lockPointers(self: *Self) void {
             self.unmanaged.lockPointers();
         }
 
-        /// Undoes a call to `lockPointers`.
+        /// Undoes one call to `lockPointers`.
         pub fn unlockPointers(self: *Self) void {
             self.unmanaged.unlockPointers();
         }
@@ -593,8 +594,8 @@ fn Custom(
             fingerprint: FingerPrint = free,
             used: u1 = 0,
 
-            const slot_free = @as(u8, @bitCast(Metadata{ .fingerprint = free }));
-            const slot_tombstone = @as(u8, @bitCast(Metadata{ .fingerprint = tombstone }));
+            const slot_free: u8 = @bitCast(Metadata{ .fingerprint = free });
+            const slot_tombstone: u8 = @bitCast(Metadata{ .fingerprint = tombstone });
 
             pub fn isUsed(self: Metadata) bool {
                 return self.used == 1;
@@ -709,17 +710,18 @@ fn Custom(
         /// cause an existing key or value pointer to become invalidated will
         /// instead trigger an assertion.
         ///
-        /// An additional call to `lockPointers` in such state also triggers an
-        /// assertion.
+        /// `lockPointers` may be called multiple times. This allows multiple
+        /// independent users of the hash map to keep it locked simultaneously.
         ///
-        /// `unlockPointers` returns the hash map to the previous state.
+        /// `unlockPointers` restores the hash map to its previous state when
+        /// called the same number of times as `lockPointers`.
         pub fn lockPointers(self: *Self) void {
-            self.pointer_stability.lock();
+            self.pointer_stability.lockShared();
         }
 
-        /// Undoes a call to `lockPointers`.
+        /// Undoes one call to `lockPointers`.
         pub fn unlockPointers(self: *Self) void {
-            self.pointer_stability.unlock();
+            self.pointer_stability.unlockShared();
         }
 
         fn isUnderMaxLoadPercentage(size: Size, cap: Size) bool {
@@ -1518,7 +1520,7 @@ fn Custom(
             self.available = 0;
         }
 
-        /// This function is used in the debugger pretty formatters in tools/ to fetch the
+        /// This function is used in the debugger pretty formatters in lib/lldb/ to fetch the
         /// header type to facilitate fancy debug printing for this type.
         fn dbHelper(self: *Self, hdr: *Header, entry: *Entry) void {
             _ = self;

@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const assert = std.debug.assert;
 
+const dev = @import("dev.zig");
 const Type = @import("Type.zig");
 const AddressSpace = std.lang.AddressSpace;
 const Alignment = @import("InternPool.zig").Alignment;
@@ -12,7 +13,6 @@ pub const default_stack_protector_buffer_size = 4;
 
 pub fn canDynamicLink(target: *const std.Target) bool {
     return switch (target.cpu.arch) {
-        .amdgcn,
         .bpfeb,
         .bpfel,
         .nvptx,
@@ -58,6 +58,16 @@ pub fn libCxxNeedsLibUnwind(target: *const std.Target) bool {
 
         .windows => target.abi.isGnu(),
         else => true,
+    };
+}
+
+pub fn requiresPie(target: *const std.Target, link_mode: std.lang.LinkMode) bool {
+    return switch (target.os.tag) {
+        .ashetos,
+        .fuchsia,
+        .@"switch",
+        => true,
+        else => target.abi.isAndroid() and link_mode == .dynamic,
     };
 }
 
@@ -107,10 +117,6 @@ pub fn alwaysSingleThreaded(target: *const std.Target) bool {
 pub fn defaultSingleThreaded(target: *const std.Target) bool {
     switch (target.cpu.arch) {
         .wasm32, .wasm64 => return true,
-        else => {},
-    }
-    switch (target.os.tag) {
-        .haiku => return true,
         else => {},
     }
     return false;
@@ -164,7 +170,10 @@ pub fn hasValgrindSupport(target: *const std.Target, backend: std.lang.CompilerB
             else => false,
         },
         .x86_64 => switch (target.os.tag) {
-            .linux => target.abi != .gnux32 and target.abi != .muslx32,
+            .linux => switch (target.abi) {
+                .gnux32, .muslx32, .x32 => false,
+                else => true,
+            },
             .freebsd, .illumos => true,
             .windows => !ofmt_c_msvc,
             else => false,
@@ -264,6 +273,7 @@ pub fn hasLlvmSupport(target: *const std.Target, ofmt: std.Target.ObjectFormat) 
         .sheb,
         .x86_16,
         .xtensaeb,
+        .spork8,
         => false,
     };
 }
@@ -276,12 +286,21 @@ pub fn hasLldSupport(ofmt: std.Target.ObjectFormat) bool {
     };
 }
 
-pub fn hasNewLinkerSupport(ofmt: std.Target.ObjectFormat, backend: std.lang.CompilerBackend) bool {
-    return switch (ofmt) {
-        .elf, .coff => switch (backend) {
-            .stage2_x86_64 => true,
+pub fn preferNewLinkerOverLld(target: *const std.Target) bool {
+    return switch (target.ofmt) {
+        .elf => switch (target.cpu.arch) {
+            // Elf2 is more complete than LLD on these targets.
+            .sparc64 => true,
             else => false,
         },
+        else => false,
+    };
+}
+
+/// Returns `true` if `ofmt` has two linker implementations, so `-fnew-linker` is meaningful.
+pub fn hasNewLinker(ofmt: std.Target.ObjectFormat) bool {
+    return switch (ofmt) {
+        .elf, .macho => true,
         else => false,
     };
 }
@@ -298,12 +317,18 @@ pub fn selfHostedBackendIsAsRobustAsLlvm(target: *const std.Target) bool {
             // https://github.com/ziglang/zig/issues/25699
             return false;
         }
-        if (target.os.tag.isBSD()) {
-            // Self-hosted linker needs work: https://github.com/ziglang/zig/issues/24341
-            return false;
+        // Self-hosted linker needs work: https://github.com/ziglang/zig/issues/24341
+        switch (target.os.tag) {
+            .dragonfly,
+            .freebsd,
+            .netbsd,
+            .openbsd,
+            => return false,
+            else => {},
         }
         return switch (target.ofmt) {
-            .elf, .macho => true,
+            .elf => true,
+            .macho => false, // https://codeberg.org/ziglang/zig/issues/35267
             else => false,
         };
     }
@@ -347,12 +372,12 @@ pub fn libcProvidesStackProtector(target: *const std.Target) bool {
 
 /// Returns true if `@returnAddress()` is supported by the target and has a
 /// reasonably performant implementation for the requested optimization mode.
-pub fn supportsReturnAddress(target: *const std.Target, optimize: std.lang.OptimizeMode) bool {
+pub fn supportsReturnAddress(target: *const std.Target, optimize: std.lang.Optimize) bool {
     return switch (target.cpu.arch) {
         // Emscripten currently implements `emscripten_return_address()` by calling
         // out into JavaScript and parsing a stack trace, which introduces significant
         // overhead that we would prefer to avoid in release builds.
-        .wasm32, .wasm64 => target.os.tag == .emscripten and optimize == .Debug,
+        .wasm32, .wasm64 => target.os.tag == .emscripten and optimize == .debug,
         .bpfel, .bpfeb => false,
         .spirv32, .spirv64 => false,
         else => true,
@@ -384,34 +409,37 @@ pub fn classifyCompilerRtLibName(name: []const u8) CompilerRtClassification {
 }
 
 pub fn hasDebugInfo(target: *const std.Target) bool {
-    return switch (target.cpu.arch) {
-        // TODO: We should make newer PTX versions depend on older ones so we'd just check `ptx75`.
-        .nvptx, .nvptx64 => target.cpu.hasAny(.nvptx, &.{
-            .ptx75,
-            .ptx76,
-            .ptx77,
-            .ptx78,
-            .ptx80,
-            .ptx81,
-            .ptx82,
-            .ptx83,
-            .ptx84,
-            .ptx85,
-            .ptx86,
-            .ptx87,
-            .ptx88,
-            .ptx90,
-        }),
-        .bpfel, .bpfeb => false,
-        else => true,
+    return switch (target.ofmt) {
+        .raw, .hex => false,
+        else => switch (target.cpu.arch) {
+            // TODO: We should make newer PTX versions depend on older ones so we'd just check `ptx75`.
+            .nvptx, .nvptx64 => target.cpu.hasAny(.nvptx, &.{
+                .ptx75,
+                .ptx76,
+                .ptx77,
+                .ptx78,
+                .ptx80,
+                .ptx81,
+                .ptx82,
+                .ptx83,
+                .ptx84,
+                .ptx85,
+                .ptx86,
+                .ptx87,
+                .ptx88,
+                .ptx90,
+            }),
+            .bpfel, .bpfeb => false,
+            else => true,
+        },
     };
 }
 
-pub fn defaultCompilerRtOptimizeMode(target: *const std.Target) std.lang.OptimizeMode {
+pub fn defaultCompilerRtOptimizeMode(target: *const std.Target) std.lang.Optimize {
     if (target.cpu.arch.isWasm() and target.os.tag == .freestanding) {
-        return .ReleaseSmall;
+        return .small;
     } else {
-        return .ReleaseFast;
+        return .fast;
     }
 }
 
@@ -422,25 +450,27 @@ pub fn canBuildLibCompilerRt(target: *const std.Target) enum { no, yes, llvm_onl
     }
     switch (target.cpu.arch) {
         .spirv32, .spirv64 => return .no,
+        .spork8 => return .no,
         // Remove this once https://github.com/ziglang/zig/issues/23714 is fixed
         .amdgcn => return .no,
         else => {},
     }
     return switch (zigBackend(target, false)) {
-        .stage2_aarch64, .stage2_x86_64 => .yes,
+        .stage2_aarch64, .stage2_wasm, .stage2_x86_64 => .yes,
         else => .llvm_only,
     };
 }
 
 pub fn canBuildLibUbsanRt(target: *const std.Target) enum { no, yes, llvm_only, llvm_lld_only } {
     switch (target.cpu.arch) {
+        .spork8 => return .no,
         .spirv32, .spirv64 => return .no,
         // Remove this once https://github.com/ziglang/zig/issues/23715 is fixed
         .nvptx, .nvptx64 => return .no,
         else => {},
     }
     return switch (zigBackend(target, false)) {
-        .stage2_wasm => .llvm_lld_only,
+        .stage2_wasm => .yes,
         .stage2_x86_64 => .yes,
         else => .llvm_only,
     };
@@ -481,7 +511,7 @@ pub fn libcFullLinkFlags(target: *const std.Target) []const []const u8 {
         },
         // On SerenityOS libc includes libm, libpthread, libdl, and libssp.
         .serenity => &.{"-lc"},
-        else => &.{},
+        else => if (target.os.tag.isDarwin()) &.{"-lSystem"} else &.{},
     };
     return result;
 }
@@ -586,6 +616,7 @@ pub fn defaultAddressSpace(
     // The default address space for functions on AVR is .flash to produce
     // correct fixups into progmem.
     if (context == .function and target.cpu.arch == .avr) return .flash;
+    if (context == .global_mutable and target.os.tag == .vulkan) return .private;
     return .generic;
 }
 
@@ -616,7 +647,7 @@ pub fn addrSpaceCastIsValid(
 /// (c) some logical pointers (.storage_buffer, .shared) do support operations when
 ///     the VariablePointers capability is enabled (which enables OpPtrAccessChain).
 pub fn shouldBlockPointerOps(target: *const std.Target, as: AddressSpace) bool {
-    if (target.os.tag != .vulkan) return false;
+    if (target.os.tag != .vulkan and target.os.tag != .opengl) return false;
 
     return switch (as) {
         // TODO: Vulkan doesn't support pointers in the generic address space, we
@@ -627,11 +658,12 @@ pub fn shouldBlockPointerOps(target: *const std.Target, as: AddressSpace) bool {
         // Physical pointers always support operations
         .global, .physical_storage_buffer => false,
         // Logical pointers that support operations with VariablePointers capability
-        .shared => !target.cpu.features.isEnabled(@intFromEnum(std.Target.spirv.Feature.variable_pointers)),
-        .storage_buffer => !target.cpu.features.isEnabled(@intFromEnum(std.Target.spirv.Feature.variable_pointers)),
+        .shared => !target.cpu.features.isEnabled(@backingInt(std.Target.spirv.Feature.variable_pointers)),
+        .storage_buffer => !target.cpu.features.isEnabled(@backingInt(std.Target.spirv.Feature.variable_pointers)),
         // Logical pointers that never support operations
         .constant,
         .local,
+        .private,
         .input,
         .output,
         .uniform,
@@ -669,17 +701,17 @@ pub fn isDynamicAMDGCNFeature(target: *const std.Target, feature: std.Target.Cpu
         &std.Target.amdgcn.cpu.gfx1200,
         &std.Target.amdgcn.cpu.gfx1201,
     };
-    const feature_tag: std.Target.amdgcn.Feature = @enumFromInt(feature.index);
+    const feature_tag: std.Target.amdgcn.Feature = @fromBackingInt(@intCast(feature.index));
 
     if (feature_tag == .sramecc) {
-        if (std.mem.indexOfScalar(
+        if (std.mem.findScalar(
             *const std.Target.Cpu.Model,
             sramecc_only ++ xnack_or_sramecc,
             target.cpu.model,
         )) |_| return true;
     }
     if (feature_tag == .xnack) {
-        if (std.mem.indexOfScalar(
+        if (std.mem.findScalar(
             *const std.Target.Cpu.Model,
             xnack_or_sramecc,
             target.cpu.model,
@@ -704,7 +736,7 @@ pub fn llvmMachineAbi(target: *const std.Target) ?[:0]const u8 {
         },
         .mips, .mipsel => "o32",
         .mips64, .mips64el => switch (target.abi) {
-            .gnuabin32, .muslabin32 => "n32",
+            .gnuabin32, .muslabin32, .abin32 => "n32",
             else => "n64",
         },
         .powerpc64 => if (target.os.tag == .ps3) "elfv1" else "elfv2",
@@ -839,7 +871,10 @@ pub fn functionPointerMask(target: *const std.Target) ?u64 {
 
 pub fn supportsTailCall(target: *const std.Target, backend: std.lang.CompilerBackend) bool {
     switch (backend) {
-        .stage2_llvm => return @import("codegen/llvm.zig").supportsTailCall(target),
+        .stage2_llvm => {
+            dev.check(.llvm_backend);
+            return @import("codegen/llvm.zig").supportsTailCall(target);
+        },
         .stage2_c => return true,
         else => return false,
     }
@@ -849,6 +884,7 @@ pub fn supportsThreads(target: *const std.Target, backend: std.lang.CompilerBack
     _ = target;
     return switch (backend) {
         .stage2_aarch64 => false,
+        .stage2_loongarch => false,
         else => true,
     };
 }
@@ -867,18 +903,18 @@ pub fn libcFloatSuffix(float_bits: u16) []const u8 {
         32 => "f",
         64 => "",
         80 => "x", // Non-standard
-        128 => "q", // Non-standard (mimics convention in GCC libquadmath)
+        128 => "f128",
         else => unreachable,
     };
 }
 
-pub fn compilerRtFloatAbbrev(float_bits: u16) []const u8 {
+pub fn compilerRtFloatAbbrev(target: *const std.Target, float_bits: u16) []const u8 {
     return switch (float_bits) {
         16 => "h",
         32 => "s",
         64 => "d",
         80 => "x",
-        128 => "t",
+        128 => if (target.cpu.arch.isPowerPC()) "k" else "t",
         else => unreachable,
     };
 }
@@ -910,6 +946,7 @@ pub fn zigBackend(target: *const std.Target, use_llvm: bool) std.lang.CompilerBa
     return switch (target.cpu.arch) {
         .aarch64, .aarch64_be => .stage2_aarch64,
         .arm, .armeb, .thumb, .thumbeb => .stage2_arm,
+        .loongarch32, .loongarch64 => .stage2_loongarch,
         .powerpc, .powerpcle, .powerpc64, .powerpc64le => .stage2_powerpc,
         .riscv64 => .stage2_riscv64,
         .sparc64 => .stage2_sparc64,
@@ -917,6 +954,7 @@ pub fn zigBackend(target: *const std.Target, use_llvm: bool) std.lang.CompilerBa
         .wasm32, .wasm64 => .stage2_wasm,
         .x86 => .stage2_x86,
         .x86_64 => .stage2_x86_64,
+        .spork8 => .zsf_spork8,
         else => .other,
     };
 }
@@ -938,7 +976,7 @@ pub inline fn backendSupportsFeature(backend: std.lang.CompilerBackend, comptime
             else => false,
         },
         .is_named_enum_value => switch (backend) {
-            .stage2_llvm, .stage2_x86_64 => true,
+            .stage2_llvm, .stage2_x86_64, .stage2_wasm => true,
             else => false,
         },
         .error_set_has_value => switch (backend) {
@@ -946,7 +984,7 @@ pub inline fn backendSupportsFeature(backend: std.lang.CompilerBackend, comptime
             else => false,
         },
         .field_reordering => switch (backend) {
-            .stage2_aarch64, .stage2_c, .stage2_llvm, .stage2_x86_64 => true,
+            .stage2_aarch64, .stage2_c, .stage2_llvm, .stage2_loongarch, .stage2_x86_64, .stage2_wasm => true,
             else => false,
         },
         .separate_thread => switch (backend) {
@@ -954,9 +992,6 @@ pub inline fn backendSupportsFeature(backend: std.lang.CompilerBackend, comptime
             // threads because they would all just be locking the same mutex to
             // protect Builder.
             .stage2_llvm => false,
-            // Same problem. Frontend needs to allow this backend to run in the
-            // linker thread.
-            .stage2_spirv => false,
             // Please do not make any more exceptions. Backends must support
             // being run in a separate thread from now on.
             else => true,

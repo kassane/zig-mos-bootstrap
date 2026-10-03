@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const compiler_rt = @import("../compiler_rt.zig");
-const symbol = @import("../compiler_rt.zig").symbol;
+const symbol = compiler_rt.symbol;
 
 const normalize = compiler_rt.normalize;
 const wideMultiply = compiler_rt.wideMultiply;
@@ -17,15 +17,15 @@ comptime {
     }
 }
 
-pub fn __divdf3(a: f64, b: f64) callconv(.c) f64 {
-    return div(a, b);
+fn __divdf3(a: compiler_rt.f64.Abi, b: compiler_rt.f64.Abi) callconv(.c) compiler_rt.f64.Abi {
+    return compiler_rt.f64.toAbi(div_f64(compiler_rt.f64.fromAbi(a), compiler_rt.f64.fromAbi(b)));
 }
 
 fn __aeabi_ddiv(a: f64, b: f64) callconv(.{ .arm_aapcs = .{} }) f64 {
-    return div(a, b);
+    return div_f64(a, b);
 }
 
-inline fn div(a: f64, b: f64) f64 {
+pub fn div_f64(a: f64, b: f64) f64 {
     const Z = @Int(.unsigned, 64);
     const SignedZ = @Int(.signed, 64);
 
@@ -189,14 +189,13 @@ inline fn div(a: f64, b: f64) f64 {
 
     const writtenExponent = quotientExponent +% exponentBias;
 
+    const round = @intFromBool((residual << 1) >= bSignificand);
+
     if (writtenExponent >= maxExponent) {
         // If we have overflowed the exponent, return infinity.
         return @bitCast(infRep | quotientSign);
     } else if (writtenExponent < 1) {
         if (writtenExponent == 0) {
-            // Check whether the rounded result is normal.
-            const round = @intFromBool((residual << 1) > bSignificand);
-            // Clear the implicit bit.
             var absResult = quotient & significandMask;
             // Round.
             absResult += round;
@@ -205,11 +204,16 @@ inline fn div(a: f64, b: f64) f64 {
                 return @bitCast(absResult | quotientSign);
             }
         }
-        // Flush denormals to zero.  In the future, it would be nice to add
-        // code to round them correctly.
-        return @bitCast(quotientSign);
+
+        const roundedQuotient = quotient +% round;
+        const shiftAmount: u32 = @intCast(1 - writtenExponent);
+        if (shiftAmount > significandBits + 1) {
+            return @bitCast(quotientSign);
+        }
+
+        const denormQuotient = roundedQuotient >> @as(std.math.Log2Int(Z), @intCast(shiftAmount));
+        return @bitCast((denormQuotient & significandMask) | quotientSign);
     } else {
-        const round = @intFromBool((residual << 1) > bSignificand);
         // Clear the implicit bit
         var absResult = quotient & significandMask;
         // Insert the exponent

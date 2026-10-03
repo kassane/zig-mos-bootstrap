@@ -159,7 +159,7 @@ const Block = struct {
             .heading => null,
             .code_block => code_block: {
                 const trimmed = mem.trimEnd(u8, unindented, " \t");
-                if (mem.indexOfNone(u8, trimmed, "`") != null or trimmed.len != b.data.code_block.fence_len) {
+                if (mem.findNone(u8, trimmed, "`") != null or trimmed.len != b.data.code_block.fence_len) {
                     const effective_indent = @min(indent, b.data.code_block.indent);
                     break :code_block line[effective_indent..];
                 } else {
@@ -209,7 +209,7 @@ pub fn feedLine(p: *Parser, line: []const u8) Allocator.Error!void {
     } else p.pending_blocks.items.len;
 
     const in_code_block = p.pending_blocks.items.len > 0 and
-        p.pending_blocks.getLast().?.tag == .code_block;
+        p.pending_blocks.last().?.tag == .code_block;
     const code_block_end = in_code_block and
         first_unmatched + 1 == p.pending_blocks.items.len;
     // New blocks cannot be started if we are actively inside a code block or
@@ -225,7 +225,7 @@ pub fn feedLine(p: *Parser, line: []const u8) Allocator.Error!void {
     if (maybe_block_start == null and
         !isBlank(rest_line) and
         p.pending_blocks.items.len > 0 and
-        p.pending_blocks.getLast().?.tag == .paragraph)
+        p.pending_blocks.last().?.tag == .paragraph)
     {
         try p.addScratchStringLine(mem.trimStart(u8, rest_line, " \t"));
         return;
@@ -236,7 +236,7 @@ pub fn feedLine(p: *Parser, line: []const u8) Allocator.Error!void {
     // paragraphs.
     if (maybe_block_start != null and
         p.pending_blocks.items.len > 0 and
-        p.pending_blocks.getLast().?.tag == .paragraph)
+        p.pending_blocks.last().?.tag == .paragraph)
     {
         try p.closeLastBlock();
     }
@@ -259,7 +259,7 @@ pub fn feedLine(p: *Parser, line: []const u8) Allocator.Error!void {
     // Do not append the end of a code block (```) as textual content.
     if (code_block_end) return;
 
-    const can_accept = if (p.pending_blocks.getLast()) |last_pending_block|
+    const can_accept = if (p.pending_blocks.last()) |last_pending_block|
         last_pending_block.canAccept()
     else
         .blocks;
@@ -273,7 +273,7 @@ pub fn feedLine(p: *Parser, line: []const u8) Allocator.Error!void {
             // loose, since we might just be looking at a blank line after the
             // end of the last item in the list. The final determination will be
             // made when appending the next child of the list or list item.
-            const maybe_containing_list_index = if (p.pending_blocks.items.len > 0 and p.pending_blocks.getLast().?.tag == .list_item)
+            const maybe_containing_list_index = if (p.pending_blocks.items.len > 0 and p.pending_blocks.last().?.tag == .list_item)
                 p.pending_blocks.items.len - 2
             else
                 null;
@@ -368,7 +368,7 @@ const BlockStart = struct {
 };
 
 fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
-    if (p.pending_blocks.getLast()) |last_pending_block| {
+    if (p.pending_blocks.last()) |last_pending_block| {
         // Close the last block if it is a list and the new block is not a list item
         // or not of the same marker type.
         const should_close_list = last_pending_block.tag == .list and
@@ -383,7 +383,7 @@ fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
         }
     }
 
-    if (p.pending_blocks.getLast()) |last_pending_block| {
+    if (p.pending_blocks.last()) |last_pending_block| {
         // If the last block is a list or list item, check for tightness based
         // on the last line.
         const maybe_containing_list = switch (last_pending_block.tag) {
@@ -401,7 +401,7 @@ fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
     // Start a new list if the new block is a list item and there is no
     // containing list yet.
     if (block_start.tag == .list_item and
-        (p.pending_blocks.items.len == 0 or p.pending_blocks.getLast().?.tag != .list))
+        (p.pending_blocks.items.len == 0 or p.pending_blocks.last().?.tag != .list))
     {
         try p.pending_blocks.append(p.allocator, .{
             .tag = .list,
@@ -417,7 +417,7 @@ fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
 
     if (block_start.tag == .table_row) {
         // Likewise, table rows start a table implicitly.
-        if (p.pending_blocks.items.len == 0 or p.pending_blocks.getLast().?.tag != .table) {
+        if (p.pending_blocks.items.len == 0 or p.pending_blocks.last().?.tag != .table) {
             try p.pending_blocks.append(p.allocator, .{
                 .tag = .table,
                 .data = .{ .table = .{
@@ -429,7 +429,7 @@ fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
             });
         }
 
-        const current_row = p.scratch_extra.items.len - p.pending_blocks.getLast().?.extra_start;
+        const current_row = p.scratch_extra.items.len - p.pending_blocks.last().?.extra_start;
         if (current_row <= 1) {
             var buffer: [max_table_columns]Node.TableCellAlignment = undefined;
             const table_row = &block_start.data.table_row;
@@ -441,10 +441,10 @@ fn appendBlockStart(p: *Parser, block_start: BlockStart) !void {
                     // We need to go back and mark the header row and its column
                     // alignments.
                     const datas = p.nodes.items(.data);
-                    const header_data = datas[p.scratch_extra.getLast().?];
+                    const header_data = datas[p.scratch_extra.last().?];
                     for (p.extraChildren(header_data.container.children), 0..) |header_cell, i| {
                         const alignment = if (i < alignments.len) alignments[i] else .unset;
-                        const cell_data = &datas[@intFromEnum(header_cell)].table_cell;
+                        const cell_data = &datas[@backingInt(header_cell)].table_cell;
                         cell_data.info.alignment = alignment;
                         cell_data.info.header = true;
                     }
@@ -594,7 +594,7 @@ fn startListItem(unindented_line: []const u8) ?ListItemStart {
         };
     }
 
-    const number_end = mem.indexOfNone(u8, unindented_line, "0123456789") orelse return null;
+    const number_end = mem.findNone(u8, unindented_line, "0123456789") orelse return null;
     const after_number = unindented_line[number_end..];
     const marker: Block.Data.ListMarker = if (mem.startsWith(u8, after_number, ". "))
         .number_dot
@@ -639,10 +639,10 @@ fn startTableRow(unindented_line: []const u8) ?TableRowStart {
                 // Ignoring pipes in code spans allows table cells to contain
                 // code using ||, for example.
                 const open_start = i;
-                i = mem.indexOfNonePos(u8, table_row_content, i, "`") orelse return null;
+                i = mem.findNonePos(u8, table_row_content, i, "`") orelse return null;
                 const open_len = i - open_start;
-                while (mem.indexOfScalarPos(u8, table_row_content, i, '`')) |close_start| {
-                    i = mem.indexOfNonePos(u8, table_row_content, close_start, "`") orelse return null;
+                while (mem.findScalarPos(u8, table_row_content, i, '`')) |close_start| {
+                    i = mem.findNonePos(u8, table_row_content, close_start, "`") orelse return null;
                     const close_len = i - close_start;
                     if (close_len == open_len) break;
                 } else return null;
@@ -794,7 +794,7 @@ fn startCodeBlock(p: *Parser, unindented_line: []const u8) !?CodeBlockStart {
     } else "";
     // Code block tags may not contain backticks, since that would create
     // potential confusion with inline code spans.
-    if (fence_len < 3 or mem.indexOfScalar(u8, tag_bytes, '`') != null) return null;
+    if (fence_len < 3 or mem.findScalar(u8, tag_bytes, '`') != null) return null;
     return .{
         .tag = try p.addString(mem.trim(u8, tag_bytes, " ")),
         .fence_len = fence_len,
@@ -847,7 +847,7 @@ fn closeLastBlock(p: *Parser) !void {
                 .tag = .list,
                 .data = .{ .list = .{
                     .start = switch (b.data.list.marker) {
-                        .number_dot, .number_paren => @enumFromInt(b.data.list.start),
+                        .number_dot, .number_paren => @fromBackingInt(@intCast(b.data.list.start)),
                         .@"-", .@"*", .@"+" => .unordered,
                     },
                     .children = children,
@@ -1087,7 +1087,7 @@ const InlineParser = struct {
             }
         }
         try ip.parent.string_bytes.append(ip.parent.allocator, 0);
-        return @enumFromInt(string_top);
+        return @fromBackingInt(@intCast(string_top));
     }
 
     /// Parses an autolink, starting at the opening `<`. `ip.pos` is left at the
@@ -1382,12 +1382,12 @@ const InlineParser = struct {
     /// parsing.
     fn parseCodeSpan(ip: *InlineParser) !void {
         const opener_start = ip.pos;
-        ip.pos = mem.indexOfNonePos(u8, ip.content, ip.pos, "`") orelse ip.content.len;
+        ip.pos = mem.findNonePos(u8, ip.content, ip.pos, "`") orelse ip.content.len;
         const opener_len = ip.pos - opener_start;
 
         const start = ip.pos;
-        const end = while (mem.indexOfScalarPos(u8, ip.content, ip.pos, '`')) |closer_start| {
-            ip.pos = mem.indexOfNonePos(u8, ip.content, closer_start, "`") orelse ip.content.len;
+        const end = while (mem.findScalarPos(u8, ip.content, ip.pos, '`')) |closer_start| {
+            ip.pos = mem.findNonePos(u8, ip.content, closer_start, "`") orelse ip.content.len;
             const closer_len = ip.pos - closer_start;
 
             if (closer_len == opener_len) break closer_start;
@@ -1478,7 +1478,7 @@ const InlineParser = struct {
                         try ip.parent.addScratchExtraNode(try ip.parent.addNode(.{
                             .tag = .text,
                             .data = .{ .text = .{
-                                .content = @enumFromInt(string_start),
+                                .content = @fromBackingInt(@intCast(string_start)),
                             } },
                         }));
                         string_start = ip.parent.string_bytes.items.len;
@@ -1495,7 +1495,7 @@ const InlineParser = struct {
             try ip.parent.addScratchExtraNode(try ip.parent.addNode(.{
                 .tag = .text,
                 .data = .{ .text = .{
-                    .content = @enumFromInt(string_start),
+                    .content = @fromBackingInt(@intCast(string_start)),
                 } },
             }));
         }
@@ -1575,7 +1575,7 @@ fn parseInlines(p: *Parser, content: []const u8) !ExtraIndex {
 
 pub fn extraData(p: Parser, comptime T: type, index: ExtraIndex) ExtraData(T) {
     const info = @typeInfo(T).@"struct";
-    var i: usize = @intFromEnum(index);
+    var i: usize = @backingInt(index);
     var result: T = undefined;
     inline for (info.field_names, info.field_types) |field_name, field_type| {
         @field(result, field_name) = switch (field_type) {
@@ -1593,7 +1593,7 @@ pub fn extraChildren(p: Parser, index: ExtraIndex) []const Node.Index {
 }
 
 fn addNode(p: *Parser, node: Node) !Node.Index {
-    const index: Node.Index = @enumFromInt(@as(u32, @intCast(p.nodes.len)));
+    const index: Node.Index = @fromBackingInt(@intCast(@as(u32, @intCast(p.nodes.len))));
     try p.nodes.append(p.allocator, node);
     return index;
 }
@@ -1601,7 +1601,7 @@ fn addNode(p: *Parser, node: Node) !Node.Index {
 fn addString(p: *Parser, s: []const u8) !StringIndex {
     if (s.len == 0) return .empty;
 
-    const index: StringIndex = @enumFromInt(@as(u32, @intCast(p.string_bytes.items.len)));
+    const index: StringIndex = @fromBackingInt(@intCast(@as(u32, @intCast(p.string_bytes.items.len))));
     try p.string_bytes.ensureUnusedCapacity(p.allocator, s.len + 1);
     p.string_bytes.appendSliceAssumeCapacity(s);
     p.string_bytes.appendAssumeCapacity(0);
@@ -1609,7 +1609,7 @@ fn addString(p: *Parser, s: []const u8) !StringIndex {
 }
 
 fn addExtraChildren(p: *Parser, nodes: []const Node.Index) !ExtraIndex {
-    const index: ExtraIndex = @enumFromInt(@as(u32, @intCast(p.extra.items.len)));
+    const index: ExtraIndex = @fromBackingInt(@intCast(@as(u32, @intCast(p.extra.items.len))));
     try p.extra.ensureUnusedCapacity(p.allocator, nodes.len + 1);
     p.extra.appendAssumeCapacity(@intCast(nodes.len));
     p.extra.appendSliceAssumeCapacity(@ptrCast(nodes));
@@ -1617,7 +1617,7 @@ fn addExtraChildren(p: *Parser, nodes: []const Node.Index) !ExtraIndex {
 }
 
 fn addScratchExtraNode(p: *Parser, node: Node.Index) !void {
-    try p.scratch_extra.append(p.allocator, @intFromEnum(node));
+    try p.scratch_extra.append(p.allocator, @backingInt(node));
 }
 
 fn addScratchStringLine(p: *Parser, line: []const u8) !void {
@@ -1627,7 +1627,7 @@ fn addScratchStringLine(p: *Parser, line: []const u8) !void {
 }
 
 fn isBlank(line: []const u8) bool {
-    return mem.indexOfNone(u8, line, " \t") == null;
+    return mem.findNone(u8, line, " \t") == null;
 }
 
 fn isPunctuation(c: u8) bool {

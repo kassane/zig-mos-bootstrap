@@ -63,6 +63,7 @@ pub fn classifyType(ty: Type, zcu: *Zcu) Class {
         .@"opaque",
         .enum_literal,
         .array,
+        .spirv,
         => unreachable,
     }
 }

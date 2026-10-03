@@ -10,29 +10,29 @@ pub fn build(b: *std.Build) void {
     const skip_release_fast = b.option(bool, "skip_release_fast", "Skip release-fast builds") orelse false;
     const skip_release_small = b.option(bool, "skip_release_small", "Skip release-small builds") orelse false;
 
-    var optimize_modes_buf: [4]std.builtin.OptimizeMode = undefined;
+    var optimize_modes_buf: [4]std.builtin.Optimize = undefined;
     var optimize_modes_len: usize = 0;
     if (!skip_debug) {
-        optimize_modes_buf[optimize_modes_len] = .Debug;
+        optimize_modes_buf[optimize_modes_len] = .debug;
         optimize_modes_len += 1;
     }
     if (!skip_release_safe) {
-        optimize_modes_buf[optimize_modes_len] = .ReleaseSafe;
+        optimize_modes_buf[optimize_modes_len] = .safe;
         optimize_modes_len += 1;
     }
     if (!skip_release_fast) {
-        optimize_modes_buf[optimize_modes_len] = .ReleaseFast;
+        optimize_modes_buf[optimize_modes_len] = .fast;
         optimize_modes_len += 1;
     }
     if (!skip_release_small) {
-        optimize_modes_buf[optimize_modes_len] = .ReleaseSmall;
+        optimize_modes_buf[optimize_modes_len] = .small;
         optimize_modes_len += 1;
     }
     const optimize_modes = optimize_modes_buf[0..optimize_modes_len];
 
     for (cases) |case| {
         for (optimize_modes) |optimize| {
-            if (!case.all_modes and optimize != .Debug) continue;
+            if (!case.all_modes and optimize != .debug) continue;
             if (case.os_filter) |os_tag| {
                 if (os_tag != builtin.os.tag) continue;
             }

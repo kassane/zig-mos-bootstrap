@@ -475,9 +475,6 @@ test "close" {
 }
 
 test "accept/connect/send/recv" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -526,7 +523,9 @@ test "sendmsg/recvmsg" {
 
     var address_server: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
 
     const server = try socket(address_server.family, posix.SOCK.DGRAM, 0);
@@ -587,7 +586,7 @@ test "sendmsg/recvmsg" {
     try testing.expectEqual(@as(u32, 2), ring.cq_ready());
 
     const cqe_sendmsg = try ring.copy_cqe();
-    if (cqe_sendmsg.res == -@as(i32, @intFromEnum(linux.E.INVAL))) return error.SkipZigTest;
+    if (cqe_sendmsg.res == -@as(i32, @backingInt(linux.E.INVAL))) return error.SkipZigTest;
     try testing.expectEqual(linux.io_uring_cqe{
         .user_data = 0x11111111,
         .res = buffer_send.len,
@@ -595,7 +594,7 @@ test "sendmsg/recvmsg" {
     }, cqe_sendmsg);
 
     const cqe_recvmsg = try ring.copy_cqe();
-    if (cqe_recvmsg.res == -@as(i32, @intFromEnum(linux.E.INVAL))) return error.SkipZigTest;
+    if (cqe_recvmsg.res == -@as(i32, @backingInt(linux.E.INVAL))) return error.SkipZigTest;
     try testing.expectEqual(linux.io_uring_cqe{
         .user_data = 0x22222222,
         .res = buffer_recv.len,
@@ -618,7 +617,7 @@ test "timeout (after a relative time)" {
 
     const ms = 10;
     const margin = 5;
-    const ts: linux.kernel_timespec = .{ .sec = 0, .nsec = ms * 1000000 };
+    const ts: linux.kernel_timespec = .{ .sec = 0, .nsec = ms * std.time.ns_per_ms };
 
     const started = std.Io.Clock.awake.now(io);
     const sqe = try ring.timeout(0x55555555, &ts, 0, 0);
@@ -629,7 +628,7 @@ test "timeout (after a relative time)" {
 
     try testing.expectEqual(linux.io_uring_cqe{
         .user_data = 0x55555555,
-        .res = -@as(i32, @intFromEnum(linux.E.TIME)),
+        .res = -@as(i32, @backingInt(linux.E.TIME)),
         .flags = 0,
     }, cqe);
 
@@ -714,7 +713,7 @@ test "timeout_remove" {
         if (cqe.user_data == 0x88888888) {
             try testing.expectEqual(linux.io_uring_cqe{
                 .user_data = 0x88888888,
-                .res = -@as(i32, @intFromEnum(linux.E.CANCELED)),
+                .res = -@as(i32, @backingInt(linux.E.CANCELED)),
                 .flags = 0,
             }, cqe);
         } else if (cqe.user_data == 0x99999999) {
@@ -728,9 +727,6 @@ test "timeout_remove" {
 }
 
 test "accept/connect/recv/link_timeout" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -746,7 +742,7 @@ test "accept/connect/recv/link_timeout" {
     const sqe_recv = try ring.recv(0xffffffff, socket_test_harness.server, .{ .buffer = buffer_recv[0..] }, 0);
     sqe_recv.flags |= linux.IOSQE_IO_LINK;
 
-    const ts = linux.kernel_timespec{ .sec = 0, .nsec = 1000000 };
+    const ts: linux.kernel_timespec = .{ .sec = 0, .nsec = std.time.ns_per_ms };
     _ = try ring.link_timeout(0x22222222, &ts, 0);
 
     const nr_wait = try ring.submit();
@@ -757,16 +753,16 @@ test "accept/connect/recv/link_timeout" {
         const cqe = try ring.copy_cqe();
         switch (cqe.user_data) {
             0xffffffff => {
-                if (cqe.res != -@as(i32, @intFromEnum(linux.E.INTR)) and
-                    cqe.res != -@as(i32, @intFromEnum(linux.E.CANCELED)))
+                if (cqe.res != -@as(i32, @backingInt(linux.E.INTR)) and
+                    cqe.res != -@as(i32, @backingInt(linux.E.CANCELED)))
                 {
                     std.debug.print("Req 0x{x} got {d}\n", .{ cqe.user_data, cqe.res });
                     try testing.expect(false);
                 }
             },
             0x22222222 => {
-                if (cqe.res != -@as(i32, @intFromEnum(linux.E.ALREADY)) and
-                    cqe.res != -@as(i32, @intFromEnum(linux.E.TIME)))
+                if (cqe.res != -@as(i32, @backingInt(linux.E.ALREADY)) and
+                    cqe.res != -@as(i32, @backingInt(linux.E.TIME)))
                 {
                     std.debug.print("Req 0x{x} got {d}\n", .{ cqe.user_data, cqe.res });
                     try testing.expect(false);
@@ -881,9 +877,6 @@ test "statx" {
 }
 
 test "accept/connect/recv/cancel" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -920,7 +913,7 @@ test "accept/connect/recv/cancel" {
 
     try testing.expectEqual(linux.io_uring_cqe{
         .user_data = 0xffffffff,
-        .res = -@as(i32, @intFromEnum(linux.E.CANCELED)),
+        .res = -@as(i32, @backingInt(linux.E.CANCELED)),
         .flags = 0,
     }, cqe_recv);
 
@@ -1028,7 +1021,9 @@ test "shutdown" {
 
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
 
     // Socket bound, expect shutdown to work
@@ -1564,9 +1559,6 @@ test "remove_buffers" {
 }
 
 test "provide_buffers: accept/connect/send/recv" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -1740,7 +1732,9 @@ test "accept multishot" {
 
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
     const listener_socket = try createListenerSocket(&address);
     defer _ = linux.close(listener_socket);
@@ -1771,17 +1765,19 @@ test "accept multishot" {
 }
 
 test "accept/connect/send_zc/recv" {
-    try skipKernelLessThan(.{ .major = 6, .minor = 0, .patch = 0 });
-
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
     defer ring.deinit();
+
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    const ops_not_supported = !probe.is_supported(.ACCEPT) or
+        !probe.is_supported(.CONNECT) or
+        !probe.is_supported(.SEND_ZC) or
+        !probe.is_supported(.RECV);
+    if (ops_not_supported) return error.SkipZigTest;
 
     const socket_test_harness = try createSocketTestHarness(&ring);
     defer socket_test_harness.close();
@@ -1830,19 +1826,21 @@ test "accept/connect/send_zc/recv" {
 }
 
 test "accept_direct" {
-    if (builtin.cpu.arch.isRISCV()) return error.SkipZigTest; // https://codeberg.org/ziglang/zig/issues/30854
-
-    try skipKernelLessThan(.{ .major = 5, .minor = 19, .patch = 0 });
-
     var ring = IoUring.init(1, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
     defer ring.deinit();
+
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    if (!probe.is_supported(.ACCEPT)) return error.SkipZigTest;
+
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
 
     // register direct file descriptors
@@ -1915,13 +1913,6 @@ test "accept_direct" {
 }
 
 test "accept_multishot_direct" {
-    try skipKernelLessThan(.{ .major = 5, .minor = 19, .patch = 0 });
-
-    if (builtin.cpu.arch == .riscv64) {
-        // https://github.com/ziglang/zig/issues/25734
-        return error.SkipZigTest;
-    }
-
     var ring = IoUring.init(1, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -1929,9 +1920,14 @@ test "accept_multishot_direct" {
     };
     defer ring.deinit();
 
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    if (!probe.is_supported(.ACCEPT)) return error.SkipZigTest;
+
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
 
     var registered_fds: [2]linux.fd_t = @splat(-1);
@@ -1981,14 +1977,15 @@ test "accept_multishot_direct" {
 }
 
 test "socket" {
-    try skipKernelLessThan(.{ .major = 5, .minor = 19, .patch = 0 });
-
     var ring = IoUring.init(1, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
     defer ring.deinit();
+
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    if (!probe.is_supported(.SOCKET)) return error.SkipZigTest;
 
     // prepare, submit socket operation
     _ = try ring.socket(0, linux.AF.INET, posix.SOCK.STREAM, 0, 0);
@@ -2004,14 +2001,15 @@ test "socket" {
 }
 
 test "socket_direct/socket_direct_alloc/close_direct" {
-    try skipKernelLessThan(.{ .major = 5, .minor = 19, .patch = 0 });
-
     var ring = IoUring.init(2, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
     defer ring.deinit();
+
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    if (!probe.is_supported(.SOCKET) or !probe.is_supported(.CLOSE)) return error.SkipZigTest;
 
     var registered_fds: [3]linux.fd_t = @splat(-1);
     try ring.register_files(registered_fds[0..]);
@@ -2041,7 +2039,9 @@ test "socket_direct/socket_direct_alloc/close_direct" {
     // use sockets from registered_fds in connect operation
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
     const listener_socket = try createListenerSocket(&address);
     defer _ = linux.close(listener_socket);
@@ -2085,14 +2085,15 @@ test "socket_direct/socket_direct_alloc/close_direct" {
 }
 
 test "openat_direct/close_direct" {
-    try skipKernelLessThan(.{ .major = 5, .minor = 19, .patch = 0 });
-
     var ring = IoUring.init(2, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
         else => return err,
     };
     defer ring.deinit();
+
+    const probe = ring.get_probe() catch return error.SkipZigTest;
+    if (!probe.is_supported(.OPENAT) or !probe.is_supported(.CLOSE)) return error.SkipZigTest;
 
     var registered_fds: [3]linux.fd_t = @splat(-1);
     try ring.register_files(registered_fds[0..]);
@@ -2136,9 +2137,6 @@ test "openat_direct/close_direct" {
 }
 
 test "ring mapped buffers recv" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -2226,9 +2224,6 @@ test "ring mapped buffers recv" {
 }
 
 test "ring mapped buffers multishot recv" {
-    const io = testing.io;
-    _ = io;
-
     var ring = IoUring.init(16, 0) catch |err| switch (err) {
         error.SystemOutdated => return error.SkipZigTest,
         error.PermissionDenied => return error.SkipZigTest,
@@ -2426,7 +2421,9 @@ test "bind/listen/connect" {
 
     var addr: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
     const proto: u32 = if (addr.family == linux.AF.UNIX) 0 else linux.IPPROTO.TCP;
 
@@ -2614,7 +2611,9 @@ pub fn createSocketTestHarness(ring: *IoUring) !SocketTestHarness {
     // Create a TCP server socket
     var address: linux.sockaddr.in = .{
         .port = 0,
-        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+        .addr = @as(*align(1) const u32, @ptrCast(
+            &@as([4]u8, .{ 127, 0, 0, 1 }),
+        )).*,
     };
     const listener_socket = try createListenerSocket(&address);
     errdefer _ = linux.close(listener_socket);
@@ -2656,7 +2655,7 @@ pub fn createSocketTestHarness(ring: *IoUring) !SocketTestHarness {
 
     // All good
 
-    return SocketTestHarness{
+    return .{
         .listener = listener_socket,
         .server = cqe_accept.res,
         .client = client,
@@ -2677,27 +2676,6 @@ fn createListenerSocket(address: *linux.sockaddr.in) !posix.socket_t {
     try getsockname(listener_socket, addrAny(address), &slen);
 
     return listener_socket;
-}
-
-/// For use in tests. Returns SkipZigTest if kernel version is less than required.
-inline fn skipKernelLessThan(required: std.SemanticVersion) !void {
-    var uts: linux.utsname = undefined;
-    const res = linux.uname(&uts);
-    switch (linux.errno(res)) {
-        .SUCCESS => {},
-        else => |errno| return posix.unexpectedErrno(errno),
-    }
-
-    const release = mem.sliceTo(&uts.release, 0);
-    // Strips potential extra, as kernel version might not be semver compliant, example "6.8.9-300.fc40.x86_64"
-    const extra_index = std.mem.indexOfAny(u8, release, "-+");
-    const stripped = release[0..(extra_index orelse release.len)];
-    // Make sure the input don't rely on the extra we just stripped
-    try testing.expect(required.pre == null and required.build == null);
-
-    var current = try std.SemanticVersion.parse(stripped);
-    current.pre = null; // don't check pre field
-    if (required.order(current) == .gt) return error.SkipZigTest;
 }
 
 fn addrAny(addr: *linux.sockaddr.in) *linux.sockaddr {

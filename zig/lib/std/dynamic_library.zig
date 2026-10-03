@@ -103,7 +103,7 @@ pub fn get_DYNAMIC() ?[*]const elf.Dyn {
 
 pub fn linkmap_iterator() error{InvalidExe}!LinkMap.Iterator {
     const _DYNAMIC = get_DYNAMIC() orelse {
-        // No PT_DYNAMIC means this is a statically-linked non-PIE program.
+        // No PT.DYNAMIC means this is a statically-linked non-PIE program.
         return .{ .current = null };
     };
 
@@ -198,7 +198,6 @@ pub const ElfDynLib = struct {
     // - DT_RUNPATH of the calling binary is not used as a search path
     // - /etc/ld.so.cache is not read
     fn resolveFromName(io: Io, path_or_name: []const u8, LD_LIBRARY_PATH: ?[]const u8) !Io.File {
-        // If filename contains a slash ("/"), then it is interpreted as a (relative or absolute) pathname
         if (std.mem.findScalarPos(u8, path_or_name, 0, '/')) |_| {
             return Io.Dir.cwd().openFile(io, path_or_name, .{});
         }
@@ -214,9 +213,10 @@ pub const ElfDynLib = struct {
             }
         }
 
-        // Lastly the directories /lib and /usr/lib are searched (in this exact order)
         if (resolveFromParent(io, "/lib", path_or_name)) |file| return file;
+        if (resolveFromParent(io, "/lib64", path_or_name)) |file| return file;
         if (resolveFromParent(io, "/usr/lib", path_or_name)) |file| return file;
+        if (resolveFromParent(io, "/usr/lib64", path_or_name)) |file| return file;
         return error.FileNotFound;
     }
 
@@ -261,10 +261,10 @@ pub const ElfDynLib = struct {
                 i += 1;
                 ph_addr += eh.e_phentsize;
             }) {
-                const ph = @as(*elf.Phdr, @ptrFromInt(ph_addr));
-                switch (ph.p_type) {
-                    elf.PT_LOAD => virt_addr_end = @max(virt_addr_end, ph.p_vaddr + ph.p_memsz),
-                    elf.PT_DYNAMIC => maybe_dynv = @as([*]usize, @ptrFromInt(elf_addr + ph.p_offset)),
+                const ph = @as(*elf.ElfN.Phdr, @ptrFromInt(ph_addr));
+                switch (ph.type) {
+                    .LOAD => virt_addr_end = @max(virt_addr_end, ph.vaddr + ph.memsz),
+                    .DYNAMIC => maybe_dynv = @as([*]usize, @ptrFromInt(elf_addr + ph.offset)),
                     else => {},
                 }
             }
@@ -292,37 +292,24 @@ pub const ElfDynLib = struct {
                 i += 1;
                 ph_addr += eh.e_phentsize;
             }) {
-                const ph = @as(*elf.Phdr, @ptrFromInt(ph_addr));
-                switch (ph.p_type) {
-                    elf.PT_LOAD => {
+                const ph = @as(*elf.ElfN.Phdr, @ptrFromInt(ph_addr));
+                switch (ph.type) {
+                    .LOAD => {
                         // The VirtAddr may not be page-aligned; in such case there will be
                         // extra nonsense mapped before/after the VirtAddr,MemSiz
-                        const aligned_addr = (base + ph.p_vaddr) & ~(@as(usize, page_size) - 1);
-                        const extra_bytes = (base + ph.p_vaddr) - aligned_addr;
-                        const extended_memsz = mem.alignForward(usize, ph.p_memsz + extra_bytes, page_size);
+                        const aligned_addr = (base + ph.vaddr) & ~(@as(usize, page_size) - 1);
+                        const extra_bytes = (base + ph.vaddr) - aligned_addr;
+                        const extended_memsz = mem.alignForward(usize, ph.memsz + extra_bytes, page_size);
                         const ptr = @as([*]align(std.heap.page_size_min) u8, @ptrFromInt(aligned_addr));
-                        const prot = elfToProt(ph.p_flags);
-                        if ((ph.p_flags & elf.PF_W) == 0) {
-                            // If it does not need write access, it can be mapped from the fd.
-                            _ = try posix.mmap(
-                                ptr,
-                                extended_memsz,
-                                prot,
-                                .{ .TYPE = .PRIVATE, .FIXED = true },
-                                file.handle,
-                                ph.p_offset - extra_bytes,
-                            );
-                        } else {
-                            const sect_mem = try posix.mmap(
-                                ptr,
-                                extended_memsz,
-                                prot,
-                                .{ .TYPE = .PRIVATE, .FIXED = true, .ANONYMOUS = true },
-                                -1,
-                                0,
-                            );
-                            @memcpy(sect_mem[0..ph.p_filesz], file_bytes[0..ph.p_filesz]);
-                        }
+                        const prot = elfToProt(ph.flags);
+                        _ = try posix.mmap(
+                            ptr,
+                            extended_memsz,
+                            prot,
+                            .{ .TYPE = .PRIVATE, .FIXED = true },
+                            file.handle,
+                            ph.offset - extra_bytes,
+                        );
                     },
                     else => {},
                 }
@@ -530,11 +517,11 @@ pub const ElfDynLib = struct {
         return null;
     }
 
-    fn elfToProt(elf_prot: u64) posix.PROT {
+    fn elfToProt(elf_prot: elf.PF) posix.PROT {
         return .{
-            .READ = (elf_prot & elf.PF_R) != 0,
-            .WRITE = (elf_prot & elf.PF_W) != 0,
-            .EXEC = (elf_prot & elf.PF_X) != 0,
+            .READ = elf_prot.R,
+            .WRITE = elf_prot.W,
+            .EXEC = elf_prot.X,
         };
     }
 };
@@ -543,7 +530,7 @@ fn checkver(def_arg: *elf.Verdef, vsym_arg: elf.Versym, vername: []const u8, str
     var def = def_arg;
     const vsym_index = vsym_arg.VERSION;
     while (true) {
-        if (0 == (def.flags & elf.VER_FLG_BASE) and @intFromEnum(def.ndx) == vsym_index) break;
+        if (0 == (def.flags & elf.VER_FLG_BASE) and @backingInt(def.ndx) == vsym_index) break;
         if (def.next == 0) return false;
         def = @ptrFromInt(@intFromPtr(def) + def.next);
     }

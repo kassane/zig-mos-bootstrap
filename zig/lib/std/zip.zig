@@ -109,7 +109,7 @@ pub const EndRecord = extern struct {
 
     /// TODO audit this logic
     pub fn findBuffer(buffer: []const u8) FindBufferError!EndRecord {
-        const pos = std.mem.lastIndexOf(u8, buffer, &end_record_sig) orelse return error.ZipNoEndRecord;
+        const pos = std.mem.findLast(u8, buffer, &end_record_sig) orelse return error.ZipNoEndRecord;
         if (pos + @sizeOf(EndRecord) > buffer.len) return error.EndOfStream;
         const record_ptr: *EndRecord = @ptrCast(buffer[pos..][0..@sizeOf(EndRecord)]);
         var record = record_ptr.*;
@@ -161,50 +161,6 @@ pub const EndRecord = extern struct {
                 return error.ZipNoEndRecord;
             comment_len += 1;
         }
-    }
-};
-
-pub const Decompress = struct {
-    interface: Reader,
-    state: union {
-        inflate: flate.Decompress,
-        store: *Reader,
-    },
-
-    pub fn init(reader: *Reader, method: CompressionMethod, buffer: []u8) Reader {
-        return switch (method) {
-            .store => .{
-                .state = .{ .store = reader },
-                .interface = .{
-                    .context = undefined,
-                    .vtable = &.{ .stream = streamStore },
-                    .buffer = buffer,
-                    .end = 0,
-                    .seek = 0,
-                },
-            },
-            .deflate => .{
-                .state = .{ .inflate = .init(reader, .raw) },
-                .interface = .{
-                    .context = undefined,
-                    .vtable = &.{ .stream = streamDeflate },
-                    .buffer = buffer,
-                    .end = 0,
-                    .seek = 0,
-                },
-            },
-            else => unreachable,
-        };
-    }
-
-    fn streamStore(r: *Reader, w: *Writer, limit: std.Io.Limit) Reader.StreamError!usize {
-        const d: *Decompress = @fieldParentPtr("interface", r);
-        return d.store.read(w, limit);
-    }
-
-    fn streamDeflate(r: *Reader, w: *Writer, limit: std.Io.Limit) Reader.StreamError!usize {
-        const d: *Decompress = @fieldParentPtr("interface", r);
-        return flate.Decompress.read(&d.inflate, w, limit);
     }
 };
 
@@ -421,7 +377,7 @@ pub const Iterator = struct {
                 if (end > extra.len)
                     return error.ZipBadExtraFieldSize;
                 const data = extra[extra_offset + 4 .. end];
-                switch (@as(ExtraHeader, @enumFromInt(header_id))) {
+                switch (@as(ExtraHeader, @fromBackingInt(@intCast(header_id)))) {
                     .zip64_info => try readZip64FileExtents(CentralDirectoryFileHeader, header, &extents, data),
                     else => {}, // ignore
                 }
@@ -457,15 +413,7 @@ pub const Iterator = struct {
         uncompressed_size: u64,
         file_offset: u64,
 
-        pub fn extract(
-            self: Entry,
-            stream: *File.Reader,
-            options: ExtractOptions,
-            filename_buf: []u8,
-            dest: Io.Dir,
-        ) !void {
-            const io = stream.io;
-
+        pub fn getFilename(self: Entry, stream: *File.Reader, filename_buf: []u8, options: ExtractOptions) ![]u8 {
             if (filename_buf.len < self.filename_len)
                 return error.ZipInsufficientBuffer;
             switch (self.compression_method) {
@@ -476,6 +424,25 @@ pub const Iterator = struct {
             {
                 try stream.seekTo(self.header_zip_offset + @sizeOf(CentralDirectoryFileHeader));
                 try stream.interface.readSliceAll(filename);
+            }
+
+            if (options.allow_backslashes) {
+                std.mem.replaceScalar(u8, filename, '\\', '/');
+            } else {
+                if (std.mem.findScalar(u8, filename, '\\')) |_|
+                    return error.ZipFilenameHasBackslash;
+            }
+
+            if (isBadFilename(filename))
+                return error.ZipBadFilename;
+
+            return filename;
+        }
+
+        pub fn extractTo(self: Entry, stream: *File.Reader, w: *Writer) !void {
+            switch (self.compression_method) {
+                .store, .deflate => {},
+                else => return error.UnsupportedCompressionMethod,
             }
 
             const local_data_header_offset: u64 = local_data_header_offset: {
@@ -518,7 +485,7 @@ pub const Iterator = struct {
                         if (end > local_header.extra_len)
                             return error.ZipBadExtraFieldSize;
                         const data = extra[extra_offset + 4 .. end];
-                        switch (@as(ExtraHeader, @enumFromInt(header_id))) {
+                        switch (@as(ExtraHeader, @fromBackingInt(@intCast(header_id)))) {
                             .zip64_info => try readZip64FileExtents(LocalFileHeader, local_header, &extents, data),
                             else => {}, // ignore
                         }
@@ -540,15 +507,45 @@ pub const Iterator = struct {
                     @as(u64, local_header.extra_len);
             };
 
-            if (options.allow_backslashes) {
-                std.mem.replaceScalar(u8, filename, '\\', '/');
-            } else {
-                if (std.mem.findScalar(u8, filename, '\\')) |_|
-                    return error.ZipFilenameHasBackslash;
-            }
+            const local_data_file_offset: u64 =
+                @as(u64, self.file_offset) +
+                @as(u64, @sizeOf(LocalFileHeader)) +
+                local_data_header_offset;
+            try stream.seekTo(local_data_file_offset);
 
-            if (isBadFilename(filename))
-                return error.ZipBadFilename;
+            // TODO limit based on self.compressed_size
+
+            switch (self.compression_method) {
+                .store => {
+                    stream.interface.streamExact64(w, self.uncompressed_size) catch |err| switch (err) {
+                        error.ReadFailed => |e| return stream.err orelse e,
+                        error.WriteFailed => |e| return e,
+                        error.EndOfStream => return error.ZipDecompressTruncated,
+                    };
+                },
+                .deflate => {
+                    var flate_buffer: [flate.max_window_len]u8 = undefined;
+                    var decompress: flate.Decompress = .init(&stream.interface, .raw, &flate_buffer);
+                    decompress.reader.streamExact64(w, self.uncompressed_size) catch |err| switch (err) {
+                        error.ReadFailed => |e| return decompress.err orelse (stream.err orelse e),
+                        error.WriteFailed => |e| return e,
+                        error.EndOfStream => return error.ZipDecompressTruncated,
+                    };
+                },
+                else => return error.UnsupportedCompressionMethod,
+            }
+        }
+
+        pub fn extract(
+            self: Entry,
+            stream: *File.Reader,
+            options: ExtractOptions,
+            filename_buf: []u8,
+            dest: Io.Dir,
+        ) !void {
+            const io = stream.io;
+
+            const filename = try self.getFilename(stream, filename_buf, options);
 
             // All entries that end in '/' are directories
             if (filename[filename.len - 1] == '/') {
@@ -571,33 +568,10 @@ pub const Iterator = struct {
             defer out_file.close(io);
             var out_file_buffer: [1024]u8 = undefined;
             var file_writer = out_file.writer(io, &out_file_buffer);
-            const local_data_file_offset: u64 =
-                @as(u64, self.file_offset) +
-                @as(u64, @sizeOf(LocalFileHeader)) +
-                local_data_header_offset;
-            try stream.seekTo(local_data_file_offset);
-
-            // TODO limit based on self.compressed_size
-
-            switch (self.compression_method) {
-                .store => {
-                    stream.interface.streamExact64(&file_writer.interface, self.uncompressed_size) catch |err| switch (err) {
-                        error.ReadFailed => return stream.err.?,
-                        error.WriteFailed => return file_writer.err.?,
-                        error.EndOfStream => return error.ZipDecompressTruncated,
-                    };
-                },
-                .deflate => {
-                    var flate_buffer: [flate.max_window_len]u8 = undefined;
-                    var decompress: flate.Decompress = .init(&stream.interface, .raw, &flate_buffer);
-                    decompress.reader.streamExact64(&file_writer.interface, self.uncompressed_size) catch |err| switch (err) {
-                        error.ReadFailed => return stream.err.?,
-                        error.WriteFailed => return file_writer.err orelse decompress.err.?,
-                        error.EndOfStream => return error.ZipDecompressTruncated,
-                    };
-                },
-                else => return error.UnsupportedCompressionMethod,
-            }
+            self.extractTo(stream, &file_writer.interface) catch |err| switch (err) {
+                error.WriteFailed => |e| return file_writer.err orelse e,
+                else => return err,
+            };
             try file_writer.end();
         }
     };
@@ -663,4 +637,86 @@ pub fn extract(dest: Io.Dir, fr: *File.Reader, options: ExtractOptions) !void {
             try d.nextFilename(filename_buf[0..entry.filename_len]);
         }
     }
+}
+
+const testing = std.testing;
+
+test "extractTo" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "test.zip",
+        .data = @embedFile("zip/testdata/test.zip"),
+    });
+
+    var file = try tmp.dir.openFile(io, "test.zip", .{});
+    defer file.close(io);
+    var read_buf: [512]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+
+    const Expected = struct {
+        contents: []const u8,
+        compression: CompressionMethod,
+    };
+    const expected_map = std.StaticStringMap(Expected).initComptime(.{
+        .{ "deflate.txt", Expected{ .contents = "aaaaaaaaaaaaaaaaaaaaaaaa\n", .compression = .deflate } },
+        .{ "store.txt", Expected{ .contents = "hello world\n", .compression = .store } },
+        .{ "dir/", Expected{ .contents = "", .compression = .store } },
+    });
+
+    var iter = try Iterator.init(&reader);
+    var num_entries: usize = 0;
+    while (try iter.next()) |entry| {
+        var filename_buf: [256]u8 = undefined;
+        const filename = try entry.getFilename(&reader, &filename_buf, .{});
+        const expected = expected_map.get(filename) orelse {
+            std.debug.print("found unexpected filename: {f}\n", .{std.ascii.hexEscape(filename, .lower)});
+            return error.UnexpectedFilename;
+        };
+        var buf: [256]u8 = undefined;
+        var w: Writer = .fixed(&buf);
+        try entry.extractTo(&reader, &w);
+        try testing.expectEqualStrings(expected.contents, w.buffered());
+        try testing.expectEqual(expected.compression, entry.compression_method);
+        num_entries += 1;
+    }
+    try testing.expectEqual(expected_map.kvs.len, num_entries);
+}
+
+test "output buffers too small" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "test.zip",
+        .data = @embedFile("zip/testdata/test.zip"),
+    });
+
+    var file = try tmp.dir.openFile(io, "test.zip", .{});
+    defer file.close(io);
+    var read_buf: [512]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+
+    var iter = try Iterator.init(&reader);
+    var num_entries: usize = 0;
+    while (try iter.next()) |entry| {
+        try testing.expectError(
+            error.ZipInsufficientBuffer,
+            entry.getFilename(&reader, &.{}, .{}),
+        );
+
+        if (entry.uncompressed_size <= 1) continue;
+
+        var buf: [1]u8 = undefined;
+        var w: Writer = .fixed(&buf);
+        try testing.expectError(
+            error.WriteFailed,
+            entry.extractTo(&reader, &w),
+        );
+        num_entries += 1;
+    }
+    try std.testing.expect(num_entries > 0);
 }

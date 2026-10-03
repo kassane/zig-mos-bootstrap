@@ -27,7 +27,7 @@ const TestCase = struct {
         // For most cases, we want to test the LLVM IR that we output; we don't want to be in the
         // business of testing LLVM's optimization passes. `Debug` gets us the closest to that as it
         // disables the vast majority of passes in LLVM.
-        optimize: std.builtin.OptimizeMode = .Debug,
+        optimize: std.builtin.Optimize = .debug,
         pic: ?bool = null,
         pie: ?bool = null,
         red_zone: ?bool = null,
@@ -77,14 +77,14 @@ pub fn addCase(self: *LlvmIr, case: TestCase) void {
     if (self.options.test_target_filters.len > 0) {
         const triple_txt = target.query.zigTriple(self.b.allocator) catch @panic("OOM");
         for (self.options.test_target_filters) |filter| {
-            if (std.mem.indexOf(u8, triple_txt, filter) != null) break;
+            if (std.mem.find(u8, triple_txt, filter) != null) break;
         } else return;
     }
 
     const name = std.fmt.allocPrint(self.b.allocator, "check llvm-ir {s}", .{case.name}) catch @panic("OOM");
     if (self.options.test_filters.len > 0) {
         for (self.options.test_filters) |filter| {
-            if (std.mem.indexOf(u8, name, filter) != null) break;
+            if (std.mem.find(u8, name, filter) != null) break;
         } else return;
     }
 

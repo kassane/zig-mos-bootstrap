@@ -56,7 +56,7 @@ fn unary(comptime op: anytype, comptime opts: struct {
                             f32 => libc_name ++ "f",
                             f64 => libc_name,
                             f80 => "__" ++ libc_name ++ "x",
-                            f128 => libc_name ++ "q",
+                            f128 => libc_name ++ "f128",
                             else => break :libc,
                         },
                         .library_name = switch (@import("builtin").object_format) {
@@ -5262,6 +5262,7 @@ inline fn splat(comptime Type: type, rhs: Type) Type {
 }
 test splat {
     const test_splat = unary(splat, .{});
+    try test_splat.testBoolVectors();
     try test_splat.testIntVectors();
     try test_splat.testFloatVectors();
 }

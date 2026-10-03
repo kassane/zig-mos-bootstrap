@@ -23,6 +23,7 @@ const usage_fmt =
     \\  --ast-check            Run zig ast-check on every file
     \\  --exclude [file]       Exclude file or directory from formatting
     \\  --zon                  Treat all input files as ZON, regardless of file extension
+    \\  --complexity           Print a complexity report for each file as well as total
     \\
     \\
 ;
@@ -39,6 +40,10 @@ const Fmt = struct {
     out_buffer: std.Io.Writer.Allocating,
     stdout_writer: *Io.File.Writer,
 
+    complexity: bool,
+    total_tokens: u64,
+    total_nodes: u64,
+
     const SeenMap = std.AutoHashMap(Io.File.INode, void);
 };
 
@@ -48,8 +53,11 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
     var check_flag = false;
     var check_ast_flag = false;
     var force_zon = false;
+    var complexity = false;
+
     var input_files = std.array_list.Managed([]const u8).init(gpa);
     defer input_files.deinit();
+
     var excluded_files = std.array_list.Managed([]const u8).init(gpa);
     defer excluded_files.deinit();
 
@@ -68,7 +76,7 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
                     i += 1;
                     const next_arg = args[i];
                     color = std.meta.stringToEnum(Color, next_arg) orelse {
-                        fatal("expected [auto|on|off] after --color, found '{s}'", .{next_arg});
+                        fatal("expected [auto|on|off] after --color, found {q}", .{next_arg});
                     };
                 } else if (mem.eql(u8, arg, "--stdin")) {
                     stdin_flag = true;
@@ -76,6 +84,8 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
                     check_flag = true;
                 } else if (mem.eql(u8, arg, "--ast-check")) {
                     check_ast_flag = true;
+                } else if (mem.eql(u8, arg, "--complexity")) {
+                    complexity = true;
                 } else if (mem.eql(u8, arg, "--exclude")) {
                     if (i + 1 >= args.len) {
                         fatal("expected parameter after --exclude", .{});
@@ -86,7 +96,7 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
                 } else if (mem.eql(u8, arg, "--zon")) {
                     force_zon = true;
                 } else {
-                    fatal("unrecognized parameter: '{s}'", .{arg});
+                    fatal("unrecognized parameter: {q}", .{arg});
                 }
             } else {
                 try input_files.append(arg);
@@ -107,7 +117,9 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
         };
         defer gpa.free(source_code);
 
-        var tree = std.zig.Ast.parse(gpa, source_code, if (force_zon) .zon else .zig) catch |err| {
+        var tree = std.zig.Ast.parse(gpa, source_code, .{
+            .mode = if (force_zon) .zon else .zig,
+        }) catch |err| {
             fatal("error parsing stdin: {}", .{err});
         };
         defer tree.deinit(gpa);
@@ -118,8 +130,7 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
                 defer zir.deinit(gpa);
 
                 if (zir.hasCompileErrors()) {
-                    var wip_errors: std.zig.ErrorBundle.Wip = undefined;
-                    try wip_errors.init(gpa);
+                    var wip_errors: std.zig.ErrorBundle.Wip = try .init(gpa);
                     defer wip_errors.deinit();
                     try wip_errors.addZirErrorMessages(zir, tree, source_code, "<stdin>");
                     var error_bundle = try wip_errors.toOwnedBundle("");
@@ -132,8 +143,7 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
                 defer zoir.deinit(gpa);
 
                 if (zoir.hasCompileErrors()) {
-                    var wip_errors: std.zig.ErrorBundle.Wip = undefined;
-                    try wip_errors.init(gpa);
+                    var wip_errors: std.zig.ErrorBundle.Wip = try .init(gpa);
                     defer wip_errors.deinit();
                     try wip_errors.addZoirErrorMessages(zoir, tree, source_code, "<stdin>");
                     var error_bundle = try wip_errors.toOwnedBundle("");
@@ -175,6 +185,9 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
         .color = color,
         .out_buffer = .init(gpa),
         .stdout_writer = &stdout_writer,
+        .complexity = complexity,
+        .total_tokens = 0,
+        .total_nodes = 0,
     };
     defer fmt.seen.deinit();
     defer fmt.out_buffer.deinit();
@@ -198,7 +211,12 @@ pub fn run(gpa: Allocator, arena: Allocator, io: Io, args: []const []const u8) !
     for (input_files.items) |file_path| {
         try fmtPath(&fmt, file_path, check_flag, Io.Dir.cwd(), file_path);
     }
-    try fmt.stdout_writer.interface.flush();
+
+    if (complexity) {
+        std.log.info("total: tokens={d} nodes={d}", .{ fmt.total_tokens, fmt.total_nodes });
+    }
+
+    try fmt.stdout_writer.flush();
     if (fmt.any_error) {
         process.exit(1);
     }
@@ -208,7 +226,7 @@ fn fmtPath(fmt: *Fmt, file_path: []const u8, check_mode: bool, dir: Io.Dir, sub_
     fmtPathFile(fmt, file_path, check_mode, dir, sub_path) catch |err| switch (err) {
         error.IsDir, error.AccessDenied => return fmtPathDir(fmt, file_path, check_mode, dir, sub_path),
         else => {
-            std.log.err("unable to format '{s}': {s}", .{ file_path, @errorName(err) });
+            std.log.err("formatting {q}: {t}", .{ file_path, err });
             fmt.any_error = true;
             return;
         },
@@ -244,7 +262,7 @@ fn fmtPathDir(
                 try fmtPathDir(fmt, full_path, check_mode, dir, entry.name);
             } else {
                 fmtPathFile(fmt, full_path, check_mode, dir, entry.name) catch |err| {
-                    std.log.err("unable to format '{s}': {t}", .{ full_path, err });
+                    std.log.err("unable to format {q}: {t}", .{ full_path, err });
                     fmt.any_error = true;
                     return;
                 };
@@ -294,7 +312,7 @@ fn fmtPathFile(
         break :mode .zig;
     };
 
-    var tree = try std.zig.Ast.parse(gpa, source_code, mode);
+    var tree = try std.zig.Ast.parse(gpa, source_code, .{ .mode = mode });
     defer tree.deinit(gpa);
 
     if (tree.errors.len != 0) {
@@ -313,8 +331,7 @@ fn fmtPathFile(
                 defer zir.deinit(gpa);
 
                 if (zir.hasCompileErrors()) {
-                    var wip_errors: std.zig.ErrorBundle.Wip = undefined;
-                    try wip_errors.init(gpa);
+                    var wip_errors: std.zig.ErrorBundle.Wip = try .init(gpa);
                     defer wip_errors.deinit();
                     try wip_errors.addZirErrorMessages(zir, tree, source_code, file_path);
                     var error_bundle = try wip_errors.toOwnedBundle("");
@@ -328,8 +345,7 @@ fn fmtPathFile(
                 defer zoir.deinit(gpa);
 
                 if (zoir.hasCompileErrors()) {
-                    var wip_errors: std.zig.ErrorBundle.Wip = undefined;
-                    try wip_errors.init(gpa);
+                    var wip_errors: std.zig.ErrorBundle.Wip = try .init(gpa);
                     defer wip_errors.deinit();
                     try wip_errors.addZoirErrorMessages(zoir, tree, source_code, file_path);
                     var error_bundle = try wip_errors.toOwnedBundle("");
@@ -339,6 +355,12 @@ fn fmtPathFile(
                 }
             },
         }
+    }
+
+    if (fmt.complexity) {
+        std.log.info("{s}: tokens={d} nodes={d}", .{ file_path, tree.tokens.len, tree.nodes.len });
+        fmt.total_tokens += tree.tokens.len;
+        fmt.total_nodes += tree.nodes.len;
     }
 
     // As a heuristic, we make enough capacity for the same as the input source.
@@ -365,13 +387,7 @@ fn fmtPathFile(
 }
 
 /// Provided for debugging/testing purposes; unused by the compiler.
-pub fn main() !void {
-    const gpa = std.heap.smp_allocator;
-    var arena_instance = std.heap.ArenaAllocator.init(gpa);
-    const arena = arena_instance.allocator();
-    const args = try process.argsAlloc(arena);
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-    return run(gpa, arena, io, args[1..]);
+pub fn main(init: process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    return run(init.gpa, init.arena.allocator(), init.io, args[1..]);
 }

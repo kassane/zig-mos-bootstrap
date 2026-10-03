@@ -454,8 +454,8 @@ fn benchmarkPwhash(
 
     const strHash = ty.strHash;
     const strHashFnInfo = @typeInfo(@TypeOf(strHash)).@"fn";
-    const needs_io = strHashFnInfo.params.len == 4 and strHashFnInfo.params[3].type == std.Io;
-    const needs_salt = strHashFnInfo.params.len == 4 and strHashFnInfo.params[3].type != std.Io;
+    const needs_io = strHashFnInfo.param_types.len == 4 and strHashFnInfo.param_types[3].? == std.Io;
+    const needs_salt = strHashFnInfo.param_types.len == 4 and strHashFnInfo.param_types[3].? != std.Io;
     const salt: [16]u8 = @splat(0);
 
     const start = benchTime(io);
@@ -493,7 +493,7 @@ fn usage() void {
 }
 
 fn mode(comptime x: comptime_int) comptime_int {
-    return if (builtin.mode == .Debug) x / 64 else x;
+    return if (builtin.mode == .debug) x / 64 else x;
 }
 
 pub fn main(init: std.process.Init) !void {

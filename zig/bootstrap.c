@@ -56,7 +56,7 @@ static void panic(const char *reason) {
     #define GCC_BUG_119085_PRESENT 0
 #endif
 
-#if defined(__WIN32__)
+#if defined(_WIN32)
 #error TODO write the functionality for executing child process into this build script
 #else
 
@@ -99,7 +99,7 @@ static void print_and_run(const char **argv) {
 static const char *get_host_os(void) {
     const char *host_os = getenv("ZIG_HOST_TARGET_OS");
     if (host_os != NULL) return host_os;
-#if defined(__WIN32__)
+#if defined(_WIN32)
     return "windows";
 #elif defined(__APPLE__)
     return "macos";
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
         if (f == NULL)
             panic("unable to open config.zig for writing");
 
-        const char *zig_version = "0.17.0-dev.bootstrap";
+        const char *zig_version = "0.18.0-dev.bootstrap";
 
         int written = fprintf(f,
             "pub const have_llvm = false;\n"
@@ -203,10 +203,8 @@ int main(int argc, char **argv) {
             "--name", "zig2", "-femit-bin=zig2.c",
             "-target", host_triple,
             "--dep", "build_options",
-            "--dep", "aro",
             "-Mroot=src/main.zig",
             "-Mbuild_options=config.zig",
-            "-Maro=lib/compiler/aro/aro.zig",
             NULL,
         };
         print_and_run(child_argv);

@@ -3,11 +3,10 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const maxInt = std.math.maxInt;
 const minInt = std.math.minInt;
-const divCeil = std.math.divCeil;
 
 const builtin = @import("builtin");
 const compiler_rt = @import("../compiler_rt.zig");
-const symbol = @import("../compiler_rt.zig").symbol;
+const symbol = compiler_rt.symbol;
 
 const endian = builtin.cpu.arch.endian();
 
@@ -26,7 +25,7 @@ inline fn limbSet(limbs: []u64, i: usize, value: u64) void {
 }
 
 fn usedLimbCount(bits: u16) u16 {
-    return divCeil(u16, bits, 64) catch unreachable;
+    return @divCeil(bits, 64);
 }
 
 fn limbCount(bits: u16) u16 {
@@ -75,7 +74,17 @@ fn asLimbs(v: anytype) Limbs(@TypeOf(v)) {
     const int_info = @typeInfo(T).int;
     const limb_cnt = comptime limbCount(int_info.bits);
     const ET = @Int(int_info.signedness, limb_cnt * 64);
-    return @bitCast(@as(ET, v));
+    const low_to_high: Limbs(T) = @bitCast(@as(ET, v));
+    switch (endian) {
+        .little => return low_to_high,
+        .big => {
+            var swapped: Limbs(T) = undefined;
+            for (low_to_high, 0..) |x, i| {
+                swapped[limb_cnt - i - 1] = x;
+            }
+            return swapped;
+        },
+    }
 }
 
 fn limbWrap(limb: u64, is_signed: bool, bits: u16) u64 {
@@ -944,11 +953,7 @@ inline fn add3(x: *[3]u64, start: usize, v0: u64) void {
 
 fn mulwide(a: u64, b: u64) [2]u64 {
     const muldXi = @import("mulXi3.zig").muldXi;
-    const limbs: [2]u64 = @bitCast(muldXi(u64, a, b));
-    return switch (endian) {
-        .little => limbs,
-        .big => .{ limbs[1], limbs[0] },
-    };
+    return @bitCast(muldXi(u64, a, b));
 }
 
 fn __mulo_limb64(out_ptr: [*]u64, a_ptr: [*]const u64, b_ptr: [*]const u64, is_signed: bool, bits: u16) callconv(.c) bool {

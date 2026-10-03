@@ -322,7 +322,7 @@ const IoCtlCommand = enum(u32) {
 fn ioImpl(cmd: IoCtlCommand, io_type: u8, nr: u8, comptime IOT: type) i32 {
     const size = @as(u32, @intCast(@as(u8, @truncate(@sizeOf(IOT))))) << 16;
     const t = @as(u32, @intCast(io_type)) << 8;
-    return @as(i32, @bitCast(@intFromEnum(cmd) | size | t | nr));
+    return @as(i32, @bitCast(@backingInt(cmd) | size | t | nr));
 }
 
 pub fn IO(io_type: u8, nr: u8) i32 {
@@ -454,4 +454,32 @@ pub const IPTOS = struct {
     pub const PREC_IMMEDIATE = 0x40;
     pub const PREC_PRIORITY = 0x20;
     pub const PREC_ROUTINE = 0x00;
+};
+
+// https://github.com/illumos/illumos-gate/blob/e1e6b944360d951edf36ef4198261818ed2d9b2f/usr/src/uts/common/netinet/tcp.h#L94
+pub const TCP = struct {
+    pub const NODELAY = 0x01;
+    pub const MAXSEG = 0x02;
+    pub const KEEPALIVE = 0x8;
+    pub const NOTIFY_THRESHOLD = 0x10;
+    pub const ABORT_THRESHOLD = 0x11;
+    pub const CONN_NOTIFY_THRESHOLD = 0x12;
+    pub const CONN_ABORT_THRESHOLD = 0x13;
+    pub const RECVDSTADDR = 0x14;
+    pub const INIT_CWND = 0x15;
+    pub const KEEPALIVE_THRESHOLD = 0x16;
+    pub const KEEPALIVE_ABORT_THRESHOLD = 0x17;
+    pub const CORK = 0x18;
+    pub const RTO_INITIAL = 0x19;
+    pub const RTO_MIN = 0x1A;
+    pub const RTO_MAX = 0x1B;
+    pub const LINGER2 = 0x1C;
+    pub const ANONPRIVBIND = 0x20;
+    pub const EXCLBIND = 0x21;
+    pub const KEEPIDLE = 0x22;
+    pub const KEEPCNT = 0x23;
+    pub const KEEPINTVL = 0x24;
+    pub const CONGESTION = 0x25;
+    pub const QUICKACK = 0x26;
+    pub const MD5SIG = 0x27;
 };

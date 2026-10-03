@@ -19,6 +19,8 @@
 #define DEVLINK_GENL_VERSION 0x1
 #define DEVLINK_GENL_MCGRP_CONFIG_NAME "config"
 
+#define DEVLINK_INDEX_BUS_NAME "devlink_index"
+
 enum devlink_command {
 	/* don't change the order or add anything between, this is ABI! */
 	DEVLINK_CMD_UNSPEC,
@@ -404,6 +406,7 @@ enum devlink_var_attr_type {
 	DEVLINK_VAR_ATTR_TYPE_BINARY,
 	__DEVLINK_VAR_ATTR_TYPE_CUSTOM_BASE = 0x80,
 	/* Any possible custom types, unrelated to NLA_* values go below */
+	DEVLINK_VAR_ATTR_TYPE_U64_ARRAY,
 };
 
 enum devlink_attr {
@@ -642,6 +645,9 @@ enum devlink_attr {
 	DEVLINK_ATTR_PARAM_VALUE_DEFAULT,	/* dynamic */
 	DEVLINK_ATTR_PARAM_RESET_DEFAULT,	/* flag */
 
+	DEVLINK_ATTR_INDEX,			/* uint */
+	DEVLINK_ATTR_RESOURCE_SCOPE_MASK,	/* u32 */
+
 	/* Add new attributes above here, update the spec in
 	 * Documentation/netlink/specs/devlink.yaml and re-generate
 	 * net/devlink/netlink_gen.c.
@@ -699,6 +705,16 @@ enum devlink_dpipe_header_id {
 enum devlink_resource_unit {
 	DEVLINK_RESOURCE_UNIT_ENTRY,
 };
+
+enum devlink_resource_scope {
+	DEVLINK_RESOURCE_SCOPE_DEV_BIT,
+	DEVLINK_RESOURCE_SCOPE_PORT_BIT,
+};
+
+#define DEVLINK_RESOURCE_SCOPE_DEV \
+	_BITUL(DEVLINK_RESOURCE_SCOPE_DEV_BIT)
+#define DEVLINK_RESOURCE_SCOPE_PORT \
+	_BITUL(DEVLINK_RESOURCE_SCOPE_PORT_BIT)
 
 enum devlink_port_fn_attr_cap {
 	DEVLINK_PORT_FN_ATTR_CAP_ROCE_BIT,

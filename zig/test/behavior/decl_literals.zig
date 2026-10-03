@@ -35,7 +35,6 @@ test "decl literal with pointer" {
 test "call decl literal with optional" {
     if (builtin.zig_backend == .stage2_sparc64) return error.SkipZigTest;
     if (builtin.zig_backend == .stage2_arm) return error.SkipZigTest;
-    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
 
     const S = struct {
         x: u32,
@@ -49,6 +48,8 @@ test "call decl literal with optional" {
 }
 
 test "call decl literal with pointer" {
+    if (builtin.zig_backend == .stage2_spirv) return error.SkipZigTest;
+
     const S = struct {
         x: u32,
         fn init() *const @This() {

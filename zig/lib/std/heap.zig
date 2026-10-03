@@ -78,9 +78,9 @@ pub fn defaultQueryPageSize() usize {
     if (size > 0) return size;
     size = size: switch (builtin.os.tag) {
         .linux => if (builtin.link_libc)
-            @max(std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE)), 0)
+            @max(std.c.sysconf(@backingInt(std.c._SC.PAGESIZE)), 0)
         else
-            std.os.linux.getauxval(std.elf.AT_PAGESZ),
+            std.os.linux.getauxval(std.elf.AT.PAGESZ),
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
             const task_port = std.c.mach_task_self();
             // mach_task_self may fail "if there are any resource failures or other errors".
@@ -109,7 +109,7 @@ pub fn defaultQueryPageSize() usize {
             }
         },
         else => if (builtin.link_libc)
-            @max(std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE)), 0)
+            @max(std.c.sysconf(@backingInt(std.c._SC.PAGESIZE)), 0)
         else if (builtin.os.tag == .freestanding or builtin.os.tag == .other)
             @compileError("unsupported target: freestanding/other")
         else

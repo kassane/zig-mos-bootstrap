@@ -2,12 +2,18 @@
 //! source lives here. These APIs are provided as-is and have absolutely no API
 //! guarantees whatsoever.
 
+const builtin = @import("builtin");
+
 const std = @import("std.zig");
 const assert = std.debug.assert;
 const mem = std.mem;
+const log = std.log;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Writer = std.Io.Writer;
+const Cache = std.Build.Cache;
+const fatal = std.process.fatal;
+const Dir = std.Io.Dir;
 
 const tokenizer = @import("zig/tokenizer.zig");
 
@@ -23,7 +29,6 @@ pub const primitives = @import("zig/primitives.zig");
 pub const isPrimitive = primitives.isPrimitive;
 pub const Ast = @import("zig/Ast.zig");
 pub const AstGen = @import("zig/AstGen.zig");
-pub const AstSmith = @import("zig/AstSmith.zig");
 pub const Zir = @import("zig/Zir.zig");
 pub const Zoir = @import("zig/Zoir.zig");
 pub const ZonGen = @import("zig/ZonGen.zig");
@@ -37,6 +42,8 @@ pub const PkgConfig = @import("zig/PkgConfig.zig");
 pub const target = @import("zig/target.zig");
 pub const llvm = @import("zig/llvm.zig");
 
+pub const parser_generated_oracle = @import("zig/parser_generated_oracle.zig");
+
 // Character literal parsing
 pub const ParsedCharLiteral = string_literal.ParsedCharLiteral;
 pub const parseCharLiteral = string_literal.parseCharLiteral;
@@ -46,6 +53,9 @@ pub const c_translation = struct {
     pub const builtins = @import("zig/c_translation/builtins.zig");
     pub const helpers = @import("zig/c_translation/helpers.zig");
 };
+
+pub const default_local_zig_cache_basename = ".zig-cache";
+pub const build_zig_basename = "build.zig";
 
 pub const SrcHasher = std.crypto.hash.Blake3;
 pub const SrcHash = [16]u8;
@@ -70,7 +80,7 @@ pub const Color = enum {
     /// CLICOLOR_FORCE environment variables. Color is always disabled on WASI per
     /// https://github.com/WebAssembly/WASI/issues/162
     pub fn settingFromEnvironment(environ_map: *const std.process.Environ.Map) Color {
-        return if (@import("builtin").os.tag == .wasi or EnvVar.NO_COLOR.isSet(environ_map))
+        return if (builtin.os.tag == .wasi or EnvVar.NO_COLOR.isSet(environ_map))
             .off
         else if (EnvVar.CLICOLOR_FORCE.isSet(environ_map))
             .on
@@ -163,8 +173,8 @@ pub const BinNameOptions = struct {
     os_tag: std.Target.Os.Tag,
     ofmt: std.Target.ObjectFormat,
     abi: std.Target.Abi,
-    output_mode: std.builtin.OutputMode,
-    link_mode: ?std.builtin.LinkMode = null,
+    output_mode: std.lang.OutputMode,
+    link_mode: ?std.lang.LinkMode = null,
     version: ?std.SemanticVersion = null,
 };
 
@@ -376,23 +386,6 @@ pub const Subsystem = enum {
     efi_boot_service_driver,
     efi_rom,
     efi_runtime_driver,
-
-    /// Deprecated; use '.console' instead. To be removed after 0.16.0 is tagged.
-    pub const Console: Subsystem = .console;
-    /// Deprecated; use '.windows' instead. To be removed after 0.16.0 is tagged.
-    pub const Windows: Subsystem = .windows;
-    /// Deprecated; use '.posix' instead. To be removed after 0.16.0 is tagged.
-    pub const Posix: Subsystem = .posix;
-    /// Deprecated; use '.native' instead. To be removed after 0.16.0 is tagged.
-    pub const Native: Subsystem = .native;
-    /// Deprecated; use '.efi_application' instead. To be removed after 0.16.0 is tagged.
-    pub const EfiApplication: Subsystem = .efi_application;
-    /// Deprecated; use '.efi_boot_service_driver' instead. To be removed after 0.16.0 is tagged.
-    pub const EfiBootServiceDriver: Subsystem = .efi_boot_service_driver;
-    /// Deprecated; use '.efi_rom' instead. To be removed after 0.16.0 is tagged.
-    pub const EfiRom: Subsystem = .efi_rom;
-    /// Deprecated; use '.efi_runtime_driver' instead. To be removed after 0.16.0 is tagged.
-    pub const EfiRuntimeDriver: Subsystem = .efi_runtime_driver;
 };
 
 pub const CompressDebugSections = enum(u2) { none, zlib, zstd };
@@ -495,6 +488,8 @@ test fmtId {
     try expectFmt("@\"11\\\"23\"", "{f}", .{fmtId("11\"23")});
     try expectFmt("@\"11\\x0f23\"", "{f}", .{fmtId("11\x0F23")});
 
+    try expectFmt("@\"\\r\\\"\\n\\xff😎\\xe2\\x80\\xa8\"", "{f}", .{fmtId("\r\"\n\xFF😎\u{2028}")});
+
     // These are technically not currently legal in Zig.
     try expectFmt("@\"\"", "{f}", .{fmtId("")});
     try expectFmt("@\"\\x00\"", "{f}", .{fmtId("\x00")});
@@ -512,7 +507,7 @@ pub const FormatId = struct {
     pub fn format(ctx: FormatId, writer: *Writer) Writer.Error!void {
         const bytes = ctx.bytes;
         if (isValidId(bytes) and
-            (ctx.flags.allow_primitive or !std.zig.isPrimitive(bytes)) and
+            (ctx.flags.allow_primitive or !isPrimitive(bytes)) and
             (ctx.flags.allow_underscore or !isUnderscore(bytes)))
         {
             return writer.writeAll(bytes);
@@ -545,20 +540,216 @@ test fmtChar {
 }
 
 /// Print the string as escaped contents of a double quoted string.
+///
+/// The following transformations are made:
+/// * escaped: '\n', '\r', '\t', '\\', '"'
+/// * hex-encoded:
+///   * ascii control characters
+///   * invalid UTF-8 sequences
+///   * non-ascii line endings (U+0085, U+2028, U+2029)
+///   * byte order marks (U+FEFF)
+///
+/// Everything else is passed through unmodified.
 pub fn stringEscape(bytes: []const u8, w: *Writer) Writer.Error!void {
-    for (bytes) |byte| switch (byte) {
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        '\\' => try w.writeAll("\\\\"),
-        '"' => try w.writeAll("\\\""),
-        '\'' => try w.writeByte('\''),
-        ' ', '!', '#'...'&', '('...'[', ']'...'~' => try w.writeByte(byte),
-        else => {
+    var remaining = bytes.len;
+    while (remaining > 0) {
+        remaining -= try stringEscapeInner(bytes[bytes.len - remaining ..], w);
+
+        // Escape the first byte and try again.
+        // Needing to escape the rest is not guaranteed.
+        if (remaining > 0) {
             try w.writeAll("\\x");
-            try w.printInt(byte, 16, .lower, .{ .width = 2, .fill = '0' });
-        },
-    };
+            try w.printInt(bytes[bytes.len - remaining], 16, .lower, .{ .width = 2, .fill = '0' });
+            remaining -= 1;
+        }
+    }
+}
+
+/// Returns the number of bytes consumed from `bytes`, which may be less than `bytes.len`.
+fn stringEscapeInner(bytes: []const u8, w: *Writer) Writer.Error!usize {
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const byte = bytes[i];
+        switch (byte) {
+            '\t' => {
+                try w.writeAll("\\t");
+            },
+            '\n' => {
+                try w.writeAll("\\n");
+            },
+            '\r' => {
+                try w.writeAll("\\r");
+            },
+            '\\' => {
+                try w.writeAll("\\\\");
+            },
+            '"' => {
+                try w.writeAll("\\\"");
+            },
+            0...8, 11, 12, 14...0x1f, 0x7f => {
+                try w.writeAll("\\x");
+                try w.printInt(byte, 16, .lower, .{ .width = 2, .fill = '0' });
+            },
+            0x20, 0x21, 0x23...0x5b, 0x5d...0x7e => {
+                try w.writeByte(byte);
+            },
+            0x80...0xff => {
+                const len, const escape = blk: {
+                    const len = std.unicode.utf8ByteSequenceLength(byte) catch break :blk .{ 1, true };
+                    if (i + len > bytes.len) {
+                        return i;
+                    }
+                    const sequence = bytes[i..][0..len];
+                    const code_point = std.unicode.utf8Decode(sequence) catch |err| switch (err) {
+                        error.Utf8CodepointTooLarge => break :blk .{ len, true },
+                        else => break :blk .{ 1, true },
+                    };
+                    switch (code_point) {
+                        '\u{feff}', '\u{0085}', '\u{2028}', '\u{2029}' => break :blk .{ len, true },
+                        else => break :blk .{ len, false },
+                    }
+                };
+
+                const sequence = bytes[i..][0..len];
+                if (escape) {
+                    for (sequence) |b| {
+                        try w.writeAll("\\x");
+                        try w.printInt(b, 16, .lower, .{ .width = 2, .fill = '0' });
+                    }
+                } else {
+                    try w.writeAll(sequence);
+                }
+                i += len;
+                continue;
+            },
+        }
+        i += 1;
+    }
+    return i;
+}
+
+pub const StringEscapeWriter = struct {
+    out: *Writer,
+    writer: Writer,
+
+    pub const min_buffer_len = 4;
+
+    pub fn init(out: *Writer, buffer: []u8) @This() {
+        assert(buffer.len >= min_buffer_len);
+        return .{
+            .out = out,
+            .writer = .{
+                .vtable = &.{ .drain = @This().drain, .flush = @This().flush },
+                .buffer = buffer,
+            },
+        };
+    }
+
+    fn drain(w: *Writer, data: []const []const u8, splat: usize) Io.Writer.Error!usize {
+        var n: usize = try drainBufferRemaining(w, "");
+        for (data[0 .. data.len - 1]) |bytes| {
+            n += try drainBufferRemaining(w, bytes);
+        }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            n += try drainBufferRemaining(w, pattern);
+        }
+        return n;
+    }
+
+    fn flush(w: *Writer) Io.Writer.Error!void {
+        const sew: *StringEscapeWriter = @alignCast(@fieldParentPtr("writer", w));
+        const out = sew.out;
+        while (w.end != 0) {
+            _ = try drainBufferRemaining(w, "");
+
+            // Escape the first byte and try again.
+            // Needing to escape the rest is not guaranteed.
+            const remaining = w.buffered();
+            if (remaining.len > 0) {
+                try out.writeAll("\\x");
+                try out.printInt(remaining[0], 16, .lower, .{ .width = 2, .fill = '0' });
+                _ = w.consume(1);
+            }
+        }
+    }
+
+    /// Drain from the buffer first, taking from `bytes` as necessary to complete any
+    /// incomplete UTF-8 sequences. Then, consume whatever is remaining of `bytes`,
+    /// storing a possible trailing incomplete UTF-8 sequence in the buffer.
+    ///
+    /// On success, `w.buffered().len` is guaranteed to be < 4.
+    fn drainBufferRemaining(w: *Writer, bytes: []const u8) Io.Writer.Error!usize {
+        const sew: *StringEscapeWriter = @alignCast(@fieldParentPtr("writer", w));
+        const out = sew.out;
+        var remaining_bytes = bytes;
+        while (w.end != 0) {
+            const n = try stringEscapeInner(w.buffered(), out);
+            _ = w.consume(n);
+
+            if (w.end != 0) {
+                if (remaining_bytes.len == 0) return bytes.len;
+                const len = std.unicode.utf8ByteSequenceLength(w.buffer[0]) catch unreachable;
+                const missing = len - w.end;
+                const available = remaining_bytes.len;
+                const copy_len = @min(missing, available);
+                const start = len - missing;
+                @memcpy(w.buffer[start..][0..copy_len], remaining_bytes[0..copy_len]);
+                w.end = start + copy_len;
+                remaining_bytes = remaining_bytes[copy_len..];
+            }
+        }
+
+        const n = try stringEscapeInner(remaining_bytes, out);
+        if (n < remaining_bytes.len) {
+            const remaining = remaining_bytes.len - n;
+            @memcpy(w.buffer[0..remaining], remaining_bytes[n..]);
+            w.end = remaining;
+        }
+
+        return bytes.len;
+    }
+};
+
+test stringEscape {
+    const bytes = "\x7f\t\n\r\\\"abc\xff\u{feff}\u{0085}\u{2028}\u{2029}\xed\xa0\x80\xf4\x90\x80\x80\xf4\x90a";
+    const escaped = "\\x7f\\t\\n\\r\\\\\\\"abc\\xff\\xef\\xbb\\xbf\\xc2\\x85\\xe2\\x80\\xa8\\xe2\\x80\\xa9\\xed\\xa0\\x80\\xf4\\x90\\x80\\x80\\xf4\\x90a";
+
+    var out_buf: [escaped.len]u8 = undefined;
+    var out: Io.Writer = .fixed(&out_buf);
+
+    try stringEscape(bytes, &out);
+    try std.testing.expectEqualStrings(escaped, out.buffered());
+}
+
+test StringEscapeWriter {
+    const bytes = "\x7f\t\n\r\\\"abc\xff\u{feff}\u{0085}\u{2028}\u{2029}\xed\xa0\x80\xf4\x90\x80\x80\xf4\x90a";
+    const escaped = "\\x7f\\t\\n\\r\\\\\\\"abc\\xff\\xef\\xbb\\xbf\\xc2\\x85\\xe2\\x80\\xa8\\xe2\\x80\\xa9\\xed\\xa0\\x80\\xf4\\x90\\x80\\x80\\xf4\\x90a";
+
+    var sew_buf: [StringEscapeWriter.min_buffer_len]u8 = undefined;
+    {
+        var out_buf: [escaped.len]u8 = undefined;
+        var out: Io.Writer = .fixed(&out_buf);
+        var w: StringEscapeWriter = .init(&out, &sew_buf);
+
+        const n = try w.writer.write(bytes);
+        try w.writer.flush();
+
+        try std.testing.expectEqual(bytes.len, n);
+        try std.testing.expectEqualStrings(escaped, out.buffered());
+    }
+    {
+        var out_buf: [escaped.len]u8 = undefined;
+        var out: Io.Writer = .fixed(&out_buf);
+        var w: StringEscapeWriter = .init(&out, &sew_buf);
+
+        for (bytes) |byte| {
+            try w.writer.writeByte(byte);
+        }
+        try w.writer.flush();
+
+        try std.testing.expectEqualStrings(escaped, out.buffered());
+    }
 }
 
 /// Print as escaped contents of a single-quoted string.
@@ -592,7 +783,7 @@ pub fn isValidId(bytes: []const u8) bool {
             else => return false,
         }
     }
-    return std.zig.Token.getKeyword(bytes) == null;
+    return Token.getKeyword(bytes) == null;
 }
 
 test isValidId {
@@ -658,8 +849,7 @@ pub fn readSourceFileToEndAlloc(gpa: Allocator, file_reader: *Io.File.Reader) ![
 }
 
 pub fn printAstErrorsToStderr(gpa: Allocator, io: Io, tree: Ast, path: []const u8, color: Color) !void {
-    var wip_errors: std.zig.ErrorBundle.Wip = undefined;
-    try wip_errors.init(gpa);
+    var wip_errors: ErrorBundle.Wip = try .init(gpa);
     defer wip_errors.deinit();
 
     try putAstErrorsIntoBundle(gpa, tree, path, &wip_errors);
@@ -673,7 +863,7 @@ pub fn putAstErrorsIntoBundle(
     gpa: Allocator,
     tree: Ast,
     path: []const u8,
-    wip_errors: *std.zig.ErrorBundle.Wip,
+    wip_errors: *ErrorBundle.Wip,
 ) Allocator.Error!void {
     switch (tree.mode) {
         .zig => {
@@ -692,7 +882,7 @@ pub fn putAstErrorsIntoBundle(
 }
 
 pub fn resolveTargetQueryOrFatal(io: Io, target_query: std.Target.Query) std.Target {
-    return std.zig.system.resolveTargetQuery(io, target_query) catch |err|
+    return system.resolveTargetQuery(io, target_query) catch |err|
         std.process.fatal("unable to resolve target: {t}", .{err});
 }
 
@@ -713,7 +903,7 @@ pub fn parseTargetQueryOrReportFatalError(
                 for (diags.arch.?.allCpuModels()) |cpu| {
                     help_text.print(" {s}\n", .{cpu.name}) catch break :help;
                 }
-                std.log.info("available CPUs for architecture '{s}':\n{s}", .{
+                log.info("available CPUs for architecture '{s}':\n{s}", .{
                     @tagName(diags.arch.?), help_text.items,
                 });
             }
@@ -726,7 +916,7 @@ pub fn parseTargetQueryOrReportFatalError(
                 for (diags.arch.?.allFeaturesList()) |feature| {
                     help_text.print(" {s}: {s}\n", .{ feature.name, feature.description }) catch break :help;
                 }
-                std.log.info("available CPU features for architecture '{s}':\n{s}", .{
+                log.info("available CPU features for architecture '{s}':\n{s}", .{
                     @tagName(diags.arch.?), help_text.items,
                 });
             }
@@ -739,7 +929,7 @@ pub fn parseTargetQueryOrReportFatalError(
                 inline for (@typeInfo(std.Target.ObjectFormat).@"enum".field_names) |field_name| {
                     help_text.print(" {s}\n", .{field_name}) catch break :help;
                 }
-                std.log.info("available object formats:\n{s}", .{help_text.items});
+                log.info("available object formats:\n{s}", .{help_text.items});
             }
             std.process.fatal("unknown object format: '{s}'", .{opts.object_format.?});
         },
@@ -750,7 +940,7 @@ pub fn parseTargetQueryOrReportFatalError(
                 inline for (@typeInfo(std.Target.Cpu.Arch).@"enum".field_names) |field_name| {
                     help_text.print(" {s}\n", .{field_name}) catch break :help;
                 }
-                std.log.info("available architectures:\n{s} native\n", .{help_text.items});
+                log.info("available architectures:\n{s} native\n", .{help_text.items});
             }
             std.process.fatal("unknown architecture: '{s}'", .{diags.unknown_architecture_name.?});
         },
@@ -770,11 +960,13 @@ pub const EnvVar = enum {
     ZIG_LIBC,
     ZIG_BUILD_ERROR_STYLE,
     ZIG_BUILD_MULTILINE_ERRORS,
+    ZIG_BUILD_SUMMARY,
     ZIG_VERBOSE_LINK,
     ZIG_VERBOSE_CC,
+    ZIG_VERBOSE_CMD,
     ZIG_DEBUG_CMD,
     ZIG_IS_DETECTING_LIBC_PATHS,
-    ZIG_IS_TRYING_TO_NOT_CALL_ITSELF,
+    ZIG_IS_AVOIDING_CALLING_ITSELF,
 
     // C toolchain integration
     NIX_CFLAGS_COMPILE,
@@ -894,7 +1086,6 @@ pub const SimpleComptimeReason = enum(u32) {
     slice_single_item_ptr_bounds,
     stored_to_comptime_field,
     stored_to_comptime_var,
-    casted_to_comptime_enum,
     casted_to_comptime_int,
     casted_to_comptime_float,
     std_lang_decl,
@@ -977,7 +1168,6 @@ pub const SimpleComptimeReason = enum(u32) {
             .slice_single_item_ptr_bounds => "slice of single-item pointer must have comptime-known bounds",
             .stored_to_comptime_field     => "value stored to a comptime field must be comptime-known",
             .stored_to_comptime_var       => "value stored to a comptime variable must be comptime-known",
-            .casted_to_comptime_enum      => "value casted to enum with 'comptime_int' tag type must be comptime-known",
             .casted_to_comptime_int       => "value casted to 'comptime_int' must be comptime-known",
             .casted_to_comptime_float     => "value casted to 'comptime_float' must be comptime-known",
             .std_lang_decl                => "'std.lang' declaration values must be comptime-known",
@@ -996,14 +1186,11 @@ pub const EmitArtifact = enum {
     docs,
     pdb,
     h,
-    compiler_rt_dyn_lib,
 
     /// If using `Server` to communicate with the compiler, it will place requested artifacts in
     /// paths under the output directory, where those paths are named according to this function.
     /// Returned string is allocated with `gpa` and owned by the caller.
     pub fn cacheName(ea: EmitArtifact, gpa: Allocator, opts: BinNameOptions) Allocator.Error![]const u8 {
-        // hack for stage2_x86_64 + coff. See Coff.flush.
-        if (ea == .compiler_rt_dyn_lib) return "compiler_rt.dll";
         const suffix: []const u8 = switch (ea) {
             .bin => return binNameAlloc(gpa, opts),
             .@"asm" => ".s",
@@ -1013,7 +1200,6 @@ pub const EmitArtifact = enum {
             .docs => "-docs",
             .pdb => ".pdb",
             .h => ".h",
-            .compiler_rt_dyn_lib => unreachable,
         };
         return std.fmt.allocPrint(gpa, "{s}{s}", .{ opts.root_name, suffix });
     }
@@ -1137,6 +1323,7 @@ pub const ClangCliParam = struct {
         static,
         dynamic,
         version,
+        patchable_function_entry,
     };
 
     pub fn matchEql(self: @This(), arg: []const u8) u2 {
@@ -1178,78 +1365,698 @@ pub const ClangCliParam = struct {
     }
 };
 
+/// Deprecated
 pub const AllocPrintCmdOptions = struct {
     cwd: ?[]const u8 = null,
     parent_env: ?*const std.process.Environ.Map = null,
     child_env: ?*const std.process.Environ.Map = null,
 };
 
+/// Deprecated
 pub fn allocPrintCmd(gpa: Allocator, argv: []const []const u8, options: AllocPrintCmdOptions) Allocator.Error![]u8 {
-    const shell = struct {
-        fn escape(writer: *Io.Writer, string: []const u8, is_argv0: bool) !void {
-            for (string) |c| {
-                if (switch (c) {
-                    else => true,
-                    '%', '+'...':', '@'...'Z', '_', 'a'...'z' => false,
-                    '=' => is_argv0,
-                }) break;
-            } else return writer.writeAll(string);
-
-            try writer.writeByte('"');
-            for (string) |c| {
-                if (switch (c) {
-                    std.ascii.control_code.nul => break,
-                    '!', '"', '$', '\\', '`' => true,
-                    else => !std.ascii.isPrint(c),
-                }) try writer.writeByte('\\');
-                switch (c) {
-                    std.ascii.control_code.nul => unreachable,
-                    std.ascii.control_code.bel => try writer.writeByte('a'),
-                    std.ascii.control_code.bs => try writer.writeByte('b'),
-                    std.ascii.control_code.ht => try writer.writeByte('t'),
-                    std.ascii.control_code.lf => try writer.writeByte('n'),
-                    std.ascii.control_code.vt => try writer.writeByte('v'),
-                    std.ascii.control_code.ff => try writer.writeByte('f'),
-                    std.ascii.control_code.cr => try writer.writeByte('r'),
-                    std.ascii.control_code.esc => try writer.writeByte('E'),
-                    ' '...'~' => try writer.writeByte(c),
-                    else => try writer.print("{o:0>3}", .{c}),
-                }
-            }
-            try writer.writeByte('"');
-        }
-    };
-
     var aw: Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
-    const writer = &aw.writer;
-    if (options.cwd) |path| {
-        writer.print("cd {s} && ", .{path}) catch return error.OutOfMemory;
-    }
-    if (options.child_env) |child_env| {
-        for (child_env.keys(), child_env.values()) |key, value| {
-            if (options.parent_env) |parent_env| {
-                if (parent_env.get(key)) |process_value| {
-                    if (std.mem.eql(u8, value, process_value)) continue;
-                }
-            }
-            writer.print("{s}=", .{key}) catch return error.OutOfMemory;
-            shell.escape(writer, value, false) catch return error.OutOfMemory;
-            writer.writeByte(' ') catch return error.OutOfMemory;
+    SubprocessCommand.format(.{
+        .argv = argv,
+        .cwd = options.cwd,
+        .parent_env = options.parent_env,
+        .child_env = options.child_env,
+    }, &aw.writer) catch return error.OutOfMemory;
+    return aw.toOwnedSlice();
+}
+
+fn shellEscape(writer: *Io.Writer, string: []const u8, is_argv0: bool) !void {
+    for (string) |c| {
+        if (switch (c) {
+            else => true,
+            '%', '+'...':', '@'...'Z', '_', 'a'...'z' => false,
+            '=' => is_argv0,
+        }) break;
+    } else return writer.writeAll(string);
+
+    try writer.writeByte('"');
+    for (string) |c| {
+        if (switch (c) {
+            std.ascii.control_code.nul => break,
+            '!', '"', '$', '\\', '`' => true,
+            else => !std.ascii.isPrint(c),
+        }) try writer.writeByte('\\');
+        switch (c) {
+            std.ascii.control_code.nul => unreachable,
+            std.ascii.control_code.bel => try writer.writeByte('a'),
+            std.ascii.control_code.bs => try writer.writeByte('b'),
+            std.ascii.control_code.ht => try writer.writeByte('t'),
+            std.ascii.control_code.lf => try writer.writeByte('n'),
+            std.ascii.control_code.vt => try writer.writeByte('v'),
+            std.ascii.control_code.ff => try writer.writeByte('f'),
+            std.ascii.control_code.cr => try writer.writeByte('r'),
+            std.ascii.control_code.esc => try writer.writeByte('E'),
+            ' '...'~' => try writer.writeByte(c),
+            else => try writer.print("{o:0>3}", .{c}),
         }
     }
-    shell.escape(writer, argv[0], true) catch return error.OutOfMemory;
-    for (argv[1..]) |arg| {
-        writer.writeByte(' ') catch return error.OutOfMemory;
-        shell.escape(writer, arg, false) catch return error.OutOfMemory;
+    try writer.writeByte('"');
+}
+
+pub const SubprocessCommand = struct {
+    argv: []const []const u8,
+    cwd: ?[]const u8 = null,
+    parent_env: ?*const std.process.Environ.Map = null,
+    child_env: ?*const std.process.Environ.Map = null,
+
+    pub fn format(sc: SubprocessCommand, w: *Io.Writer) Io.Writer.Error!void {
+        if (sc.cwd) |path| {
+            try w.print("cd {s} && ", .{path});
+        }
+        if (sc.child_env) |child_env| {
+            for (child_env.keys(), child_env.values()) |key, value| {
+                if (sc.parent_env) |parent_env| {
+                    if (parent_env.get(key)) |process_value| {
+                        if (mem.eql(u8, value, process_value)) continue;
+                    }
+                }
+                try w.print("{s}=", .{key});
+                try shellEscape(w, value, false);
+                try w.writeByte(' ');
+            }
+        }
+        try shellEscape(w, sc.argv[0], true);
+        for (sc.argv[1..]) |arg| {
+            try w.writeByte(' ');
+            try shellEscape(w, arg, false);
+        }
     }
-    return aw.toOwnedSlice();
+};
+
+/// Like `std.process.currentPathAlloc`, but also resolves the path with `Dir.path.resolve`. This
+/// means the path has no repeated separators, no "." or ".." components, and no trailing separator.
+/// On WASI, "" is returned instead of ".".
+pub fn getResolvedCwd(io: Io, gpa: Allocator) std.process.CurrentPathAllocError![]u8 {
+    if (builtin.os.tag == .wasi) {
+        if (std.debug.runtime_safety) {
+            const cwd = try std.process.currentPathAlloc(io, gpa);
+            defer gpa.free(cwd);
+            assert(mem.eql(u8, cwd, "."));
+        }
+        return "";
+    }
+    const cwd = try std.process.currentPathAlloc(io, gpa);
+    defer gpa.free(cwd);
+    const resolved = try Dir.path.resolve(gpa, &.{cwd});
+    assert(Dir.path.isAbsolute(resolved));
+    return resolved;
+}
+
+pub const Directories = struct {
+    /// The string returned by `introspect.getResolvedCwd`. This is typically an absolute path,
+    /// but on WASI is the empty string "" instead, because WASI does not have absolute paths.
+    cwd: []const u8,
+    /// The Zig 'lib' directory.
+    /// `zig_lib.path` is resolved (`resolvePath`) or `null` for cwd.
+    /// Guaranteed to be a different path from `global_cache` and `local_cache`.
+    zig_lib: Cache.Directory,
+    /// The global Zig cache directory.
+    /// `global_cache.path` is resolved (`resolvePath`) or `null` for cwd.
+    global_cache: Cache.Directory,
+    /// The local Zig cache directory.
+    /// `local_cache.path` is resolved (`resolvePath`) or `null` for cwd.
+    /// This may be the same as `global_cache`.
+    local_cache: Cache.Directory,
+    /// The directory that contains build.zig. This path is provided by the
+    /// build system, when the build system is used, otherwise, it is `null`
+    /// for cwd.
+    build_root: Cache.Directory,
+
+    pub fn deinit(dirs: *Directories, io: Io) void {
+        // The local and global caches could be the same.
+        const close_local = dirs.local_cache.handle.handle != dirs.global_cache.handle.handle;
+        const close_build_root = dirs.build_root.handle.handle != Io.Dir.cwd().handle;
+
+        dirs.global_cache.handle.close(io);
+        if (close_local) dirs.local_cache.handle.close(io);
+        dirs.zig_lib.handle.close(io);
+        if (close_build_root) dirs.build_root.handle.close(io);
+    }
+
+    /// Returns a `Directories` where `local_cache` is replaced with `global_cache`, intended for
+    /// use by sub-compilations (e.g. compiler_rt). Do not `deinit` the returned `Directories`; it
+    /// shares handles with `dirs`.
+    pub fn withoutLocalCache(dirs: Directories) Directories {
+        return .{
+            .cwd = dirs.cwd,
+            .zig_lib = dirs.zig_lib,
+            .global_cache = dirs.global_cache,
+            .local_cache = dirs.global_cache,
+            .build_root = dirs.build_root,
+        };
+    }
+
+    const LocalCacheStrategy = union(enum) {
+        override: []const u8,
+        search,
+        global,
+    };
+
+    pub const InitOptions = struct {
+        override_zig_lib: ?[]const u8,
+        override_global_cache: ?[]const u8,
+        build_root: ?[]const u8,
+        local_cache_strat: LocalCacheStrategy,
+        preopens: std.process.Preopens,
+        self_exe_path: switch (builtin.target.os.tag) {
+            .wasi => void,
+            else => []const u8,
+        },
+        environ_map: *const std.process.Environ.Map,
+        cwd: []const u8,
+    };
+
+    /// Uses `std.process.fatal` on error conditions.
+    pub fn init(arena: Allocator, io: Io, options: InitOptions) Directories {
+        const wasi = builtin.target.os.tag == .wasi;
+        const cwd = options.cwd;
+
+        const zig_lib: Cache.Directory = d: {
+            if (options.override_zig_lib) |path| break :d openUnresolved(arena, io, cwd, path, .@"zig lib");
+            if (wasi) break :d getPreopen(options.preopens, "/lib");
+            break :d findZigLibDirFromSelfExe(arena, io, cwd, options.self_exe_path) catch |err| {
+                fatal("unable to find zig installation directory from executable path {q}: {t}", .{
+                    options.self_exe_path, err,
+                });
+            };
+        };
+        const build_root: Cache.Directory = if (options.build_root) |s|
+            openUnresolved(arena, io, cwd, s, .@"build root")
+        else
+            .cwd();
+
+        const global_cache: Cache.Directory = d: {
+            if (options.override_global_cache) |path| break :d openUnresolved(arena, io, cwd, path, .@"global cache");
+            if (wasi) break :d getPreopen(options.preopens, "/cache");
+            const path = resolveGlobalCacheDir(arena, options.environ_map) catch |err| {
+                fatal("unable to resolve zig cache directory: {t}", .{err});
+            };
+            break :d openUnresolved(arena, io, cwd, path, .@"global cache");
+        };
+
+        const local_cache = getLocalCacheDirectory(arena, io, cwd, global_cache, options.local_cache_strat);
+
+        if (mem.eql(u8, zig_lib.path orelse "", global_cache.path orelse "")) {
+            fatal("zig lib directory '{f}' cannot be equal to global cache directory '{f}'", .{ zig_lib, global_cache });
+        }
+        if (mem.eql(u8, zig_lib.path orelse "", local_cache.path orelse "")) {
+            fatal("zig lib directory '{f}' cannot be equal to local cache directory '{f}'", .{ zig_lib, local_cache });
+        }
+
+        return .{
+            .cwd = cwd,
+            .zig_lib = zig_lib,
+            .global_cache = global_cache,
+            .local_cache = local_cache,
+            .build_root = build_root,
+        };
+    }
+
+    fn getLocalCacheDirectory(
+        arena: Allocator,
+        io: Io,
+        cwd: []const u8,
+        global_cache: Cache.Directory,
+        local_cache_strat: LocalCacheStrategy,
+    ) Cache.Directory {
+        return switch (local_cache_strat) {
+            .override => |path| openUnresolved(arena, io, cwd, path, .@"local cache"),
+            .search => d: {
+                const maybe_path = resolveSuitableLocalCacheDir(arena, io, cwd) catch |err|
+                    fatal("unable to resolve zig cache directory: {t}", .{err});
+                const path = maybe_path orelse break :d global_cache;
+                break :d openUnresolved(arena, io, cwd, path, .@"local cache");
+            },
+            .global => global_cache,
+        };
+    }
+
+    fn getPreopen(preopens: std.process.Preopens, name: []const u8) Cache.Directory {
+        return .{
+            .path = if (mem.eql(u8, name, ".")) null else name,
+            .handle = switch (preopens.get(name) orelse fatal("preopen not found: {q}", .{name})) {
+                .file => fatal("preopen {q} is not a directory", .{name}),
+                .dir => |d| d,
+            },
+        };
+    }
+    pub fn openUnresolved(
+        arena: Allocator,
+        io: Io,
+        cwd: []const u8,
+        unresolved_path: []const u8,
+        thing: enum { @"zig lib", @"global cache", @"local cache", @"build root" },
+    ) Cache.Directory {
+        const path = resolvePath(arena, cwd, &.{unresolved_path}) catch |err| {
+            fatal("unable to resolve {t} directory: {t}", .{ thing, err });
+        };
+        const nonempty_path = if (path.len == 0) "." else path;
+        const handle_or_err = switch (thing) {
+            .@"zig lib", .@"build root" => Dir.cwd().openDir(io, nonempty_path, .{}),
+            .@"global cache", .@"local cache" => Dir.cwd().createDirPathOpen(io, nonempty_path, .{}),
+        };
+        return .{
+            .path = if (path.len == 0) null else path,
+            .handle = handle_or_err catch |err| {
+                const extra_str: []const u8 = e: {
+                    if (thing == .@"global cache") switch (err) {
+                        error.AccessDenied, error.ReadOnlyFileSystem => break :e "\n" ++
+                            "If this location is not writable then consider specifying an alternative with " ++
+                            "the ZIG_GLOBAL_CACHE_DIR environment variable or the --global-cache-dir option.",
+                        else => {},
+                    };
+                    break :e "";
+                };
+                fatal("unable to open {t} directory {q}: {t}{s}", .{ thing, nonempty_path, err, extra_str });
+            },
+        };
+    }
+};
+
+/// Both the directory handle and the path are newly allocated resources which the caller now owns.
+pub fn findZigLibDir(gpa: Allocator, io: Io) !Cache.Directory {
+    const cwd_path = try getResolvedCwd(io, gpa);
+    defer gpa.free(cwd_path);
+    const self_exe_path = try std.process.executablePathAlloc(io, gpa);
+    defer gpa.free(self_exe_path);
+
+    return findZigLibDirFromSelfExe(gpa, io, cwd_path, self_exe_path);
+}
+
+/// Both the directory handle and the path are newly allocated resources which the caller now owns.
+pub fn findZigLibDirFromSelfExe(
+    allocator: Allocator,
+    io: Io,
+    /// The return value of `getResolvedCwd`.
+    /// Passed as an argument to avoid pointlessly repeating the call.
+    cwd_path: []const u8,
+    self_exe_path: []const u8,
+) error{ OutOfMemory, FileNotFound }!Cache.Directory {
+    const cwd = Dir.cwd();
+    var cur_path: []const u8 = self_exe_path;
+    while (Dir.path.dirname(cur_path)) |dirname| : (cur_path = dirname) {
+        var base_dir = cwd.openDir(io, dirname, .{}) catch continue;
+        defer base_dir.close(io);
+
+        const sub_directory = testZigInstallPrefix(io, base_dir) orelse continue;
+        const p = try Dir.path.join(allocator, &.{ dirname, sub_directory.path.? });
+        defer allocator.free(p);
+
+        const resolved = try resolvePath(allocator, cwd_path, &.{p});
+        return .{
+            .handle = sub_directory.handle,
+            .path = if (resolved.len == 0) null else resolved,
+        };
+    }
+    return error.FileNotFound;
+}
+
+/// Returns the sub_path that worked, or `null` if none did.
+/// The path of the returned Directory is relative to `base`.
+/// The handle of the returned Directory is open.
+fn testZigInstallPrefix(io: Io, base_dir: Dir) ?Cache.Directory {
+    const test_index_file = "std" ++ Dir.path.sep_str ++ "std.zig";
+
+    zig_dir: {
+        // Try lib/zig/std/std.zig
+        const lib_zig = "lib" ++ Dir.path.sep_str ++ "zig";
+        var test_zig_dir = base_dir.openDir(io, lib_zig, .{}) catch break :zig_dir;
+        const file = test_zig_dir.openFile(io, test_index_file, .{}) catch {
+            test_zig_dir.close(io);
+            break :zig_dir;
+        };
+        file.close(io);
+        return .{ .handle = test_zig_dir, .path = lib_zig };
+    }
+
+    // Try lib/std/std.zig
+    var test_zig_dir = base_dir.openDir(io, "lib", .{}) catch return null;
+    const file = test_zig_dir.openFile(io, test_index_file, .{}) catch {
+        test_zig_dir.close(io);
+        return null;
+    };
+    file.close(io);
+    return .{ .handle = test_zig_dir, .path = "lib" };
+}
+
+pub fn resolveGlobalCacheDir(arena: Allocator, environ_map: *const std.process.Environ.Map) ![]const u8 {
+    if (EnvVar.ZIG_GLOBAL_CACHE_DIR.get(environ_map)) |value| return value;
+
+    const app_name = "zig";
+
+    switch (builtin.os.tag) {
+        .wasi => @compileError("on WASI the global cache dir must be resolved with preopens"),
+        .windows => {
+            const local_app_data_dir = EnvVar.LOCALAPPDATA.get(environ_map) orelse
+                return error.AppDataDirUnavailable;
+            return Dir.path.join(arena, &.{ local_app_data_dir, app_name });
+        },
+        else => {
+            if (EnvVar.XDG_CACHE_HOME.get(environ_map)) |cache_root| {
+                if (cache_root.len > 0) {
+                    return Dir.path.join(arena, &.{ cache_root, app_name });
+                }
+            }
+            if (EnvVar.HOME.get(environ_map)) |home| {
+                if (home.len > 0) {
+                    return Dir.path.join(arena, &.{ home, ".cache", app_name });
+                }
+            }
+            return error.AppDataDirUnavailable;
+        },
+    }
+}
+
+/// Searches upwards from `cwd` for a directory containing a `build.zig` file.
+/// If such a directory is found, returns the path to it joined to the `.zig_cache` name.
+/// Otherwise, returns `null`, indicating no suitable local cache location.
+pub fn resolveSuitableLocalCacheDir(arena: Allocator, io: Io, cwd: []const u8) Allocator.Error!?[]u8 {
+    var cur_dir = cwd;
+    while (true) {
+        const joined = try Dir.path.join(arena, &.{ cur_dir, build_zig_basename });
+        if (Dir.cwd().access(io, joined, .{})) |_| {
+            return try Dir.path.join(arena, &.{ cur_dir, default_local_zig_cache_basename });
+        } else |err| switch (err) {
+            error.FileNotFound => {
+                cur_dir = Dir.path.dirname(cur_dir) orelse return null;
+                continue;
+            },
+            else => return null,
+        }
+    }
+}
+
+/// Similar to `Dir.path.resolve`, but converts to a cwd-relative path, or, if that would
+/// start with a relative up-dir (".."), an absolute path based on the cwd. Also, the cwd
+/// returns the empty string ("") instead of ".".
+pub fn resolvePath(
+    gpa: Allocator,
+    /// The return value of `getResolvedCwd`.
+    /// Passed as an argument to avoid pointlessly repeating the call.
+    cwd_resolved: []const u8,
+    paths: []const []const u8,
+) Allocator.Error![]u8 {
+    if (builtin.target.os.tag == .wasi) {
+        assert(mem.eql(u8, cwd_resolved, ""));
+        const res = try Dir.path.resolve(gpa, paths);
+        if (mem.eql(u8, res, ".")) {
+            gpa.free(res);
+            return "";
+        }
+        return res;
+    }
+
+    // Heuristic for a fast path: if no component is absolute and ".." never appears, we just need to resolve `paths`.
+    for (paths) |p| {
+        if (Dir.path.isAbsolute(p)) break; // absolute path
+        if (mem.find(u8, p, "..") != null) break; // may contain up-dir
+    } else {
+        // no absolute path, no "..".
+        const res = try Dir.path.resolve(gpa, paths);
+        if (mem.eql(u8, res, ".")) {
+            gpa.free(res);
+            return "";
+        }
+        assert(!Dir.path.isAbsolute(res));
+        assert(!isUpDir(res));
+        return res;
+    }
+
+    // The fast path failed; resolve the whole thing.
+    // Optimization: `paths` often has just one element.
+    const path_resolved = switch (paths.len) {
+        0 => unreachable,
+        1 => try Dir.path.resolve(gpa, &.{ cwd_resolved, paths[0] }),
+        else => r: {
+            const all_paths = try gpa.alloc([]const u8, paths.len + 1);
+            defer gpa.free(all_paths);
+            all_paths[0] = cwd_resolved;
+            @memcpy(all_paths[1..], paths);
+            break :r try Dir.path.resolve(gpa, all_paths);
+        },
+    };
+    errdefer gpa.free(path_resolved);
+
+    assert(Dir.path.isAbsolute(path_resolved));
+    assert(Dir.path.isAbsolute(cwd_resolved));
+
+    if (!mem.startsWith(u8, path_resolved, cwd_resolved)) return path_resolved; // not in cwd
+    if (path_resolved.len == cwd_resolved.len) {
+        // equal to cwd
+        gpa.free(path_resolved);
+        return "";
+    }
+    if (path_resolved[cwd_resolved.len] != Dir.path.sep) return path_resolved; // not in cwd (last component differs)
+
+    // in cwd; extract sub path
+    const sub_path = try gpa.dupe(u8, path_resolved[cwd_resolved.len + 1 ..]);
+    gpa.free(path_resolved);
+    return sub_path;
+}
+
+pub fn isUpDir(p: []const u8) bool {
+    return mem.startsWith(u8, p, "..") and (p.len == 2 or p[2] == Dir.path.sep);
+}
+
+pub const BuildExeSubprocessOptions = struct {
+    argv: []const []const u8,
+    cache_root: Cache.Directory,
+    root_name: []const u8,
+
+    environ_map: ?*std.process.Environ.Map = null,
+    cache_manifest: ?*Cache.Manifest = null,
+    arch_os_abi: ?[]const u8 = null,
+    cpu_features: ?[]const u8 = null,
+    progress_node: std.Progress.Node = .none,
+    skip_log_cmdline_on_compile_errors: bool = false,
+    /// If this is provided, compilation errors are sent here. Otherwise, they are printed to stderr.
+    /// Must be an initialized `ErrorBundle`; if it is updated then it is cleared first.
+    error_bundle: ?*ErrorBundle = null,
+};
+
+pub const BuildExeSubprocessError = error{
+    /// Error message has been logged.
+    AlreadyReported,
+    /// Error message has been logged, and source files added to the `Cache.Manifest`.
+    FailedButCacheIntact,
+} || Io.Cancelable || Allocator.Error;
+
+pub const BuildExeSubprocessResult = struct {
+    received_fs_inputs: bool,
+    cache_hit: bool,
+    path: Cache.Path,
+};
+
+/// Assumes `argv` has `--listen=-` in it and the child process is `zig build-exe`.
+///
+/// Result path is allocated via gpa.
+pub fn buildExeSubprocess(
+    gpa: Allocator,
+    io: Io,
+    options: BuildExeSubprocessOptions,
+) BuildExeSubprocessError!BuildExeSubprocessResult {
+    const cmd: SubprocessCommand = .{ .argv = options.argv };
+
+    var child = std.process.spawn(io, .{
+        .argv = options.argv,
+        .environ_map = options.environ_map,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .progress_node = options.progress_node,
+    }) catch |err| {
+        log.err("spawning command {t}: {f}", .{ err, cmd });
+        return error.AlreadyReported;
+    };
+    defer child.kill(io);
+
+    var multi_reader_buffer: Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: Io.File.MultiReader = undefined;
+    multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+    const stdout = multi_reader.reader(0);
+    const stderr = multi_reader.reader(1);
+
+    var stdin_buffer: [8]u8 = undefined;
+    var stdin_writer = child.stdin.?.writerStreaming(io, &stdin_buffer);
+
+    var client: Client = .{
+        .in = stdout,
+        .out = &stdin_writer.interface,
+    };
+
+    (blk: {
+        client.serveMessageHeader(.{ .tag = .update, .bytes_len = 0 }) catch |err| break :blk err;
+        client.serveMessageHeader(.{ .tag = .exit, .bytes_len = 0 }) catch |err| break :blk err;
+        client.out.flush() catch |err| break :blk err;
+    }) catch |err| switch (err) {
+        error.WriteFailed => {
+            if (stdin_writer.err.? == error.Canceled) return error.Canceled;
+            log.err("{t} writing to command: {f}", .{ stdin_writer.err.?, cmd });
+            return error.AlreadyReported;
+        },
+    };
+
+    var result: ?Cache.Path = null;
+    defer if (result) |r| gpa.free(r.sub_path);
+
+    var default_error_bundle: ErrorBundle = .empty;
+    defer default_error_bundle.deinit(gpa);
+
+    const error_bundle = options.error_bundle orelse &default_error_bundle;
+
+    var received_fs_inputs = false;
+    var cache_hit = false;
+
+    var eos_err: error{EndOfStream}!void = {};
+
+    while (true) {
+        const header = client.receiveMessageWithMultiReader(&multi_reader, .none) catch |err| switch (err) {
+            error.Timeout => unreachable,
+            error.EndOfStream => |e| {
+                if (client.in.bufferedLen() == 0) break;
+                // Better to report the crash with stderr below, but we set
+                // this in case the child exits successfully while violating
+                // this protocol.
+                eos_err = e;
+                break;
+            },
+            error.Canceled, error.OutOfMemory => |e| return e,
+            else => |e| {
+                log.err("{t} reading from command: {f}", .{ e, cmd });
+                return error.AlreadyReported;
+            },
+        };
+        const body = stdout.take(header.bytes_len) catch unreachable;
+
+        switch (header.tag) {
+            .zig_version => {
+                if (!mem.eql(u8, builtin.zig_version_string, body)) {
+                    log.err("zig protocol version mismatch from command: {f}", .{cmd});
+                    return error.AlreadyReported;
+                }
+            },
+            .error_bundle => {
+                error_bundle.deinit(gpa);
+                error_bundle.* = Server.allocErrorBundle(gpa, body) catch |err| switch (err) {
+                    error.EndOfStream => break,
+                    else => |e| return e,
+                };
+            },
+            .emit_digest => {
+                const EmitDigest = Server.Message.EmitDigest;
+                const ebp_hdr: *align(1) const EmitDigest = @ptrCast(body);
+                cache_hit = ebp_hdr.flags.cache_hit;
+                const digest = body[@sizeOf(EmitDigest)..][0..Cache.bin_digest_len];
+                if (result) |r| gpa.free(r.sub_path);
+                result = .{
+                    .root_dir = options.cache_root,
+                    .sub_path = try Dir.path.join(gpa, &.{ "o", &Cache.binToHex(digest.*) }),
+                };
+            },
+            .file_system_inputs => if (options.cache_manifest) |man| {
+                received_fs_inputs = true;
+                var it = mem.splitScalar(u8, body, 0);
+                while (it.next()) |prefixed_path| {
+                    const prefix: Server.Message.PathPrefix = @fromBackingInt(@intCast(prefixed_path[0] - 1));
+                    const sub_path = prefixed_path[1..];
+                    man.addDiscoveredPath(.{
+                        .discovered_path = .{ .prefixed = .{
+                            .prefix = @intCast(@backingInt(prefix)),
+                            .sub_path = sub_path,
+                        } },
+                    }) catch |err| switch (err) {
+                        error.Canceled, error.OutOfMemory => |e| return e,
+                        else => |e| {
+                            log.err("adding {t} {s} to cache failed: {t}", .{ prefix, sub_path, e });
+                            return error.AlreadyReported;
+                        },
+                    };
+                }
+            },
+            else => {}, // ignore other messages
+        }
+    }
+
+    const stderr_contents = stderr.buffered();
+    if (stderr_contents.len > 0)
+        log.warn("unexpected stderr from {s} command:\n{s}", .{ options.argv[0], stderr_contents });
+
+    eos_err catch {
+        log.err("unexpected end of stream from command: {f}", .{cmd});
+        return error.AlreadyReported;
+    };
+
+    // Send EOF to stdin.
+    child.stdin.?.close(io);
+    child.stdin = null;
+
+    const term = child.wait(io) catch |err| switch (err) {
+        error.Canceled => |e| return e,
+        else => |e| {
+            log.err("{t} waiting for command: {f}", .{ e, cmd });
+            return error.AlreadyReported;
+        },
+    };
+
+    if (!term.success()) {
+        log.err("command {f}: {f}", .{ term, cmd });
+        if (received_fs_inputs) return error.FailedButCacheIntact;
+        return error.AlreadyReported;
+    }
+
+    if (default_error_bundle.errorMessageCount() > 0) {
+        default_error_bundle.renderToStderr(io, .{}, .auto) catch |err| switch (err) {
+            error.Canceled => |e| return e,
+            else => |e| {
+                log.err("failed rendering error bundle: {t}", .{e});
+                return error.AlreadyReported;
+            },
+        };
+        if (!options.skip_log_cmdline_on_compile_errors) log.err("command reported {d} compilation errors: {f}", .{
+            default_error_bundle.errorMessageCount(), cmd,
+        });
+        if (received_fs_inputs) return error.FailedButCacheIntact;
+        return error.AlreadyReported;
+    }
+
+    if (error_bundle.errorMessageCount() > 0) {
+        if (received_fs_inputs) return error.FailedButCacheIntact;
+        return error.AlreadyReported;
+    }
+
+    const base_path = result orelse {
+        log.err("command failed to report result: {f}", .{cmd});
+        return error.AlreadyReported;
+    };
+    const parsed_target = system.resolveTargetQuery(io, std.Build.parseTargetQuery(.{
+        .arch_os_abi = options.arch_os_abi orelse "native",
+        .cpu_features = options.cpu_features,
+    }) catch unreachable) catch unreachable;
+    const bin_name = try binNameAlloc(gpa, .{
+        .root_name = options.root_name,
+        .cpu_arch = parsed_target.cpu.arch,
+        .os_tag = parsed_target.os.tag,
+        .ofmt = parsed_target.ofmt,
+        .abi = parsed_target.abi,
+        .output_mode = .Exe,
+    });
+    defer gpa.free(bin_name);
+    return .{
+        .received_fs_inputs = received_fs_inputs,
+        .cache_hit = cache_hit,
+        .path = try base_path.join(gpa, bin_name),
+    };
 }
 
 test {
     _ = Ast;
     _ = AstRlAnnotate;
-    _ = AstSmith;
     _ = BuiltinFn;
     _ = Client;
     _ = ErrorBundle;
@@ -1265,4 +2072,5 @@ test {
     _ = target;
     _ = c_translation;
     _ = llvm;
+    _ = @import("zig/parser_fuzz.zig");
 }

@@ -6,7 +6,7 @@ const target_util = @import("../target.zig");
 const Compilation = @import("../Compilation.zig");
 const build_options = @import("build_options");
 const trace = @import("../tracy.zig").trace;
-const Module = @import("../Package/Module.zig");
+const Module = @import("../Module.zig");
 
 const libcxxabi_files = [_][]const u8{
     "src/cxa_aux_runtime.cpp",
@@ -172,7 +172,6 @@ pub fn buildLibCxx(comp: *Compilation, prog_node: std.Progress.Node) BuildError!
             .omit_frame_pointer = comp.root_mod.omit_frame_pointer,
             .valgrind = false,
             .optimize_mode = optimize_mode,
-            .structured_cfg = comp.root_mod.structured_cfg,
             .pic = if (target_util.supports_fpic(target)) true else null,
             .code_model = comp.root_mod.code_model,
         },
@@ -325,7 +324,7 @@ pub fn buildLibCxxAbi(comp: *Compilation, prog_node: std.Progress.Node) BuildErr
     // See the `-fno-exceptions` logic for WASI.
     // The old 32-bit x86 variant of SEH doesn't use tables.
     const unwind_tables: std.lang.UnwindTables =
-        if (target.os.tag == .wasi or (target.cpu.arch == .x86 and target.os.tag == .windows)) .none else .async;
+        if (target.cpu.arch == .x86 and target.os.tag == .windows) .none else .async;
 
     const config = Compilation.Config.resolve(.{
         .output_mode = output_mode,
@@ -366,7 +365,6 @@ pub fn buildLibCxxAbi(comp: *Compilation, prog_node: std.Progress.Node) BuildErr
             .omit_frame_pointer = comp.root_mod.omit_frame_pointer,
             .valgrind = false,
             .optimize_mode = optimize_mode,
-            .structured_cfg = comp.root_mod.structured_cfg,
             .unwind_tables = unwind_tables,
             .pic = if (target_util.supports_fpic(target)) true else null,
             .code_model = comp.root_mod.code_model,
@@ -539,15 +537,15 @@ pub fn addCxxArgs(
     // is simple and works everywhere.
     try cflags.append("-D_LIBCPP_PSTL_BACKEND_SERIAL");
     switch (optimize_mode) {
-        .Debug => {
+        .debug => {
             try cflags.append("-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG");
             try cflags.append("-D_LIBCPP_ASSERTION_SEMANTIC_DEFAULT=_LIBCPP_ASSERTION_SEMANTIC_ENFORCE");
         },
-        .ReleaseFast, .ReleaseSmall => {
+        .fast, .small => {
             try cflags.append("-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE");
             try cflags.append("-D_LIBCPP_ASSERTION_SEMANTIC_DEFAULT=_LIBCPP_ASSERTION_SEMANTIC_IGNORE");
         },
-        .ReleaseSafe => {
+        .safe => {
             try cflags.append("-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST");
             try cflags.append("-D_LIBCPP_ASSERTION_SEMANTIC_DEFAULT=_LIBCPP_ASSERTION_SEMANTIC_ENFORCE");
         },

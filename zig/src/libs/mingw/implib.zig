@@ -245,7 +245,7 @@ pub fn getMembers(
     };
     var renames: std.ArrayList(DeferredExport) = .empty;
     defer renames.deinit(allocator);
-    var regular_imports: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var regular_imports: std.array_hash_map.String([]const u8) = .empty;
     defer regular_imports.deinit(allocator);
 
     for (module_def.exports.items) |*e| {
@@ -351,7 +351,7 @@ fn getNameType(
     // the leading underscore. In MinGW on the other hand, a decorated
     // stdcall function still omits the underscore (IMPORT_NAME_NOPREFIX).
     if (std.mem.startsWith(u8, ext_name, "_") and
-        std.mem.indexOfScalar(u8, ext_name, '@') != null and
+        std.mem.findScalar(u8, ext_name, '@') != null and
         module_definition_type != .mingw)
         return .NAME;
     if (!std.mem.eql(u8, symbol, ext_name))
@@ -505,7 +505,7 @@ fn getImportDescriptor(
     writeSymbol(&writer, .{
         .name = first_string_table_entry,
         .value = 0,
-        .section_number = @enumFromInt(1),
+        .section_number = @fromBackingInt(@intCast(1)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -517,7 +517,7 @@ fn getImportDescriptor(
     writeSymbol(&writer, .{
         .name = ".idata$2".*,
         .value = 0,
-        .section_number = @enumFromInt(1),
+        .section_number = @fromBackingInt(@intCast(1)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -528,7 +528,7 @@ fn getImportDescriptor(
     writeSymbol(&writer, .{
         .name = ".idata$6".*,
         .value = 0,
-        .section_number = @enumFromInt(2),
+        .section_number = @fromBackingInt(@intCast(2)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -668,7 +668,7 @@ fn getNullImportDescriptor(
     writeSymbol(&writer, .{
         .name = first_string_table_entry,
         .value = 0,
-        .section_number = @enumFromInt(1),
+        .section_number = @fromBackingInt(@intCast(1)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -781,7 +781,7 @@ fn getNullThunk(
     writeSymbol(&writer, .{
         .name = first_string_table_entry,
         .value = 0,
-        .section_number = @enumFromInt(1),
+        .section_number = @fromBackingInt(@intCast(1)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -903,7 +903,7 @@ fn getWeakExternal(
     writeSymbol(&writer, .{
         .name = first_string_table_entry,
         .value = 0,
-        .section_number = @enumFromInt(0),
+        .section_number = @fromBackingInt(@intCast(0)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -915,7 +915,7 @@ fn getWeakExternal(
     writeSymbol(&writer, .{
         .name = getNameBytesForStringTableOffset(@intCast(string_table_offset)),
         .value = 0,
-        .section_number = @enumFromInt(0),
+        .section_number = @fromBackingInt(@intCast(0)),
         .type = .{
             .base_type = .NULL,
             .complex_type = .NULL,
@@ -1012,16 +1012,16 @@ fn getShortImport(
 fn writeSymbol(writer: *std.Io.Writer, symbol: std.coff.Symbol) !void {
     try writer.writeAll(&symbol.name);
     try writer.writeInt(u32, symbol.value, .little);
-    try writer.writeInt(u16, @intFromEnum(symbol.section_number), .little);
-    try writer.writeInt(u8, @intFromEnum(symbol.type.base_type), .little);
-    try writer.writeInt(u8, @intFromEnum(symbol.type.complex_type), .little);
-    try writer.writeInt(u8, @intFromEnum(symbol.storage_class), .little);
+    try writer.writeInt(i16, @backingInt(symbol.section_number), .little);
+    try writer.writeInt(u8, @backingInt(symbol.type.base_type), .little);
+    try writer.writeInt(u8, @backingInt(symbol.type.complex_type), .little);
+    try writer.writeInt(u8, @backingInt(symbol.storage_class), .little);
     try writer.writeInt(u8, symbol.number_of_aux_symbols, .little);
 }
 
 fn writeWeakExternalDefinition(writer: *std.Io.Writer, weak_external: std.coff.WeakExternalDefinition) !void {
     try writer.writeInt(u32, weak_external.tag_index, .little);
-    try writer.writeInt(u32, @intFromEnum(weak_external.flag), .little);
+    try writer.writeInt(u32, @backingInt(weak_external.flag), .little);
     try writer.writeAll(&weak_external.unused);
 }
 
@@ -1034,11 +1034,11 @@ fn writeRelocation(writer: *std.Io.Writer, relocation: std.coff.Relocation) !voi
 // https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#type-indicators
 pub fn rvaRelocationTypeIndicator(target: std.coff.IMAGE.FILE.MACHINE) ?u16 {
     return switch (target) {
-        .AMD64 => @intFromEnum(std.coff.IMAGE.REL.AMD64.ADDR32NB),
-        .I386 => @intFromEnum(std.coff.IMAGE.REL.I386.DIR32NB),
-        .ARMNT => @intFromEnum(std.coff.IMAGE.REL.ARM.ADDR32NB),
-        .ARM64, .ARM64EC, .ARM64X => @intFromEnum(std.coff.IMAGE.REL.ARM64.ADDR32NB),
-        .IA64 => @intFromEnum(std.coff.IMAGE.REL.IA64.DIR32NB),
+        .AMD64 => @backingInt(std.coff.IMAGE.REL.AMD64.ADDR32NB),
+        .I386 => @backingInt(std.coff.IMAGE.REL.I386.DIR32NB),
+        .ARMNT => @backingInt(std.coff.IMAGE.REL.ARM.ADDR32NB),
+        .ARM64, .ARM64EC, .ARM64X => @backingInt(std.coff.IMAGE.REL.ARM64.ADDR32NB),
+        .IA64 => @backingInt(std.coff.IMAGE.REL.IA64.DIR32NB),
         else => null,
     };
 }

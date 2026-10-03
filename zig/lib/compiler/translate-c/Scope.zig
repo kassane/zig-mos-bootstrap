@@ -44,6 +44,7 @@ pub const Id = enum {
     condition,
     loop,
     do_loop,
+    @"switch",
 };
 
 /// Used for the scope of condition expressions, for example `if (cond)`.
@@ -353,6 +354,15 @@ pub const Root = struct {
     }
 };
 
+/// Used for switch scoping because the `break`s should not escape this scope while
+/// still allowing `continue`s to pass. `label_used` is necessary because we only
+/// insert the label when we `break` to it.
+pub const Switch = struct {
+    base: Scope,
+    label: []const u8,
+    label_used: bool = false,
+};
+
 pub fn findBlockScope(inner: *Scope, t: *Translator) !*Block {
     var scope = inner;
     while (true) {
@@ -384,7 +394,7 @@ pub fn getAlias(scope: *Scope, name: []const u8) ?[]const u8 {
     return switch (scope.id) {
         .root => null,
         .block => @as(*Block, @fieldParentPtr("base", scope)).getAlias(name),
-        .loop, .do_loop, .condition => scope.parent.?.getAlias(name),
+        .loop, .do_loop, .condition, .@"switch" => scope.parent.?.getAlias(name),
     };
 }
 
@@ -392,7 +402,7 @@ fn contains(scope: *Scope, name: []const u8) bool {
     return switch (scope.id) {
         .root => @as(*Root, @fieldParentPtr("base", scope)).contains(name),
         .block => @as(*Block, @fieldParentPtr("base", scope)).contains(name),
-        .loop, .do_loop, .condition => scope.parent.?.contains(name),
+        .loop, .do_loop, .condition, .@"switch" => scope.parent.?.contains(name),
     };
 }
 

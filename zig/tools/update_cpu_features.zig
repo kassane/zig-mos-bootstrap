@@ -1,4 +1,5 @@
 const builtin = @import("builtin");
+const spirv_spec = @import("spirv_spec");
 
 const std = @import("std");
 const Io = std.Io;
@@ -47,6 +48,69 @@ const ArchTarget = struct {
     extra_features: []const Feature = &.{},
     omit_cpus: []const []const u8 = &.{},
     branch_quota: ?usize = null,
+};
+
+const spirv_omitted_capabilities = [_][]const u8{
+    "shader", // implied by Vulkan/OpenGL targets
+    "kernel", // implied by OpenCL/AMDHSA targets
+    "addresses", // implied by OpenCL/AMDHSA targets
+    "physical_storage_buffer_addresses", // implied by spirv64-vulkan
+    "linkage", // automatically emitted when externs need linkage decorations
+};
+const spirv_omitted_extensions = [_][]const u8{
+    "SPV_KHR_physical_storage_buffer", // paired with physical_storage_buffer_addresses
+};
+
+const spirv_extra_features: []const Feature = blk: {
+    @setEvalBranchQuota(15_000);
+    var features: []const Feature = &.{};
+
+    cap: for (
+        @typeInfo(spirv_spec.Capability).@"enum".field_names,
+        @typeInfo(spirv_spec.Capability).@"enum".field_values,
+    ) |name, value| {
+        for (spirv_omitted_capabilities) |omitted| {
+            if (std.mem.eql(u8, omitted, name)) continue :cap;
+        }
+        features = features ++ &[_]Feature{.{
+            .zig_name = name,
+            .desc = "Enable " ++ name ++ " capability",
+            .deps = &struct {
+                const extensions = spirv_spec.Capability.dependencies(@fromBackingInt(@intCast(value)));
+                const deps: [extensions.len][]const u8 = inner: {
+                    var out: [extensions.len][]const u8 = undefined;
+                    for (extensions, 0..) |ext, i| out[i] = @tagName(ext);
+                    break :inner out;
+                };
+            }.deps,
+        }};
+    }
+
+    ext: for (@typeInfo(spirv_spec.Extension).@"enum".field_names) |name| {
+        for (spirv_omitted_extensions) |omitted| {
+            if (std.mem.eql(u8, omitted, name)) continue :ext;
+        }
+        features = features ++ &[_]Feature{.{
+            .zig_name = name,
+            .desc = "Enable " ++ name ++ " extension",
+            .deps = if (std.mem.eql(u8, name, "v1_6"))
+                &.{"v1_5"}
+            else if (std.mem.eql(u8, name, "v1_5"))
+                &.{"v1_4"}
+            else if (std.mem.eql(u8, name, "v1_4"))
+                &.{"v1_3"}
+            else if (std.mem.eql(u8, name, "v1_3"))
+                &.{"v1_2"}
+            else if (std.mem.eql(u8, name, "v1_2"))
+                &.{"v1_1"}
+            else if (std.mem.eql(u8, name, "v1_1"))
+                &.{"v1_0"}
+            else
+                &.{},
+        }};
+    }
+
+    break :blk features;
 };
 
 const targets = [_]ArchTarget{
@@ -1283,6 +1347,13 @@ const targets = [_]ArchTarget{
         .extra_cpus = &.{
             .{
                 .llvm_name = null,
+                .zig_name = "generic_la64",
+                .features = &.{
+                    "64bit",
+                },
+            },
+            .{
+                .llvm_name = null,
                 .zig_name = "la32v1_0",
                 .features = &.{
                     "32bit",
@@ -1326,6 +1397,7 @@ const targets = [_]ArchTarget{
         },
         .omit_cpus = &.{
             "generic",
+            "generic-la64",
             "loongarch32",
             "loongarch64",
         },
@@ -1365,6 +1437,15 @@ const targets = [_]ArchTarget{
             },
         },
         .extra_cpus = &.{
+            .{
+                .llvm_name = null,
+                .zig_name = "r3000a",
+                .features = &.{
+                    "mips1",
+                    "soft_float",
+                    "notraps",
+                },
+            },
             .{
                 .llvm_name = null,
                 .zig_name = "allegrex",
@@ -1441,83 +1522,7 @@ const targets = [_]ArchTarget{
             .td_name = "SPIRV",
         },
         .branch_quota = 2000,
-        .extra_features = &.{
-            .{
-                .zig_name = "v1_0",
-                .desc = "Enable version 1.0",
-                .deps = &.{},
-            },
-            .{
-                .zig_name = "v1_1",
-                .desc = "Enable version 1.1",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "v1_2",
-                .desc = "Enable version 1.2",
-                .deps = &.{"v1_1"},
-            },
-            .{
-                .zig_name = "v1_3",
-                .desc = "Enable version 1.3",
-                .deps = &.{"v1_2"},
-            },
-            .{
-                .zig_name = "v1_4",
-                .desc = "Enable version 1.4",
-                .deps = &.{"v1_3"},
-            },
-            .{
-                .zig_name = "v1_5",
-                .desc = "Enable version 1.5",
-                .deps = &.{"v1_4"},
-            },
-            .{
-                .zig_name = "v1_6",
-                .desc = "Enable version 1.6",
-                .deps = &.{"v1_5"},
-            },
-            .{
-                .zig_name = "int64",
-                .desc = "Enable Int64 capability",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "float16",
-                .desc = "Enable Float16 capability",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "float64",
-                .desc = "Enable Float64 capability",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "storage_push_constant16",
-                .desc = "Enable SPV_KHR_16bit_storage extension and the StoragePushConstant16 capability",
-                .deps = &.{"v1_3"},
-            },
-            .{
-                .zig_name = "arbitrary_precision_integers",
-                .desc = "Enable SPV_INTEL_arbitrary_precision_integers extension and the ArbitraryPrecisionIntegersINTEL capability",
-                .deps = &.{"v1_5"},
-            },
-            .{
-                .zig_name = "generic_pointer",
-                .desc = "Enable GenericPointer capability",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "vector16",
-                .desc = "Enable Vector16 capability",
-                .deps = &.{"v1_0"},
-            },
-            .{
-                .zig_name = "variable_pointers",
-                .desc = "Enable SPV_KHR_variable_pointers extension and the VariablePointers capability",
-                .deps = &.{"v1_0"},
-            },
-        },
+        .extra_features = spirv_extra_features,
         .extra_cpus = &.{
             .{
                 .llvm_name = null,

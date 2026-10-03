@@ -2,7 +2,11 @@ const std = @import("std");
 const math = std.math;
 const testing = std.testing;
 
-const __divxf3 = @import("divxf3.zig").__divxf3;
+const div_f80 = @import("divxf3.zig").div_f80;
+
+const nanRep: u80 = @as(u80, @bitCast(math.nan(f80)));
+const infRep: u80 = @as(u80, @bitCast(math.inf(f80)));
+const negInfRep: u80 = @as(u80, @bitCast(-math.inf(f80)));
 
 fn compareResult(result: f80, expected: u80) bool {
     const rep: u80 = @bitCast(result);
@@ -15,14 +19,14 @@ fn compareResult(result: f80, expected: u80) bool {
 }
 
 fn expect__divxf3_result(a: f80, b: f80, expected: u80) !void {
-    const x = __divxf3(a, b);
+    const x = div_f80(a, b);
     const ret = compareResult(x, expected);
     try testing.expect(ret == true);
 }
 
 fn test__divxf3(a: f80, b: f80) !void {
     const integerBit = 1 << math.floatFractionalBits(f80);
-    const x = __divxf3(a, b);
+    const x = div_f80(a, b);
 
     // Next float (assuming normal, non-zero result)
     const x_plus_eps: f80 = @bitCast((@as(u80, @bitCast(x)) + 1) | integerBit);
@@ -39,14 +43,19 @@ fn test__divxf3(a: f80, b: f80) !void {
 }
 
 test "divxf3" {
-    // NaN / any = NaN
-    try expect__divxf3_result(math.nan(f80), 0x1.23456789abcdefp+5, 0x7fffC000000000000000);
-    // inf / any(except inf and nan) = inf
-    try expect__divxf3_result(math.inf(f80), 0x1.23456789abcdefp+5, 0x7fff8000000000000000);
-    // inf / inf = nan
-    try expect__divxf3_result(math.inf(f80), math.inf(f80), 0x7fffC000000000000000);
-    // inf / nan = nan
-    try expect__divxf3_result(math.inf(f80), math.nan(f80), 0x7fffC000000000000000);
+    try expect__divxf3_result(math.nan(f80), 0x1.23456789abcdefp+5, nanRep);
+    try expect__divxf3_result(0x1.23456789abcdefp+5, math.nan(f80), nanRep);
+    try expect__divxf3_result(math.inf(f80), 0x1.23456789abcdefp+5, infRep);
+    try expect__divxf3_result(-math.inf(f80), 0x1.23456789abcdefp+5, negInfRep);
+    try expect__divxf3_result(0x1.23456789abcdefp+5, math.inf(f80), 0x0);
+    try expect__divxf3_result(0x1.23456789abcdefp+5, -math.inf(f80), 0x80000000000000000000);
+    try expect__divxf3_result(math.inf(f80), math.inf(f80), nanRep);
+    try expect__divxf3_result(0.0, 0.0, nanRep);
+    try expect__divxf3_result(-0.0, 0.0, nanRep);
+    try expect__divxf3_result(0.0, 1.0, 0x0);
+    try expect__divxf3_result(-0.0, 1.0, 0x80000000000000000000);
+    try expect__divxf3_result(1.0, 0.0, infRep);
+    try expect__divxf3_result(1.0, -0.0, negInfRep);
 
     try test__divxf3(0x1.a23b45362464523375893ab4cdefp+5, 0x1.eedcbaba3a94546558237654321fp-1);
     try test__divxf3(0x1.a2b34c56d745382f9abf2c3dfeffp-50, 0x1.ed2c3ba15935332532287654321fp-9);

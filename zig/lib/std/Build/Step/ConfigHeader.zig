@@ -5,7 +5,6 @@ const Io = std.Io;
 const Step = std.Build.Step;
 const Allocator = std.mem.Allocator;
 const Configuration = std.Build.Configuration;
-const allocPrint = std.fmt.allocPrint;
 
 step: Step,
 values: std.array_hash_map.String(Value) = .empty,
@@ -28,6 +27,9 @@ pub const Style = union(enum) {
     /// The configure format supported by CMake. It uses `@FOO@`, `${}` and
     /// `#cmakedefine` for template substitution.
     cmake: std.Build.LazyPath,
+    /// The configure format supported by Meson. It uses `@FOO@`, and
+    /// `#mesondefine` for template substitution.
+    meson: std.Build.LazyPath,
     /// Instead of starting with an input file, start with nothing.
     blank,
     /// Start with nothing, like blank, and output a nasm .asm file.
@@ -35,7 +37,7 @@ pub const Style = union(enum) {
 
     pub fn getPath(style: Style) ?std.Build.LazyPath {
         switch (style) {
-            .autoconf_undef, .autoconf_at, .cmake => |s| return s,
+            .autoconf_undef, .autoconf_at, .cmake, .meson => |s| return s,
             .blank, .nasm => return null,
         }
     }
@@ -84,13 +86,9 @@ pub fn create(owner: *std.Build, options: Options) *ConfigHeader {
     };
 
     const name = if (options.style.getPath()) |s|
-        allocPrint(arena, "configure {t} header {f} to {s}", .{
-            options.style, s, include_path,
-        }) catch @panic("OOM")
+        arena.print("configure {t} header {f} to {s}", .{ options.style, s, include_path }) catch @panic("OOM")
     else
-        allocPrint(arena, "configure {t} header to {s}", .{
-            options.style, include_path,
-        }) catch @panic("OOM");
+        arena.print("configure {t} header to {s}", .{ options.style, include_path }) catch @panic("OOM");
 
     config_header.* = .{
         .step = .init(.{

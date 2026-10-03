@@ -75,6 +75,15 @@ pub fn addCases(cases: *tests.LlvmIrContext) void {
         "store volatile i16 321, ptr",
     }, .{});
 
+    cases.addMatches("unused volatile packed pointer load",
+        \\const S = packed struct(u16) { a: u2, b: u8, c: u6 };
+        \\export fn entry(ptr: *volatile S) void {
+        \\    _ = ptr.b;
+        \\}
+    , &.{
+        "load volatile i16, ptr",
+    }, .{});
+
     cases.addMatches("allowzero ptr load",
         \\export fn entry(ptr: *allowzero i16) i16 {
         \\    return ptr.*;
@@ -115,6 +124,45 @@ pub fn addCases(cases: *tests.LlvmIrContext) void {
     , &.{
         "null_pointer_is_valid",
         "store i16 42, ptr",
+    }, .{});
+
+    cases.addMatches("load and store bool",
+        \\export fn foo(a: *bool, b: *align(2) bool) void {
+        \\    const tmp = a.*;
+        \\    a.* = b.*;
+        \\    b.* = tmp;
+        \\}
+    , &.{
+        // TODO: this should all be one multiline string literal, but `-femit-llvm-ir` is currently
+        // emitting CRLF on Windows, which is a pain to handle here. In future that option will emit
+        // unoptimized LLVM IR emitted directly from Zig, so that bug will go away.
+        "  %3 = load i8, ptr %0, align 1",
+        "  %4 = trunc nuw i8 %3 to i1",
+        "  %5 = load i8, ptr %1, align 2",
+        "  %6 = trunc nuw i8 %5 to i1",
+        "  %7 = zext i1 %6 to i8",
+        "  store i8 %7, ptr %0, align 1",
+        "  %8 = zext i1 %4 to i8",
+        "  store i8 %8, ptr %1, align 2",
+    }, .{ .strip = true });
+
+    cases.addMatches("array to vector coercion is one vector load",
+        \\export fn entry(arr: *const [16]u8) @Vector(16, u8) {
+        \\    return arr.*;
+        \\}
+    , &.{
+        "load <16 x i8>, ptr",
+    }, .{});
+
+    cases.addMatches("array to vector coercion feeding overlapping shuffles",
+        \\export fn entry(a: *@Vector(8, u8), b: *@Vector(8, u8), src: [*]const u8) void {
+        \\    const q: @Vector(16, u8) = src[0..16].*;
+        \\    a.* = @shuffle(u8, q, undefined, @Vector(8, i32){ 0, 1, 2, 3, 4, 5, 6, 7 });
+        \\    b.* = @shuffle(u8, q, undefined, @Vector(8, i32){ 7, 8, 9, 10, 11, 12, 13, 14 });
+        \\}
+    , &.{
+        "load <16 x i8>, ptr",
+        "shufflevector <16 x i8>",
     }, .{});
 }
 

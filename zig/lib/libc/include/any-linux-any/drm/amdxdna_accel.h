@@ -18,6 +18,7 @@ extern "C" {
 #define AMDXDNA_INVALID_CTX_HANDLE	0
 #define AMDXDNA_INVALID_BO_HANDLE	0
 #define AMDXDNA_INVALID_FENCE_HANDLE	0
+#define AMDXDNA_INVALID_DOORBELL_OFFSET	(~0U)
 
 /*
  * Define hardware context priority
@@ -29,7 +30,9 @@ extern "C" {
 
 enum amdxdna_device_type {
 	AMDXDNA_DEV_TYPE_UNKNOWN = -1,
-	AMDXDNA_DEV_TYPE_KMQ,
+	AMDXDNA_DEV_TYPE_KMQ = 0,
+	AMDXDNA_DEV_TYPE_UMQ = 1,
+	AMDXDNA_DEV_TYPE_PF = 2,
 };
 
 enum amdxdna_drm_ioctl_id {
@@ -42,7 +45,8 @@ enum amdxdna_drm_ioctl_id {
 	DRM_AMDXDNA_EXEC_CMD,
 	DRM_AMDXDNA_GET_INFO,
 	DRM_AMDXDNA_SET_STATE,
-	DRM_AMDXDNA_GET_ARRAY = 10,
+	DRM_AMDXDNA_WAIT_CMD,
+	DRM_AMDXDNA_GET_ARRAY,
 };
 
 /**
@@ -156,10 +160,11 @@ struct amdxdna_drm_config_hwctx {
 
 enum amdxdna_bo_type {
 	AMDXDNA_BO_INVALID = 0,
-	AMDXDNA_BO_SHMEM,
-	AMDXDNA_BO_DEV_HEAP,
-	AMDXDNA_BO_DEV,
-	AMDXDNA_BO_CMD,
+	AMDXDNA_BO_SHMEM = 1, /* Be compatible with legacy application code. */
+	AMDXDNA_BO_SHARE = 1,
+	AMDXDNA_BO_DEV_HEAP = 2,
+	AMDXDNA_BO_DEV = 3,
+	AMDXDNA_BO_CMD = 4,
 };
 
 /**
@@ -271,6 +276,21 @@ struct amdxdna_drm_exec_cmd {
 };
 
 /**
+ * struct amdxdna_drm_wait_cmd - Wait execution command.
+ *
+ * @hwctx: Context handle.
+ * @timeout: timeout in ms, 0 implies infinite wait.
+ * @seq: sequence number of the command returned by execute command.
+ *
+ * Wait a command specified by seq to be completed.
+ */
+struct amdxdna_drm_wait_cmd {
+	__u32 hwctx;
+	__u32 timeout;
+	__u64 seq;
+};
+
+/**
  * struct amdxdna_drm_query_aie_status - Query the status of the AIE hardware
  * @buffer: The user space buffer that will return the AIE status.
  * @buffer_size: The size of the user space buffer.
@@ -353,7 +373,8 @@ struct amdxdna_drm_query_clock_metadata {
 };
 
 enum amdxdna_sensor_type {
-	AMDXDNA_SENSOR_TYPE_POWER
+	AMDXDNA_SENSOR_TYPE_POWER,
+	AMDXDNA_SENSOR_TYPE_COLUMN_UTILIZATION
 };
 
 /**
@@ -589,8 +610,37 @@ struct amdxdna_async_error {
 	__u64 ex_err_code;
 };
 
+/**
+ * struct amdxdna_drm_bo_usage - all types of BO usage
+ * BOs managed by XRT/SHIM/driver is counted as internal.
+ * Others are counted as external which are managed by applications.
+ *
+ * Among all types of BOs:
+ *   AMDXDNA_BO_DEV_HEAP - is counted for internal.
+ *   AMDXDNA_BO_SHARE    - is counted for external.
+ *   AMDXDNA_BO_CMD      - is counted for internal.
+ *   AMDXDNA_BO_DEV      - is counted by heap_usage only, not internal
+ *                         or external. It does not add to the total memory
+ *                         footprint since its mem comes from heap which is
+ *                         already counted as internal.
+ */
+struct amdxdna_drm_bo_usage {
+	/** @pid: The ID of the process to query from. */
+	__s64 pid;
+	/** @total_usage: Total BO size used by process. */
+	__u64 total_usage;
+	/** @internal_usage: Total internal BO size used by process. */
+	__u64 internal_usage;
+	/** @heap_usage: Total device BO size used by process. */
+	__u64 heap_usage;
+};
+
+/*
+ * Supported params in struct amdxdna_drm_get_array
+ */
 #define DRM_AMDXDNA_HW_CONTEXT_ALL	0
 #define DRM_AMDXDNA_HW_LAST_ASYNC_ERR	2
+#define DRM_AMDXDNA_BO_USAGE		6
 
 /**
  * struct amdxdna_drm_get_array - Get information array.
@@ -603,6 +653,12 @@ struct amdxdna_drm_get_array {
 	 *
 	 * %DRM_AMDXDNA_HW_CONTEXT_ALL:
 	 * Returns all created hardware contexts.
+	 *
+	 * %DRM_AMDXDNA_HW_LAST_ASYNC_ERR:
+	 * Returns last async error.
+	 *
+	 * %DRM_AMDXDNA_BO_USAGE:
+	 * Returns usage of heap/internal/external BOs.
 	 */
 	__u32 param;
 	/**
@@ -698,6 +754,10 @@ struct amdxdna_drm_set_power_mode {
 #define DRM_IOCTL_AMDXDNA_GET_ARRAY \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDXDNA_GET_ARRAY, \
 		 struct amdxdna_drm_get_array)
+
+#define DRM_IOCTL_AMDXDNA_WAIT_CMD \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_AMDXDNA_WAIT_CMD, \
+		struct amdxdna_drm_wait_cmd)
 
 #if defined(__cplusplus)
 } /* extern c end */
