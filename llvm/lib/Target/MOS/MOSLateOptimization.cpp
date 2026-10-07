@@ -88,24 +88,26 @@ bool MOSLateOptimization::lowerCmpZeros(MachineBasicBlock &MBB) const {
   const auto &STI = MBB.getParent()->getSubtarget<MOSSubtarget>();
   const auto *TRI = MRI.getTargetRegisterInfo();
   bool Changed = false;
-  for (MachineInstr &MI : make_early_inc_range(mbb_reverse(MBB))) {
+  for (MachineInstr &MI : make_early_inc_range(mbb_reverse(MBB.terminators()))) {
     if (MI.getOpcode() != MOS::CmpZero)
       continue;
 
     if (MI.allDefsAreDead()) {
       MI.eraseFromParent();
+      Changed = true;
       continue;
     }
 
     Register Val = MI.getOperand(0).getReg();
 
+    bool Folded = false;
     for (auto &J : mbb_reverse(MBB.begin(), MI)) {
       if (J.isDebugInstr())
         continue;
       if (J.isCall() || J.isInlineAsm())
         break;
       if (definesNZ(J, Val, STI)) {
-        Changed = true;
+        Folded = true;
         J.addOperand(MachineOperand::CreateReg(MOS::NZ, /*isDef=*/true,
                                                /*isImp=*/true));
         MI.eraseFromParent();
@@ -135,8 +137,10 @@ bool MOSLateOptimization::lowerCmpZeros(MachineBasicBlock &MBB) const {
       if (ClobbersNZ)
         break;
     }
-    if (Changed)
+    if (Folded) {
+      Changed = true;
       continue;
+    }
 
     Changed = true;
     lowerCmpZero(MI);
@@ -213,7 +217,8 @@ void MOSLateOptimization::lowerCmpZero(MachineInstr &MI) const {
       Access = Builder.buildInstr(MOS::DEC, {Val}, {Val});
     }
     Access.addDef(MOS::NZ, RegState::Implicit);
-    Access->getOperand(0).setIsDead();
+    // A scratch register is dead, but INC/DEC restores Val for later uses.
+    Access->getOperand(0).setIsDead(Tmp || PhysRegs.available(MRI, Val));
     break;
   }
   case MOS::A: {
@@ -285,9 +290,9 @@ bool MOSLateOptimization::combineLdImm(MachineBasicBlock &MBB) const {
       continue;
     }
 
-    if (MI.getOpcode() != MOS::LDImm || !MI.getOperand(1).isImm()) {
-      // If a register is overwritten with an instruction other than
-      // an immediate load, mark register value as unknown.
+    if (MI.getOpcode() != MOS::LDImm || !MI.getOperand(1).isImm() ||
+        !MOS::GPRRegClass.contains(MI.getOperand(0).getReg())) {
+      // Mark overwritten register values as unknown.
       if (MI.modifiesRegister(MOS::A, TRI))
         LoadA.MI = nullptr;
       if (MI.modifiesRegister(MOS::X, TRI))
