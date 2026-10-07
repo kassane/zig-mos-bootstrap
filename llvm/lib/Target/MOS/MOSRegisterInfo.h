@@ -77,6 +77,8 @@ public:
   void expandAddrHistk(MachineBasicBlock::iterator MI) const;
   void expandLDSTStk(MachineBasicBlock::iterator MI) const;
 
+  const TargetRegisterClass *getPointerRegClass(unsigned Kind) const override;
+
   Register getFrameRegister(const MachineFunction &MF) const override;
 
   bool shouldCoalesce(MachineInstr *MI, const TargetRegisterClass *SrcRC,

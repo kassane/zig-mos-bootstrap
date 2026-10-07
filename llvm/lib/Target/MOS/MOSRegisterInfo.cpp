@@ -542,6 +542,11 @@ void MOSRegisterInfo::expandLDSTStk(MachineBasicBlock::iterator MI) const {
   return;
 }
 
+const TargetRegisterClass *
+MOSRegisterInfo::getPointerRegClass(unsigned Kind) const {
+  return &MOS::Imag16RegClass;
+}
+
 Register MOSRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   const TargetFrameLowering *TFI = getFrameLowering(MF);
   return TFI->hasFP(MF) ? MOS::RS15 : MOS::RS0;
